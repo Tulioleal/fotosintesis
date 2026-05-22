@@ -19,7 +19,7 @@ This is the first implementation slice under `add-fotosintesis-ai-mvp`. It creat
 
 ## Decisions
 
-- Frontend uses Next.js, React, TypeScript, SCSS Modules, TanStack Query for server state and Zustand only for transient UI state.
+- Frontend uses pnpm, Next.js, React, TypeScript, SCSS Modules, TanStack Query for server state and Zustand only for transient UI state.
 - Backend uses FastAPI + Uvicorn with environment-driven settings.
 - Database baseline uses PostgreSQL with pgvector enabled from the start.
 - Images are referenced through an object storage abstraction rather than persisted as database blobs.
