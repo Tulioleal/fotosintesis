@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "fotosintesis-backend"
 version = "0.1.0"
@@ -5,6 +9,7 @@ description = "Fotosintesis AI backend API"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14.0",
+  "argon2-cffi>=23.1.0",
   "asyncpg>=0.30.0",
   "email-validator>=2.2.0",
   "fastapi[standard]>=0.115.6",

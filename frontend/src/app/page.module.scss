@@ -39,3 +39,14 @@
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
+
+.start {
+  display: inline-flex;
+  margin-top: $space-3;
+  padding: 0.85rem 1.2rem;
+  border-radius: 999px;
+  background: $color-foreground;
+  color: #fffdf0;
+  font-weight: 800;
+  text-decoration: none;
+}

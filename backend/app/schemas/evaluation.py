@@ -1,11 +1,11 @@
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from uuid import UUID
 
 from app.schemas.common import ApiSchema
 
 
-class EvaluationRunStatus(StrEnum):
+class EvaluationRunStatus(str, Enum):
     pending = "pending"
     running = "running"
     completed = "completed"

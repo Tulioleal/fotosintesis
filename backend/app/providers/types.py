@@ -1,10 +1,10 @@
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class ConfidenceLabel(StrEnum):
+class ConfidenceLabel(str, Enum):
     high = "high"
     medium = "medium"
     low = "low"

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.storage.base import ObjectStorage
@@ -20,7 +20,7 @@ class LocalObjectStorage(ObjectStorage):
             path=upload.path,
             mime_type=upload.mime_type,
             size_bytes=len(upload.content),
-            created_at=datetime.now(UTC),
+            created_at=datetime.now(timezone.utc),
             expires_at=upload.expires_at,
         )
 

@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     provider_profile: str = "mock"
     log_level: str = "INFO"
     tracing_enabled: bool = True
+    session_cookie_name: str = "fotosintesis_session"
+    session_idle_ttl_minutes: int = 30
+    session_absolute_ttl_days: int = 7
+    recovery_token_ttl_minutes: int = 30
 
 
 @lru_cache

@@ -19,6 +19,7 @@ env/
 
 # Next.js / frontend
 .next/
+*.tsbuildinfo
 out/
 build/
 dist/

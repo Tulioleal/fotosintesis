@@ -1,11 +1,11 @@
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from uuid import UUID
 
 from app.schemas.common import ApiSchema
 
 
-class MessageRole(StrEnum):
+class MessageRole(str, Enum):
     user = "user"
     assistant = "assistant"
     system = "system"

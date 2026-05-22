@@ -1,18 +1,18 @@
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from uuid import UUID
 
 from app.schemas.common import ApiSchema
 
 
-class LightClassification(StrEnum):
+class LightClassification(str, Enum):
     baja = "baja"
     media = "media"
     alta = "alta"
     directa = "directa"
 
 
-class MeasurementReliability(StrEnum):
+class MeasurementReliability(str, Enum):
     high = "high"
     medium = "medium"
     low = "low"

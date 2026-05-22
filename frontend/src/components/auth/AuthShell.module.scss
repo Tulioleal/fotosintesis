@@ -1,0 +1,127 @@
+@use "@/styles/tokens" as *;
+
+.screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: $space-6;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(116, 154, 86, 0.22), transparent 32rem),
+    linear-gradient(145deg, #f7f1d9 0%, #e7efd9 100%);
+}
+
+.card {
+  width: min(100%, 30rem);
+  padding: 1.35rem;
+  border: 1px solid rgba(40, 80, 52, 0.16);
+  border-radius: 1.75rem;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 24px 80px rgba(43, 78, 50, 0.14);
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: $color-accent;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.card h1 {
+  margin: 0;
+  color: $color-foreground;
+  font-size: clamp(2rem, 9vw, 3.35rem);
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.description {
+  color: $color-muted;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1.25rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  color: $color-foreground;
+  font-weight: 700;
+}
+
+.field input {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(40, 80, 52, 0.2);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.88);
+  color: $color-foreground;
+}
+
+.field input:focus {
+  outline: 3px solid rgba(86, 124, 58, 0.22);
+}
+
+.error {
+  color: #9d3b2f;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.primary,
+.secondary,
+.disabledSocial {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 3rem;
+  padding: 0.85rem 1rem;
+  border-radius: 999px;
+  border: 0;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.primary {
+  background: $color-foreground;
+  color: #fffdf0;
+}
+
+.primary:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.secondary {
+  color: $color-foreground;
+  background: rgba(86, 124, 58, 0.12);
+}
+
+.disabledSocial {
+  color: rgba(29, 45, 34, 0.48);
+  background: rgba(29, 45, 34, 0.08);
+  cursor: not-allowed;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.links a {
+  color: $color-accent;
+  font-weight: 800;
+}

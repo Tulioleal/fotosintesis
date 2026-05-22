@@ -5,6 +5,8 @@ services:
     command: sh -c "corepack enable && pnpm install && pnpm --filter frontend dev"
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      AUTH_SECRET: local-development-auth-secret
+      AUTH_TRUST_HOST: "true"
     ports:
       - "3000:3000"
     volumes:

@@ -10,6 +10,9 @@ export default function Home() {
           Base del MVP lista para integrar identificacion visual, Mi Jardin,
           recordatorios, medidor de luz y asistente con RAG.
         </p>
+        <a className={styles.start} href="/welcome">
+          Comenzar
+        </a>
       </section>
     </main>
   );
