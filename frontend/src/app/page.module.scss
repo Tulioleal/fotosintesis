@@ -1,0 +1,41 @@
+@use "@/styles/tokens" as *;
+
+.main {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: $space-6;
+  background: $color-background;
+  color: $color-foreground;
+}
+
+.hero {
+  width: min(100%, 42rem);
+  padding: $space-6;
+  border: 1px solid rgba(40, 80, 52, 0.16);
+  border-radius: 2rem;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 24px 80px rgba(43, 78, 50, 0.12);
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.25rem, 9vw, 4.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.hero p {
+  max-width: 36rem;
+  color: $color-muted;
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.eyebrow {
+  margin: 0 0 $space-3;
+  color: $color-accent;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
