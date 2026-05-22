@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "fotosintesis-local"
     object_storage_access_key: str | None = None
     object_storage_secret_key: str | None = None
+    provider_profile: str = "mock"
+    log_level: str = "INFO"
+    tracing_enabled: bool = True
 
 
 @lru_cache

@@ -1,11 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.settings import get_settings
+from app.observability.logging import configure_logging
+from app.observability.metrics import metrics_registry
+from app.observability.middleware import request_observability_middleware
+from app.providers.factory import get_provider_registry
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings.log_level)
     app = FastAPI(title=settings.app_name)
 
     app.add_middleware(
@@ -16,9 +21,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.middleware("http")(request_observability_middleware)
+
     @app.get("/health", tags=["system"])
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "environment": settings.environment}
+    async def health() -> dict[str, object]:
+        providers = get_provider_registry()
+        return {
+            "status": "ok",
+            "environment": settings.environment,
+            "dependencies": {
+                "database": "configured" if settings.database_url else "missing",
+                "vector_store": "configured",
+                "object_storage": "configured" if settings.object_storage_bucket else "missing",
+                "model_provider": providers.model.__class__.__name__,
+                "vision_provider": providers.vision.__class__.__name__,
+                "embedding_provider": providers.embeddings.__class__.__name__,
+                "search_provider": providers.search.__class__.__name__,
+            },
+        }
+
+    @app.get("/metrics", tags=["system"])
+    async def metrics() -> Response:
+        return Response(content=metrics_registry.to_prometheus(), media_type="text/plain")
 
     return app
 
