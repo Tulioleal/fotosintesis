@@ -1,10 +1,17 @@
 from datetime import timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
-from app.auth.dependencies import absolute_ttl, clear_session_cookie, get_current_session, set_session_cookie
+from app.auth.dependencies import (
+    absolute_ttl,
+    clear_session_cookie,
+    get_auth_repository,
+    get_current_session,
+    set_session_cookie,
+)
 from app.auth.models import AuthUser
-from app.auth.repository import DuplicateEmailError, InvalidCredentialsError, auth_repository
+from app.auth.repository import DatabaseAuthRepository, DuplicateEmailError, InvalidCredentialsError
 from app.auth.schemas import (
     CredentialsVerifyRequest,
     CredentialsVerifyResponse,
@@ -21,6 +28,8 @@ from app.observability.logging import get_logger
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = get_logger(__name__)
 
+AuthRepo = Annotated[DatabaseAuthRepository, Depends(get_auth_repository)]
+
 
 def to_public_user(user: AuthUser) -> PublicAuthUser:
     return PublicAuthUser(
@@ -32,24 +41,26 @@ def to_public_user(user: AuthUser) -> PublicAuthUser:
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(payload: RegisterRequest) -> RegisterResponse:
+async def register(payload: RegisterRequest, repository: AuthRepo) -> RegisterResponse:
     try:
-        user = auth_repository.create_user(payload.name, str(payload.email), payload.password)
+        user = await repository.create_user(payload.name, str(payload.email), payload.password)
     except DuplicateEmailError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered") from error
     return RegisterResponse(user=to_public_user(user))
 
 
 @router.post("/credentials/verify", response_model=CredentialsVerifyResponse)
-async def verify_credentials(payload: CredentialsVerifyRequest, response: Response) -> CredentialsVerifyResponse:
+async def verify_credentials(
+    payload: CredentialsVerifyRequest, response: Response, repository: AuthRepo
+) -> CredentialsVerifyResponse:
     try:
-        user = auth_repository.verify_credentials(str(payload.email), payload.password)
+        user = await repository.verify_credentials(str(payload.email), payload.password)
     except InvalidCredentialsError as error:
         logger.info("credential login rejected", extra={"ctx_reason": str(error)})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials") from error
 
     settings = get_settings()
-    session = auth_repository.create_session(
+    session = await repository.create_session(
         user.id,
         idle_ttl=timedelta(minutes=settings.session_idle_ttl_minutes),
         absolute_ttl=absolute_ttl(),
@@ -63,17 +74,19 @@ async def verify_credentials(payload: CredentialsVerifyRequest, response: Respon
 
 
 @router.post("/logout")
-async def logout(response: Response, current: tuple = Depends(get_current_session)) -> dict[str, str]:
+async def logout(
+    response: Response, repository: AuthRepo, current: tuple = Depends(get_current_session)
+) -> dict[str, str]:
     session, _user = current
-    auth_repository.invalidate_session(session.token)
+    await repository.invalidate_session(session.token)
     clear_session_cookie(response)
     return {"status": "ok"}
 
 
 @router.post("/recovery/request", response_model=RecoveryResponse)
-async def request_recovery(payload: RecoveryRequest) -> RecoveryResponse:
+async def request_recovery(payload: RecoveryRequest, repository: AuthRepo) -> RecoveryResponse:
     settings = get_settings()
-    auth_repository.create_recovery_token(
+    await repository.create_recovery_token(
         str(payload.email), ttl=timedelta(minutes=settings.recovery_token_ttl_minutes)
     )
     return RecoveryResponse(
