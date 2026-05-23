@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export type PublicAuthUser = {
   id: string;
@@ -58,8 +58,13 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  getHomeSummary: (backendSessionToken: string) =>
-    request<HomeSummaryResponse>("/home/summary", {
-      headers: { Authorization: `Bearer ${backendSessionToken}` },
-    }),
+  async getHomeSummary() {
+    const response = await fetch("/api/home/summary", {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`Home summary request failed with status ${response.status}`);
+    }
+    return response.json() as Promise<HomeSummaryResponse>;
+  },
 };

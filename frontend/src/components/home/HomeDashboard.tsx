@@ -8,11 +8,10 @@ import styles from "./HomeDashboard.module.scss";
 
 export function HomeDashboard() {
   const session = useSession();
-  const token = session.data?.backendSessionToken ?? "";
   const summary = useQuery({
     queryKey: ["home-summary"],
-    enabled: Boolean(token),
-    queryFn: () => apiClient.getHomeSummary(token),
+    enabled: session.status === "authenticated",
+    queryFn: () => apiClient.getHomeSummary(),
     retry: 1,
   });
 

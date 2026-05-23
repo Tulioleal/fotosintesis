@@ -45,7 +45,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           id: payload.user.id,
           name: payload.user.name,
           email: payload.user.email,
-          sessionToken: payload.session_token,
+          backendCredential: payload.session_token,
           sessionExpiresAt: payload.session_expires_at,
           email_verified: payload.user.email_verified,
         };
@@ -55,7 +55,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.sessionToken = (user as typeof user & { sessionToken?: string }).sessionToken;
+        token.backendCredential = (user as typeof user & { backendCredential: string }).backendCredential;
         token.sessionExpiresAt = (user as typeof user & { sessionExpiresAt?: string }).sessionExpiresAt;
         token.email_verified = (user as typeof user & { email_verified?: boolean }).email_verified;
       }
@@ -66,7 +66,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.id = token.sub ?? "";
         session.user.email_verified = Boolean(token.email_verified);
       }
-      session.backendSessionToken = String(token.sessionToken ?? "");
       return session;
     },
   },
