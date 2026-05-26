@@ -1,19 +1,4 @@
-## Purpose
-
-Defines how frontend server boundaries bridge backend session credentials created during Auth.js credential login without exposing backend bearer credentials to browser JavaScript.
-
-## Requirements
-
-### Requirement: Backend credential survives login server-side
-The system SHALL retain the backend session credential from successful credential login in server-only frontend state usable by frontend route handlers.
-
-#### Scenario: Credentials login succeeds
-- **WHEN** Auth.js verifies user credentials through the backend
-- **THEN** the backend session credential is retained only in server-side state and is not exposed through browser-readable session data
-
-#### Scenario: Browser reads Auth.js session after login
-- **WHEN** browser code reads the Auth.js session payload
-- **THEN** the payload does not include the backend session token or an equivalent backend bearer credential
+## MODIFIED Requirements
 
 ### Requirement: Protected route handlers use login-created credential
 The system SHALL allow frontend server route handlers to authenticate protected backend calls immediately after login without requiring browser JavaScript to handle the backend token, and SHALL treat backend persisted session validity as authoritative.

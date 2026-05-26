@@ -83,6 +83,11 @@ async def logout(
     return {"status": "ok"}
 
 
+@router.get("/session")
+async def validate_session(_current: tuple = Depends(get_current_session)) -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @router.post("/recovery/request", response_model=RecoveryResponse)
 async def request_recovery(payload: RecoveryRequest, repository: AuthRepo) -> RecoveryResponse:
     settings = get_settings()

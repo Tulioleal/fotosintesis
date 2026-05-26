@@ -56,4 +56,27 @@ describe("POST /api/auth/backend-logout", () => {
     );
     fetchMock.mockRestore();
   });
+
+  it("returns unauthorized when backend invalidation rejects a stale credential", async () => {
+    process.env.AUTH_SECRET = "test-secret";
+    mocks.getToken.mockResolvedValueOnce({ backendCredential: "stale-token" });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const response = await POST(
+      new Request("http://frontend.test/api/auth/backend-logout", { method: "POST" }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "Unauthorized" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/auth/logout",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer stale-token" }),
+      }),
+    );
+    fetchMock.mockRestore();
+  });
 });

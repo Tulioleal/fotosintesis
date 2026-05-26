@@ -1,4 +1,5 @@
 import { getToken } from "@auth/core/jwt";
+import { API_BASE_URL } from "@/lib/generated/client";
 
 
 type BackendAuthHeaders = {
@@ -31,4 +32,16 @@ export async function resolveBackendAuthHeaders(request: Request): Promise<Backe
   if (!credential) return null;
 
   return { Accept: "application/json", Authorization: `Bearer ${credential}` };
+}
+
+export async function validateBackendSession(request: Request): Promise<boolean> {
+  const headers = await resolveBackendAuthHeaders(request);
+  if (!headers) return false;
+
+  const response = await fetch(`${API_BASE_URL}/auth/session`, {
+    headers,
+    cache: "no-store",
+  });
+
+  return response.ok;
 }

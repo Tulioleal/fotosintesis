@@ -64,4 +64,24 @@ describe("GET /api/home/summary", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     vi.restoreAllMocks();
   });
+
+  it("returns unauthorized when the login-created credential is stale", async () => {
+    process.env.AUTH_SECRET = "test-secret";
+    mocks.getToken.mockResolvedValueOnce({ backendCredential: "stale-token" });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    const response = await GET(new Request("http://frontend.test/api/home/summary"));
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ detail: "Unauthorized" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8000/home/summary",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer stale-token" }),
+      }),
+    );
+    fetchMock.mockRestore();
+  });
 });

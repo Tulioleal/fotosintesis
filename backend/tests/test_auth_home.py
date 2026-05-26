@@ -119,6 +119,12 @@ async def test_protected_home_summary_requires_and_accepts_session(
         assert summary.status_code == 200
         assert summary.json()["empty_state"] is True
 
+        session_validation = await client.get(
+            "/auth/session", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert session_validation.status_code == 200
+        assert session_validation.json() == {"status": "ok"}
+
         async with session_factory() as session:
             refreshed = (
                 await session.execute(select(sessions).where(sessions.c.session_token == token))
@@ -134,6 +140,11 @@ async def test_protected_home_summary_requires_and_accepts_session(
             "/home/summary", headers={"Authorization": f"Bearer {token}"}
         )
         assert invalidated.status_code == 401
+
+        invalidated_session = await client.get(
+            "/auth/session", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert invalidated_session.status_code == 401
 
         async with session_factory() as session:
             row = (
