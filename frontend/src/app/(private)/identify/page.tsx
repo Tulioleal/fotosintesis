@@ -1,5 +1,10 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { IdentifyFlow } from "@/components/identify/IdentifyFlow";
+import { AppShell } from "@/components/layout/AppShell";
 
 export default function IdentifyPage() {
-  return <PlaceholderPage title="Identificar planta" />;
+  return (
+    <AppShell>
+      <IdentifyFlow />
+    </AppShell>
+  );
 }

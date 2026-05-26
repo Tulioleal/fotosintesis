@@ -1,6 +1,38 @@
 {
   "components": {
     "schemas": {
+      "Body_create_identification_identifications_post": {
+        "properties": {
+          "file": {
+            "description": "Plant image to identify",
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_create_identification_identifications_post",
+        "type": "object"
+      },
+      "ConfirmationResponse": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/TaxonomyCandidate"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "candidate"
+        ],
+        "title": "ConfirmationResponse",
+        "type": "object"
+      },
       "CredentialsVerifyRequest": {
         "properties": {
           "email": {
@@ -109,6 +141,62 @@
         ],
         "title": "HomeSummaryResponse",
         "type": "object"
+      },
+      "IdentificationResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/TaxonomyCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "image": {
+            "additionalProperties": true,
+            "title": "Image",
+            "type": "object"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "sad_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sad Path"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IdentificationStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message",
+          "image"
+        ],
+        "title": "IdentificationResponse",
+        "type": "object"
+      },
+      "IdentificationStatus": {
+        "enum": [
+          "needs_confirmation",
+          "retry_needed",
+          "no_reliable_candidate"
+        ],
+        "title": "IdentificationStatus",
+        "type": "string"
       },
       "PublicAuthUser": {
         "properties": {
@@ -230,6 +318,153 @@
         "title": "RegisterResponse",
         "type": "object"
       },
+      "TaxonomyCandidate": {
+        "properties": {
+          "accepted_scientific_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Scientific Name"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "confidence_label": {
+            "title": "Confidence Label",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "gbif_accepted_key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gbif Accepted Key"
+          },
+          "gbif_key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gbif Key"
+          },
+          "genus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genus"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "possible_match_copy": {
+            "title": "Possible Match Copy",
+            "type": "string"
+          },
+          "species": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Species"
+          },
+          "suggested_scientific_name": {
+            "title": "Suggested Scientific Name",
+            "type": "string"
+          },
+          "synonyms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Synonyms",
+            "type": "array"
+          },
+          "taxonomic_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomic Status"
+          },
+          "validation_status": {
+            "$ref": "#/components/schemas/ValidationStatus"
+          },
+          "visible_traits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Visible Traits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "suggested_scientific_name",
+          "confidence_label",
+          "possible_match_copy",
+          "validation_status"
+        ],
+        "title": "TaxonomyCandidate",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -262,6 +497,14 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ValidationStatus": {
+        "enum": [
+          "validated",
+          "no_gbif_match"
+        ],
+        "title": "ValidationStatus",
+        "type": "string"
       }
     }
   },
@@ -662,6 +905,166 @@
         "summary": "Home Summary",
         "tags": [
           "home"
+        ]
+      }
+    },
+    "/identifications": {
+      "post": {
+        "operationId": "create_identification_identifications_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_identification_identifications_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Identification",
+        "tags": [
+          "identifications"
+        ]
+      }
+    },
+    "/identifications/{identification_id}/candidates/{candidate_id}/confirm": {
+      "post": {
+        "operationId": "confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Candidate",
+        "tags": [
+          "identifications"
         ]
       }
     },

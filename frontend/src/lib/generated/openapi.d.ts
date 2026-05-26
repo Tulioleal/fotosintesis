@@ -140,6 +140,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/identifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Identification */
+        post: operations["create_identification_identifications_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identifications/{identification_id}/candidates/{candidate_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Candidate */
+        post: operations["confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -161,6 +195,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_create_identification_identifications_post */
+        Body_create_identification_identifications_post: {
+            /**
+             * File
+             * Format: binary
+             * @description Plant image to identify
+             */
+            file: string;
+        };
+        /** ConfirmationResponse */
+        ConfirmationResponse: {
+            candidate: components["schemas"]["TaxonomyCandidate"];
+            /** Status */
+            status: string;
+        };
         /** CredentialsVerifyRequest */
         CredentialsVerifyRequest: {
             /**
@@ -209,6 +258,30 @@ export interface components {
             empty_state: boolean;
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** IdentificationResponse */
+        IdentificationResponse: {
+            /** Candidates */
+            candidates?: components["schemas"]["TaxonomyCandidate"][];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Image */
+            image: {
+                [key: string]: unknown;
+            };
+            /** Message */
+            message: string;
+            /** Sad Path */
+            sad_path?: string | null;
+            status: components["schemas"]["IdentificationStatus"];
+        };
+        /**
+         * IdentificationStatus
+         * @enum {string}
+         */
+        IdentificationStatus: "needs_confirmation" | "retry_needed" | "no_reliable_candidate";
         /** PublicAuthUser */
         PublicAuthUser: {
             /**
@@ -264,6 +337,43 @@ export interface components {
         RegisterResponse: {
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** TaxonomyCandidate */
+        TaxonomyCandidate: {
+            /** Accepted Scientific Name */
+            accepted_scientific_name?: string | null;
+            /** Common Name */
+            common_name?: string | null;
+            /** Confidence Label */
+            confidence_label: string;
+            /** Confirmed At */
+            confirmed_at?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Gbif Accepted Key */
+            gbif_accepted_key?: number | null;
+            /** Gbif Key */
+            gbif_key?: number | null;
+            /** Genus */
+            genus?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Possible Match Copy */
+            possible_match_copy: string;
+            /** Species */
+            species?: string | null;
+            /** Suggested Scientific Name */
+            suggested_scientific_name: string;
+            /** Synonyms */
+            synonyms?: string[];
+            /** Taxonomic Status */
+            taxonomic_status?: string | null;
+            validation_status: components["schemas"]["ValidationStatus"];
+            /** Visible Traits */
+            visible_traits?: string[];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -273,6 +383,11 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * ValidationStatus
+         * @enum {string}
+         */
+        ValidationStatus: "validated" | "no_gbif_match";
     };
     responses: never;
     parameters: never;
@@ -528,6 +643,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HomeSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_identification_identifications_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_identification_identifications_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdentificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                identification_id: string;
+                candidate_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationResponse"];
                 };
             };
             /** @description Validation Error */

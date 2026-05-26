@@ -47,7 +47,7 @@ Alternatives considered: un backend fullstack dentro de Next.js reduciria piezas
 
 El dominio dependera de interfaces propias para texto, JSON, vision, embeddings y judge, no de SDKs concretos.
 
-Rationale: el MVP debe poder cambiar entre OpenAI, Anthropic, Gemini, Vertex AI, Ollama o mocks sin reescribir reglas de dominio. La identificacion visual usara un `VisionPlantIdentificationProvider` que devuelve candidatas, rasgos visibles, proveedor, confianza cualitativa y confirmacion requerida.
+Rationale: el MVP debe poder cambiar entre OpenAI, Gemini, Vertex AI, Ollama o mocks sin reescribir reglas de dominio. La identificacion visual usara un `VisionPlantIdentificationProvider` que devuelve candidatas, rasgos visibles, proveedor, confianza cualitativa y confirmacion requerida.
 
 Alternatives considered: acoplar a un proveedor especifico acelera el prototipo, pero aumenta riesgo de cuotas, cambios de API, costos y bloqueo de proveedor.
 
