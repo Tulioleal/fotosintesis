@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { apiClient } from "@/lib/generated/client";
+import { apiClient } from "@/lib/api/client";
 import { authStyles } from "./AuthShell";
 import { recoverySchema, type RecoveryFormValues } from "./auth-schemas";
 

@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { apiClient } from "@/lib/generated/client";
+import { apiClient } from "@/lib/api/client";
 import styles from "./HomeDashboard.module.scss";
 
 export function HomeDashboard() {

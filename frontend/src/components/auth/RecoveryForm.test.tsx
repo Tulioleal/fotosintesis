@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("@/lib/generated/client", () => ({
+vi.mock("@/lib/api/client", () => ({
   apiClient: {
     requestRecovery: mocks.requestRecovery,
   },

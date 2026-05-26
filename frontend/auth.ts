@@ -1,8 +1,10 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { z } from "zod";
+import { API_BASE_URL } from "@/lib/api/config";
+import type { components } from "@/lib/generated/openapi";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+type CredentialsVerifyResponse = components["schemas"]["CredentialsVerifyResponse"];
 
 const credentialsSchema = z.object({
   email: z.string().email(),
@@ -35,11 +37,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         });
 
         if (!response.ok) return null;
-        const payload = (await response.json()) as {
-          user: { id: string; name: string; email: string; email_verified: boolean };
-          session_token: string;
-          session_expires_at: string;
-        };
+        const payload = (await response.json()) as CredentialsVerifyResponse;
 
         return {
           id: payload.user.id,

@@ -23,7 +23,7 @@ vi.mock("next-auth/react", () => ({
   useSession: mocks.useSession,
 }));
 
-vi.mock("@/lib/generated/client", () => ({
+vi.mock("@/lib/api/client", () => ({
   apiClient: {
     getHomeSummary: mocks.getHomeSummary,
   },

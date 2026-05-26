@@ -1,34 +1,12 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import type { components } from "@/lib/generated/openapi";
+import { API_BASE_URL } from "./config";
 
-export type PublicAuthUser = {
-  id: string;
-  name: string;
-  email: string;
-  email_verified: boolean;
-};
-
-export type HomeAccessItem = {
-  key: string;
-  label: string;
-  href: string;
-  status: "placeholder";
-};
-
-export type HomeSummaryResponse = {
-  user: PublicAuthUser;
-  empty_state: boolean;
-  access: HomeAccessItem[];
-};
-
-export type RegisterRequest = {
-  name: string;
-  email: string;
-  password: string;
-};
-
-export type RecoveryRequest = {
-  email: string;
-};
+export type PublicAuthUser = components["schemas"]["PublicAuthUser"];
+export type RegisterRequest = components["schemas"]["RegisterRequest"];
+export type RegisterResponse = components["schemas"]["RegisterResponse"];
+export type RecoveryRequest = components["schemas"]["RecoveryRequest"];
+export type RecoveryResponse = components["schemas"]["RecoveryResponse"];
+export type HomeSummaryResponse = components["schemas"]["HomeSummaryResponse"];
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -49,12 +27,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const apiClient = {
   register: (body: RegisterRequest) =>
-    request<{ user: PublicAuthUser }>("/auth/register", {
+    request<RegisterResponse>("/auth/register", {
       method: "POST",
       body: JSON.stringify(body),
     }),
   requestRecovery: (body: RecoveryRequest) =>
-    request<{ status: string; message: string }>("/auth/recovery/request", {
+    request<RecoveryResponse>("/auth/recovery/request", {
       method: "POST",
       body: JSON.stringify(body),
     }),

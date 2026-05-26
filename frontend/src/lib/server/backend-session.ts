@@ -1,5 +1,5 @@
 import { getToken } from "@auth/core/jwt";
-import { API_BASE_URL } from "@/lib/generated/client";
+import { API_BASE_URL } from "@/lib/api/config";
 
 
 type BackendAuthHeaders = {

@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
-vi.mock("@/lib/generated/client", () => ({
+vi.mock("@/lib/api/client", () => ({
   apiClient: {
     register: mocks.register,
   },

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { API_BASE_URL } from "@/lib/generated/client";
+import { API_BASE_URL } from "@/lib/api/config";
 import { resolveBackendAuthHeaders } from "@/lib/server/backend-session";
 
 

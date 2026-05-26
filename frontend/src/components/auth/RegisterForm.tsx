@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { apiClient } from "@/lib/generated/client";
+import { apiClient } from "@/lib/api/client";
 import { authStyles } from "./AuthShell";
 import { registerSchema, type RegisterFormValues } from "./auth-schemas";
 
