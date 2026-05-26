@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     session_idle_ttl_minutes: int = 30
     session_absolute_ttl_days: int = 7
     recovery_token_ttl_minutes: int = 30
+    knowledge_vector_table: str = "knowledge_embeddings"
+    embedding_dimension: int = 8
+    trusted_source_domains: list[str] = [
+        "gbif.org",
+        "powo.science.kew.org",
+        "worldfloraonline.org",
+        "tropicos.org",
+        "eol.org",
+        "example.org",
+    ]
 
 
 @lru_cache
