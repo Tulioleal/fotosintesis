@@ -261,6 +261,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reminders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reminders */
+        get: operations["list_reminders_reminders_get"];
+        put?: never;
+        /** Create Reminder */
+        post: operations["create_reminder_reminders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reminders/{reminder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Reminder */
+        delete: operations["delete_reminder_reminders__reminder_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Reminder */
+        patch: operations["update_reminder_reminders__reminder_id__patch"];
+        trace?: never;
+    };
+    "/reminders/{reminder_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Reminder */
+        post: operations["complete_reminder_reminders__reminder_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -282,6 +335,7 @@ export interface components {
              */
             conversation_id: string;
             message: components["schemas"]["AssistantMessage"];
+            reminder_suggestion?: components["schemas"]["AssistantReminderSuggestion"] | null;
             /**
              * Requires Confirmation
              * @default false
@@ -306,6 +360,26 @@ export interface components {
             created_at?: string | null;
             /** Role */
             role: string;
+        };
+        /** AssistantReminderSuggestion */
+        AssistantReminderSuggestion: {
+            /** Action */
+            action: string;
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** Plant Name */
+            plant_name: string;
+            recurrence: components["schemas"]["ReminderRecurrence"];
+            /** Suggestion Justification */
+            suggestion_justification: string;
         };
         /** AssistantSource */
         AssistantSource: {
@@ -565,6 +639,87 @@ export interface components {
         /** RegisterResponse */
         RegisterResponse: {
             user: components["schemas"]["PublicAuthUser"];
+        };
+        /** ReminderCreate */
+        ReminderCreate: {
+            /** Action */
+            action: string;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** @default none */
+            recurrence: components["schemas"]["ReminderRecurrence"];
+            /** Suggestion Justification */
+            suggestion_justification?: string | null;
+            /**
+             * Time
+             * Format: time
+             */
+            time: string;
+        };
+        /** ReminderDeleteResponse */
+        ReminderDeleteResponse: {
+            /** Status */
+            status: string;
+        };
+        /** ReminderDto */
+        ReminderDto: {
+            /** Action */
+            action: string;
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Next Occurrence At */
+            next_occurrence_at?: string | null;
+            /** Plant Name */
+            plant_name: string;
+            recurrence: components["schemas"]["ReminderRecurrence"];
+            status: components["schemas"]["ReminderStatus"];
+            /** Suggestion Justification */
+            suggestion_justification?: string | null;
+        };
+        /**
+         * ReminderRecurrence
+         * @enum {string}
+         */
+        ReminderRecurrence: "none" | "daily" | "weekly" | "monthly";
+        /**
+         * ReminderStatus
+         * @enum {string}
+         */
+        ReminderStatus: "pending" | "completed" | "cancelled";
+        /** ReminderUpdate */
+        ReminderUpdate: {
+            /** Action */
+            action?: string | null;
+            /** Date */
+            date?: string | null;
+            /** Garden Plant Id */
+            garden_plant_id?: string | null;
+            recurrence?: components["schemas"]["ReminderRecurrence"] | null;
+            /** Suggestion Justification */
+            suggestion_justification?: string | null;
+            /** Time */
+            time?: string | null;
         };
         /** TaxonomyCandidate */
         TaxonomyCandidate: {
@@ -1186,6 +1341,187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlantProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reminders_reminders_get: {
+        parameters: {
+            query?: {
+                garden_plant_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDto"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_reminder_reminders_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_reminder_reminders__reminder_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                reminder_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_reminder_reminders__reminder_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                reminder_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_reminder_reminders__reminder_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                reminder_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDto"];
                 };
             };
             /** @description Validation Error */

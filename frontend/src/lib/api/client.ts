@@ -12,12 +12,17 @@ export type GardenPlant = operations["get_garden_plant_garden__garden_id__get"][
 export type GardenPlantCreate = operations["save_garden_plant_garden_post"]["requestBody"]["content"]["application/json"];
 export type GardenDeleteResponse = operations["delete_garden_plant_garden__garden_id__delete"]["responses"][200]["content"]["application/json"];
 export type GardenPlantList = operations["list_garden_plants_garden_get"]["responses"][200]["content"]["application/json"];
+export type Reminder = components["schemas"]["ReminderDto"];
+export type ReminderCreate = components["schemas"]["ReminderCreate"];
+export type ReminderUpdate = components["schemas"]["ReminderUpdate"];
+export type ReminderDeleteResponse = components["schemas"]["ReminderDeleteResponse"];
 export type AssistantSource = {
   title?: string | null;
   url: string;
   domain?: string | null;
   confidence?: number | null;
 };
+export type AssistantReminderSuggestion = components["schemas"]["AssistantReminderSuggestion"];
 export type AssistantChatRequest = {
   message: string;
   conversation_id?: string | null;
@@ -28,6 +33,7 @@ export type AssistantChatResponse = {
   message: { role: string; content: string; created_at?: string | null };
   sources: AssistantSource[];
   requires_confirmation: boolean;
+  reminder_suggestion?: AssistantReminderSuggestion | null;
   tool_failures: string[];
 };
 
@@ -127,6 +133,36 @@ export const apiClient = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    });
+  },
+  listReminders(gardenPlantId?: string) {
+    const params = new URLSearchParams();
+    if (gardenPlantId) params.set("garden_plant_id", gardenPlantId);
+    const query = params.toString();
+    return frontendRequest<Reminder[]>(`/api/reminders${query ? `?${query}` : ""}`);
+  },
+  createReminder(body: ReminderCreate) {
+    return frontendRequest<Reminder>("/api/reminders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  updateReminder(reminderId: string, body: ReminderUpdate) {
+    return frontendRequest<Reminder>(`/api/reminders/${encodeURIComponent(reminderId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  completeReminder(reminderId: string) {
+    return frontendRequest<Reminder>(`/api/reminders/${encodeURIComponent(reminderId)}/complete`, {
+      method: "POST",
+    });
+  },
+  deleteReminder(reminderId: string) {
+    return frontendRequest<ReminderDeleteResponse>(`/api/reminders/${encodeURIComponent(reminderId)}`, {
+      method: "DELETE",
     });
   },
 };

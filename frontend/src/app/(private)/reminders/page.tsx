@@ -1,10 +1,10 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { Suspense } from "react";
+import { RemindersManager } from "@/components/reminders/RemindersManager";
 
 export default function RemindersPage() {
   return (
-    <PlaceholderPage
-      title="Recordatorios"
-      description="Los recordatorios se habilitan despues de confirmar una especie validada taxonomicamente."
-    />
+    <Suspense fallback={<p>Cargando recordatorios...</p>}>
+      <RemindersManager />
+    </Suspense>
   );
 }

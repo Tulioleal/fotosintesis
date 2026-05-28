@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from app.schemas.common import ApiSchema
+from app.schemas.reminders import ReminderRecurrence
 
 
 class AssistantSource(ApiSchema):
@@ -17,6 +18,15 @@ class AssistantMessage(ApiSchema):
     created_at: datetime | None = None
 
 
+class AssistantReminderSuggestion(ApiSchema):
+    garden_plant_id: UUID
+    plant_name: str
+    action: str
+    due_at: datetime
+    recurrence: ReminderRecurrence
+    suggestion_justification: str
+
+
 class AssistantChatRequest(ApiSchema):
     message: str
     conversation_id: UUID | None = None
@@ -28,4 +38,5 @@ class AssistantChatResponse(ApiSchema):
     message: AssistantMessage
     sources: list[AssistantSource] = []
     requires_confirmation: bool = False
+    reminder_suggestion: AssistantReminderSuggestion | None = None
     tool_failures: list[str] = []

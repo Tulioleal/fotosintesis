@@ -52,5 +52,6 @@ class AssistantService:
             message=AssistantMessage(role="assistant", content=answer),
             sources=[AssistantSource.model_validate(source) for source in state.get("sources", [])],
             requires_confirmation=bool(state.get("requires_confirmation")),
+            reminder_suggestion=state.get("reminder_suggestion"),
             tool_failures=state.get("tool_failures", []),
         )

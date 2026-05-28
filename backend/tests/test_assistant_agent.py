@@ -165,5 +165,24 @@ async def test_complete_reminder_creates_with_due_at_and_recurrence() -> None:
 
     assert "cree el recordatorio" in result["answer"]
     assert tools.created_reminders == 1
+    assert "reminder_suggestion" not in result
     assert tools.reminder_kwargs["due_at"] == datetime(2026, 6, 1, 10, 30, tzinfo=timezone.utc)
     assert tools.reminder_kwargs["recurrence"] == "weekly"
+
+
+@pytest.mark.asyncio
+async def test_complete_reminder_suggestion_returns_confirmation_payload() -> None:
+    tools = FakeTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Sugerime un recordatorio para Pata el 2026-06-01 10:30 regar semanal",
+        plant_hint=None,
+    )
+
+    assert result["requires_confirmation"] is True
+    assert tools.created_reminders == 0
+    assert result["reminder_suggestion"]["plant_name"] == "Pata"
+    assert result["reminder_suggestion"]["action"] == "regar"
+    assert result["reminder_suggestion"]["due_at"] == datetime(2026, 6, 1, 10, 30, tzinfo=timezone.utc)
+    assert result["reminder_suggestion"]["recurrence"] == "weekly"
+    assert "asistente" in result["reminder_suggestion"]["suggestion_justification"]

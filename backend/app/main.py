@@ -6,6 +6,7 @@ from app.api.auth import router as auth_router
 from app.api.home import router as home_router
 from app.api.identifications import router as identifications_router
 from app.api.profile_garden import router as profile_garden_router
+from app.api.reminders import router as reminders_router
 from app.core.settings import get_settings
 from app.observability.logging import configure_logging
 from app.observability.metrics import metrics_registry
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(identifications_router)
     app.include_router(profile_garden_router)
     app.include_router(assistant_router)
+    app.include_router(reminders_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:

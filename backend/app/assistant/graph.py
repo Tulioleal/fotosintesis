@@ -58,6 +58,7 @@ class AssistantState(TypedDict, total=False):
     sources: list[dict]
     answer: str
     requires_confirmation: bool
+    reminder_suggestion: dict
     tool_failures: list[str]
 
 
@@ -158,6 +159,20 @@ class AssistantGraph:
             return {
                 "requires_confirmation": True,
                 "answer": "Para crear el recordatorio necesito: " + ", ".join(missing) + ".",
+            }
+        justification = "Sugerido por el asistente desde la conversacion. Requiere confirmacion antes de crearse."
+        if _wants_reminder_suggestion(state["message"]):
+            return {
+                "requires_confirmation": True,
+                "reminder_suggestion": {
+                    "garden_plant_id": selected["id"],
+                    "plant_name": _display_plant(selected),
+                    "action": action,
+                    "due_at": due_at,
+                    "recurrence": recurrence,
+                    "suggestion_justification": justification,
+                },
+                "answer": "Tengo una sugerencia de recordatorio lista para confirmar antes de crearla.",
             }
         result = await self.tools.reminder_create(
             user_id=state["user_id"],
@@ -358,6 +373,23 @@ def _extract_reminder_action(message: str) -> str | None:
         if action in lowered:
             return action
     return None
+
+
+def _wants_reminder_suggestion(message: str) -> bool:
+    lowered = message.casefold()
+    return any(
+        term in lowered
+        for term in (
+            "sugeri",
+            "sugerí",
+            "sugerencia",
+            "recomend",
+            "propon",
+            "conviene",
+            "deberia",
+            "debería",
+        )
+    )
 
 
 def _display_plant(plant: dict) -> str:

@@ -53,6 +53,11 @@
   padding: 0.9rem 1rem;
 }
 
+.messageGroup {
+  display: grid;
+  gap: 0.65rem;
+}
+
 .user {
   justify-self: end;
   background: $color-foreground;
@@ -62,6 +67,36 @@
 .assistantMessage {
   justify-self: start;
   background: rgba(64, 130, 84, 0.12);
+}
+
+.suggestionCard {
+  border: 1px solid rgba(64, 130, 84, 0.22);
+  border-radius: 1.25rem;
+  background: rgba(242, 247, 238, 0.92);
+  display: grid;
+  gap: 0.6rem;
+  max-width: 88%;
+  padding: 1rem;
+}
+
+.suggestionCard h2,
+.suggestionCard p {
+  margin: 0;
+}
+
+.suggestionCard button {
+  border: 0;
+  border-radius: 999px;
+  background: $color-accent;
+  color: white;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.75rem 1rem;
+}
+
+.suggestionCard button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .composer {
