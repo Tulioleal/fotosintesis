@@ -8,6 +8,7 @@ const items = [
   { href: "/home", label: "Home" },
   { href: "/identify", label: "Identificar" },
   { href: "/garden", label: "Mi Jardín" },
+  { href: "/light-meter", label: "Luz" },
   { href: "/reminders", label: "Recordatorios" },
   { href: "/assistant", label: "Asistente" },
 ];

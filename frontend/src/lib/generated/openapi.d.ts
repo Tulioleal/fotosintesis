@@ -227,6 +227,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/light-measurements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Light Measurement */
+        post: operations["create_light_measurement_light_measurements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -537,6 +554,64 @@ export interface components {
          * @enum {string}
          */
         IdentificationStatus: "needs_confirmation" | "retry_needed" | "no_reliable_candidate";
+        /**
+         * LightClassification
+         * @enum {string}
+         */
+        LightClassification: "baja" | "media" | "alta" | "directa";
+        /** LightMeasurementCreate */
+        LightMeasurementCreate: {
+            classification: components["schemas"]["LightClassification"];
+            /** Garden Plant Id */
+            garden_plant_id?: string | null;
+            /** Lux */
+            lux?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+            reliability: components["schemas"]["MeasurementReliability"];
+            source: components["schemas"]["MeasurementSource"];
+        };
+        /** LightMeasurementDto */
+        LightMeasurementDto: {
+            classification: components["schemas"]["LightClassification"];
+            /** Garden Plant Id */
+            garden_plant_id?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lux */
+            lux?: number | null;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            /** Metadata */
+            metadata: {
+                [key: string]: unknown;
+            };
+            reliability: components["schemas"]["MeasurementReliability"];
+            source: components["schemas"]["MeasurementSource"];
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /**
+         * MeasurementReliability
+         * @enum {string}
+         */
+        MeasurementReliability: "high" | "medium" | "low";
+        /**
+         * MeasurementSource
+         * @enum {string}
+         */
+        MeasurementSource: "sensor" | "camera" | "manual";
         /** PlantProfileResponse */
         PlantProfileResponse: {
             /** Aliases */
@@ -1281,6 +1356,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfirmationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_light_measurement_light_measurements_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LightMeasurementCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightMeasurementDto"];
                 };
             };
             /** @description Validation Error */

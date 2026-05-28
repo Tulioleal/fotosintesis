@@ -293,5 +293,7 @@ light_measurements = sa.Table(
     sa.Column("classification", sa.String(length=40), nullable=False),
     sa.Column("lux", sa.Float(), nullable=True),
     sa.Column("reliability", sa.String(length=40), nullable=False),
+    sa.Column("source", sa.String(length=40), nullable=False, server_default="sensor"),
+    sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
     sa.Column("measured_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
 )

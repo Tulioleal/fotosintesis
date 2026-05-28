@@ -16,6 +16,11 @@ export type Reminder = components["schemas"]["ReminderDto"];
 export type ReminderCreate = components["schemas"]["ReminderCreate"];
 export type ReminderUpdate = components["schemas"]["ReminderUpdate"];
 export type ReminderDeleteResponse = components["schemas"]["ReminderDeleteResponse"];
+export type LightClassification = components["schemas"]["LightClassification"];
+export type MeasurementReliability = components["schemas"]["MeasurementReliability"];
+export type MeasurementSource = components["schemas"]["MeasurementSource"];
+export type LightMeasurementCreate = components["schemas"]["LightMeasurementCreate"];
+export type LightMeasurement = components["schemas"]["LightMeasurementDto"];
 export type AssistantSource = {
   title?: string | null;
   url: string;
@@ -163,6 +168,13 @@ export const apiClient = {
   deleteReminder(reminderId: string) {
     return frontendRequest<ReminderDeleteResponse>(`/api/reminders/${encodeURIComponent(reminderId)}`, {
       method: "DELETE",
+    });
+  },
+  createLightMeasurement(body: LightMeasurementCreate) {
+    return frontendRequest<LightMeasurement>("/api/light-measurements", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   },
 };

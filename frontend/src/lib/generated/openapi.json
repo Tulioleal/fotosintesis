@@ -564,6 +564,150 @@
         "title": "IdentificationStatus",
         "type": "string"
       },
+      "LightClassification": {
+        "enum": [
+          "baja",
+          "media",
+          "alta",
+          "directa"
+        ],
+        "title": "LightClassification",
+        "type": "string"
+      },
+      "LightMeasurementCreate": {
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/LightClassification"
+          },
+          "garden_plant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Garden Plant Id"
+          },
+          "lux": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lux"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/MeasurementReliability"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MeasurementSource"
+          }
+        },
+        "required": [
+          "classification",
+          "reliability",
+          "source"
+        ],
+        "title": "LightMeasurementCreate",
+        "type": "object"
+      },
+      "LightMeasurementDto": {
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/LightClassification"
+          },
+          "garden_plant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Garden Plant Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lux": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lux"
+          },
+          "measured_at": {
+            "format": "date-time",
+            "title": "Measured At",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/MeasurementReliability"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MeasurementSource"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "classification",
+          "reliability",
+          "source",
+          "metadata",
+          "measured_at"
+        ],
+        "title": "LightMeasurementDto",
+        "type": "object"
+      },
+      "MeasurementReliability": {
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "title": "MeasurementReliability",
+        "type": "string"
+      },
+      "MeasurementSource": {
+        "enum": [
+          "sensor",
+          "camera",
+          "manual"
+        ],
+        "title": "MeasurementSource",
+        "type": "string"
+      },
       "PlantProfileResponse": {
         "properties": {
           "aliases": {
@@ -2198,6 +2342,81 @@
         "summary": "Confirm Candidate",
         "tags": [
           "identifications"
+        ]
+      }
+    },
+    "/light-measurements": {
+      "post": {
+        "operationId": "create_light_measurement_light_measurements_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LightMeasurementCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LightMeasurementDto"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Light Measurement",
+        "tags": [
+          "light-measurements"
         ]
       }
     },

@@ -1,0 +1,127 @@
+@use "@/styles/tokens" as *;
+
+.meter {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 0 5rem;
+}
+
+.hero,
+.card,
+.result,
+.camera {
+  border: 1px solid rgba(40, 80, 52, 0.16);
+  border-radius: 2rem;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 1.25rem;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.1rem, 8vw, 4.4rem);
+  letter-spacing: -0.06em;
+  line-height: 0.95;
+}
+
+.hero p,
+.card p,
+.result p,
+.notice,
+.warning,
+.error {
+  color: $color-muted;
+  line-height: 1.55;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: $color-accent;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.actions,
+.card,
+.result,
+.camera {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.actions {
+  grid-template-columns: 1fr 1fr;
+}
+
+.actions button,
+.card button,
+.result button,
+.camera button {
+  border: 0;
+  border-radius: 999px;
+  background: $color-foreground;
+  color: white;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 900;
+  justify-content: center;
+  padding: 0.95rem 1rem;
+}
+
+.actions .secondary,
+.result button:disabled,
+.camera button:disabled {
+  background: rgba(86, 124, 58, 0.16);
+  color: $color-foreground;
+}
+
+.card label,
+.result label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 800;
+}
+
+.card select,
+.result select {
+  border: 1px solid rgba(40, 80, 52, 0.18);
+  border-radius: 1rem;
+  font: inherit;
+  padding: 0.9rem 1rem;
+}
+
+.camera {
+  display: none;
+}
+
+.camera[data-active="true"] {
+  display: grid;
+}
+
+.camera video {
+  width: 100%;
+  max-height: 20rem;
+  border-radius: 1.5rem;
+  background: #172315;
+  object-fit: cover;
+}
+
+.result h2 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 3.25rem);
+}
+
+.warning,
+.error {
+  border-radius: 1rem;
+  background: rgba(158, 82, 45, 0.12);
+  padding: 0.85rem;
+}
+
+@media (min-width: 760px) {
+  .meter {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+}

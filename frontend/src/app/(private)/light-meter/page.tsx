@@ -1,5 +1,10 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { LightMeter } from "@/components/light-meter/LightMeter";
+import { AppShell } from "@/components/layout/AppShell";
 
 export default function LightMeterPage() {
-  return <PlaceholderPage title="Medidor de luz" />;
+  return (
+    <AppShell>
+      <LightMeter />
+    </AppShell>
+  );
 }
