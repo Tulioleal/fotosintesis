@@ -229,3 +229,69 @@ garden_plants = sa.Table(
         "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
 )
+
+conversations = sa.Table(
+    "conversations",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("title", sa.String(length=240), nullable=True),
+    sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)
+
+conversation_messages = sa.Table(
+    "conversation_messages",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "conversation_id",
+        sa.Uuid(),
+        sa.ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    sa.Column("role", sa.String(length=40), nullable=False),
+    sa.Column("content", sa.Text(), nullable=False),
+    sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)
+
+reminders = sa.Table(
+    "reminders",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column(
+        "garden_plant_id",
+        sa.Uuid(),
+        sa.ForeignKey("garden_plants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    sa.Column("action", sa.String(length=120), nullable=False),
+    sa.Column("due_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("recurrence", sa.String(length=80), nullable=True),
+    sa.Column("status", sa.String(length=40), nullable=False, server_default="pending"),
+    sa.Column("suggestion_justification", sa.Text(), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)
+
+light_measurements = sa.Table(
+    "light_measurements",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column(
+        "garden_plant_id",
+        sa.Uuid(),
+        sa.ForeignKey("garden_plants.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    sa.Column("classification", sa.String(length=40), nullable=False),
+    sa.Column("lux", sa.Float(), nullable=True),
+    sa.Column("reliability", sa.String(length=40), nullable=False),
+    sa.Column("measured_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)

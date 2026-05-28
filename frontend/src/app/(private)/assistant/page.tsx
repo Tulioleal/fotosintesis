@@ -1,5 +1,5 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { AssistantChat } from "@/components/assistant/AssistantChat";
 
 export default function AssistantPage() {
-  return <PlaceholderPage title="Asistente" />;
+  return <AssistantChat />;
 }

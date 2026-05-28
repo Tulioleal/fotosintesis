@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.assistant import router as assistant_router
 from app.api.auth import router as auth_router
 from app.api.home import router as home_router
 from app.api.identifications import router as identifications_router
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(home_router)
     app.include_router(identifications_router)
     app.include_router(profile_garden_router)
+    app.include_router(assistant_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:

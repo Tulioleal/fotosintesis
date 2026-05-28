@@ -12,6 +12,24 @@ export type GardenPlant = operations["get_garden_plant_garden__garden_id__get"][
 export type GardenPlantCreate = operations["save_garden_plant_garden_post"]["requestBody"]["content"]["application/json"];
 export type GardenDeleteResponse = operations["delete_garden_plant_garden__garden_id__delete"]["responses"][200]["content"]["application/json"];
 export type GardenPlantList = operations["list_garden_plants_garden_get"]["responses"][200]["content"]["application/json"];
+export type AssistantSource = {
+  title?: string | null;
+  url: string;
+  domain?: string | null;
+  confidence?: number | null;
+};
+export type AssistantChatRequest = {
+  message: string;
+  conversation_id?: string | null;
+  plant?: string | null;
+};
+export type AssistantChatResponse = {
+  conversation_id: string;
+  message: { role: string; content: string; created_at?: string | null };
+  sources: AssistantSource[];
+  requires_confirmation: boolean;
+  tool_failures: string[];
+};
 
 type ErrorPayload = {
   detail?: string;
@@ -103,5 +121,12 @@ export const apiClient = {
       `/api/garden/${encodeURIComponent(gardenId)}?confirm_reminders=${confirmReminders}`,
       { method: "DELETE" },
     );
+  },
+  sendAssistantMessage(body: AssistantChatRequest) {
+    return frontendRequest<AssistantChatResponse>("/api/assistant/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
   },
 };
