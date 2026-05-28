@@ -106,6 +106,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/garden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Garden Plants */
+        get: operations["list_garden_plants_garden_get"];
+        put?: never;
+        /** Save Garden Plant */
+        post: operations["save_garden_plant_garden_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/garden/{garden_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Garden Plant */
+        get: operations["get_garden_plant_garden__garden_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Garden Plant */
+        delete: operations["delete_garden_plant_garden__garden_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -191,6 +227,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plant-profiles/{scientific_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Plant Profile */
+        get: operations["get_plant_profile_plant_profiles__scientific_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -230,6 +283,64 @@ export interface components {
             /** Session Token */
             session_token: string;
             user: components["schemas"]["PublicAuthUser"];
+        };
+        /** GardenDeleteResponse */
+        GardenDeleteResponse: {
+            /** Status */
+            status: string;
+        };
+        /** GardenPlantCreate */
+        GardenPlantCreate: {
+            /**
+             * Confirmed Candidate Id
+             * Format: uuid
+             */
+            confirmed_candidate_id: string;
+            /** Custom Data */
+            custom_data?: {
+                [key: string]: unknown;
+            };
+            /** Image Path */
+            image_path?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Nickname */
+            nickname?: string | null;
+            /** Notes */
+            notes?: string | null;
+        };
+        /** GardenPlantResponse */
+        GardenPlantResponse: {
+            /**
+             * Active Reminders
+             * @default 0
+             */
+            active_reminders: number;
+            /** Confirmed Candidate Id */
+            confirmed_candidate_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Custom Data */
+            custom_data?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Image Path */
+            image_path?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Nickname */
+            nickname?: string | null;
+            /** Notes */
+            notes?: string | null;
+            profile: components["schemas"]["PlantProfileResponse"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -282,6 +393,54 @@ export interface components {
          * @enum {string}
          */
         IdentificationStatus: "needs_confirmation" | "retry_needed" | "no_reliable_candidate";
+        /** PlantProfileResponse */
+        PlantProfileResponse: {
+            /** Aliases */
+            aliases?: components["schemas"]["ProfileAlias"][];
+            /** Common Name */
+            common_name?: string | null;
+            /** Confidence */
+            confidence: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Limitations */
+            limitations?: string[];
+            /** Scientific Name */
+            scientific_name: string;
+            /** Sections */
+            sections?: {
+                [key: string]: string[];
+            };
+            /** Selected Alias */
+            selected_alias?: string | null;
+            /** Sources */
+            sources?: components["schemas"]["ProfileSource"][];
+        };
+        /** ProfileAlias */
+        ProfileAlias: {
+            /** Country */
+            country?: string | null;
+            /** Language */
+            language?: string | null;
+            /** Name */
+            name: string;
+            /** Region */
+            region?: string | null;
+        };
+        /** ProfileSource */
+        ProfileSource: {
+            /** Confidence */
+            confidence: number;
+            /** Domain */
+            domain: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
         /** PublicAuthUser */
         PublicAuthUser: {
             /**
@@ -601,6 +760,150 @@ export interface operations {
             };
         };
     };
+    list_garden_plants_garden_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GardenPlantResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_garden_plant_garden_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GardenPlantCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GardenPlantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_garden_plant_garden__garden_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                garden_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GardenPlantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_garden_plant_garden__garden_id__delete: {
+        parameters: {
+            query?: {
+                confirm_reminders?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                garden_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GardenDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_health_get: {
         parameters: {
             query?: never;
@@ -745,6 +1048,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_plant_profile_plant_profiles__scientific_name__get: {
+        parameters: {
+            query: {
+                candidateId: string;
+                region?: string | null;
+                country?: string | null;
+                language?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                scientific_name: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlantProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useRef, useState } from "react";
+import Link from "next/link";
 import styles from "./IdentifyFlow.module.scss";
 
 type Candidate = {
@@ -159,6 +160,14 @@ export function IdentifyFlow() {
               >
                 {candidate.confirmed_at ? "Candidata confirmada" : "Confirmar candidata validada"}
               </button>
+              {candidate.confirmed_at ? (
+                <Link
+                  className={styles.profileLink}
+                  href={`/profiles/${encodeURIComponent(candidate.accepted_scientific_name ?? candidate.suggested_scientific_name)}?candidateId=${candidate.id}`}
+                >
+                  Ver perfil y agregar a Mi Jardin
+                </Link>
+              ) : null}
             </article>
           ))}
         </div>

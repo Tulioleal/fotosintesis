@@ -20,7 +20,7 @@ export function BottomNavigation() {
         <Link
           key={item.href}
           href={item.href}
-          data-active={pathname === item.href}
+          data-active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
         >
           {item.label}
         </Link>

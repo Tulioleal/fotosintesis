@@ -1,10 +1,10 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { AppShell } from "@/components/layout/AppShell";
+import { GardenList } from "@/components/garden/GardenList";
 
 export default function GardenPage() {
   return (
-    <PlaceholderPage
-      title="Mi Jardín"
-      description="Para guardar una planta, primero confirmá una candidata validada por GBIF desde Identificar planta."
-    />
+    <AppShell>
+      <GardenList />
+    </AppShell>
   );
 }
