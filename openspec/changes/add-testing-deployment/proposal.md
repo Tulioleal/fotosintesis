@@ -8,7 +8,7 @@ The MVP needs automated verification and a documented deployment path after core
 - Add backend integration tests for health, metrics, chat, plant identification, garden, reminders, light measurements and evaluation endpoints.
 - Add frontend component tests for forms, Home, candidate selection, profile, garden, reminders and light meter states.
 - Add Playwright end-to-end tests for auth, Home navigation, identification to profile, garden save, reminder creation, assistant RAG and light fallback.
-- Add Kubernetes/GKE manifests or Helm chart for frontend, backend and supporting cloud resources.
+- Add OpenTofu-based Infrastructure as Code for provisioning GCP infrastructure, including GKE, Artifact Registry, Cloud SQL for PostgreSQL, Cloud Storage, Secret Manager, IAM and baseline monitoring. Add Helm chart or Kubernetes manifests for deploying frontend, backend and supporting workloads onto the provisioned cluster.
 - Document local setup, required environment variables, mocks, provider configuration, evaluation run and deployment path.
 
 ## Capabilities
@@ -23,4 +23,4 @@ The MVP needs automated verification and a documented deployment path after core
 
 ## Impact
 
-- Affects test suites, CI readiness, Kubernetes/GKE deployment files and developer/operator documentation.
+- Affects test suites, CI readiness, OpenTofu infrastructure modules, Kubernetes/Helm deployment files, cloud resource configuration and developer/operator documentation.

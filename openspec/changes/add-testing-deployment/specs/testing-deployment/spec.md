@@ -29,7 +29,7 @@ The system SHALL include Playwright tests for primary MVP journeys and fallback 
 
 ### Requirement: Deployment artifacts
 
-The system SHALL include Kubernetes/GKE manifests or a Helm chart for frontend, backend and supporting cloud resources.
+The system SHALL include Kubernetes/GKE manifests or a Helm chart for frontend, backend and runtime workloads, while cloud infrastructure provisioning is handled by OpenTofu.
 
 #### Scenario: Deployment manifests reviewed
 
@@ -44,3 +44,32 @@ The system SHALL document local setup, environment variables, mocks, provider co
 
 - **WHEN** a developer follows the documented local setup
 - **THEN** they can run the stack with mocks and understand how to configure real providers later
+
+### Requirement: Infrastructure as Code provisioning
+
+The system SHALL include OpenTofu infrastructure code for provisioning the cloud resources required to run Fotosíntesis AI on GCP.
+
+#### Scenario: Infrastructure plan is generated
+
+- **WHEN** a developer runs the documented `tofu plan` command
+- **THEN** OpenTofu produces a plan for GKE, Artifact Registry, Cloud SQL for PostgreSQL, Cloud Storage, Secret Manager, IAM and baseline monitoring resources without requiring application source changes.
+
+#### Scenario: Infrastructure is applied
+
+- **WHEN** a developer runs the documented `tofu apply` command with valid variables and credentials
+- **THEN** the required cloud infrastructure is created or updated reproducibly.
+
+#### Scenario: Deployment consumes IaC outputs
+
+- **WHEN** the Kubernetes or Helm deployment is applied
+- **THEN** it consumes OpenTofu outputs for cluster, image registry, database, storage and secret references instead of hardcoded cloud values.
+
+#### Scenario: Secrets remain outside source control
+
+- **WHEN** infrastructure and deployment files are inspected
+- **THEN** provider keys, database passwords, session secrets and API tokens are not committed to the repository.
+
+#### Scenario: Infrastructure can be destroyed
+
+- **WHEN** a developer runs the documented `tofu destroy` command for a non-production environment
+- **THEN** the managed cloud resources are removed according to documented safeguards.
