@@ -9,7 +9,7 @@ This is the release-hardening slice. It should run after or alongside feature sl
 - Add backend unit and integration coverage for core domains.
 - Add frontend component coverage for critical states.
 - Add Playwright end-to-end paths for main MVP journeys.
-- Provide Kubernetes/GKE deployment manifests or a Helm chart.
+- Provide Kubernetes/GKE deployment manifests.
 - Document local setup, environment, mocks, providers, evaluation and deployment.
 
 **Non-Goals:**
@@ -27,9 +27,9 @@ This is the release-hardening slice. It should run after or alongside feature sl
 ## IaC Decisions
 
 - Infrastructure provisioning SHALL be managed with OpenTofu.
-- Kubernetes workload deployment SHALL be managed with Helm or Kubernetes manifests.
+- Kubernetes workload deployment SHALL be managed with plain Kubernetes manifests.
 - OpenTofu SHALL provision GKE, Artifact Registry, Cloud SQL for PostgreSQL, Cloud Storage, Secret Manager, IAM and baseline monitoring resources.
-- OpenTofu outputs SHALL provide the values required by Helm or Kubernetes deployment.
+- OpenTofu outputs SHALL provide the values required by Kubernetes deployment.
 - Secrets SHALL NOT be committed to the repository; runtime secrets SHALL be stored in Secret Manager or injected through Kubernetes secrets.
 - Docker Compose remains the local development path and SHALL not be replaced by IaC.
 

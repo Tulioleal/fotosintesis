@@ -1,0 +1,4 @@
+project_id = "replace-with-prod-gcp-project"
+region     = "us-central1"
+
+notification_email = "ops@example.com"

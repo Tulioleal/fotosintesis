@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fotosintesis-backend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-backend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  replicas: __BACKEND_REPLICAS__
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fotosintesis-backend
+        app.kubernetes.io/part-of: fotosintesis-ai
+    spec:
+      serviceAccountName: fotosintesis-backend
+      containers:
+        - name: backend
+          image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: APP_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: APP_ENV
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: database-url
+            - name: OBJECT_STORAGE_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OBJECT_STORAGE_BUCKET
+            - name: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+            - name: CLOUD_SQL_DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: CLOUD_SQL_DATABASE_NAME
+            - name: PROVIDER_PROFILE
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: PROVIDER_PROFILE
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fotosintesis-backend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-backend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  selector:
+    app.kubernetes.io/name: fotosintesis-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

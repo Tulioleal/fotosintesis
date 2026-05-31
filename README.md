@@ -38,6 +38,37 @@ pnpm install
 pnpm --filter frontend dev
 ```
 
+Docker Compose is for local development only. Cloud infrastructure and GKE deployment are documented separately in `DOCS/deployment.md`; local Compose details are in `DOCS/local-docker-compose.md`.
+
+## Tests
+
+Run backend tests:
+
+```bash
+cd backend
+pip install -e '.[dev]'
+pytest
+```
+
+Run frontend component tests:
+
+```bash
+pnpm --filter frontend test
+```
+
+Run Playwright against the local stack:
+
+```bash
+docker compose up frontend backend postgres
+pnpm --filter frontend test:e2e
+```
+
+## Cloud Deployment
+
+OpenTofu infrastructure lives in `infra/opentofu`, with environment roots under `infra/opentofu/envs/dev` and `infra/opentofu/envs/prod`. Plain Kubernetes manifests live in `deploy/k8s` and consume OpenTofu outputs for GKE, image registry, database, storage and workload identity values.
+
+See `DOCS/deployment.md` for `tofu init`, `tofu plan`, `tofu apply`, deployment, rollback and `tofu destroy` procedures.
+
 ## OpenAPI TypeScript Client
 
 The frontend API contracts are generated from the FastAPI OpenAPI schema. After changing backend request or response models used by the frontend, regenerate the contracts:

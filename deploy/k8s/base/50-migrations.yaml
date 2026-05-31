@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fotosintesis-migrations
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-migrations
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fotosintesis-migrations
+        app.kubernetes.io/part-of: fotosintesis-ai
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: fotosintesis-backend
+      containers:
+        - name: migrations
+          image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "alembic upgrade head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: database-url

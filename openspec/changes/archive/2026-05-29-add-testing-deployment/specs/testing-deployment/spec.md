@@ -29,7 +29,7 @@ The system SHALL include Playwright tests for primary MVP journeys and fallback 
 
 ### Requirement: Deployment artifacts
 
-The system SHALL include Kubernetes/GKE manifests or a Helm chart for frontend, backend and runtime workloads, while cloud infrastructure provisioning is handled by OpenTofu.
+The system SHALL include Kubernetes/GKE manifests for frontend, backend and runtime workloads, while cloud infrastructure provisioning is handled by OpenTofu.
 
 #### Scenario: Deployment manifests reviewed
 
@@ -61,7 +61,7 @@ The system SHALL include OpenTofu infrastructure code for provisioning the cloud
 
 #### Scenario: Deployment consumes IaC outputs
 
-- **WHEN** the Kubernetes or Helm deployment is applied
+- **WHEN** the Kubernetes deployment is applied
 - **THEN** it consumes OpenTofu outputs for cluster, image registry, database, storage and secret references instead of hardcoded cloud values.
 
 #### Scenario: Secrets remain outside source control

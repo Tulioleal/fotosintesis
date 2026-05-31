@@ -1,0 +1,6 @@
+terraform {
+  backend "gcs" {
+    bucket = "replace-with-prod-tofu-state-bucket"
+    prefix = "fotosintesis/prod"
+  }
+}

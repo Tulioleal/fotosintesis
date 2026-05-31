@@ -1,0 +1,4 @@
+project_id = "replace-with-dev-gcp-project"
+region     = "us-central1"
+
+notification_email = ""

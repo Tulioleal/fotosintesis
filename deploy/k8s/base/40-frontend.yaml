@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fotosintesis-frontend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-frontend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  replicas: __FRONTEND_REPLICAS__
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fotosintesis-frontend
+        app.kubernetes.io/part-of: fotosintesis-ai
+    spec:
+      serviceAccountName: fotosintesis-frontend
+      containers:
+        - name: frontend
+          image: __IMAGE_REGISTRY__/frontend:__FRONTEND_IMAGE_TAG__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: NEXT_PUBLIC_API_BASE_URL
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: auth-secret
+            - name: AUTH_TRUST_HOST
+              value: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fotosintesis-frontend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-frontend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  type: __FRONTEND_SERVICE_TYPE__
+  selector:
+    app.kubernetes.io/name: fotosintesis-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

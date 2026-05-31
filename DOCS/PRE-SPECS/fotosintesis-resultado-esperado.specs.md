@@ -101,7 +101,7 @@ El proyecto debe demostrar:
 ### Infraestructura
 
 - El stack local levanta con Docker Compose.
-- El sistema tiene manifiestos o Helm charts para Kubernetes/GKE.
+- El sistema tiene manifiestos para Kubernetes/GKE.
 - El README permite reproducir el proyecto.
 - Los tests pasan en verde.
 

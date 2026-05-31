@@ -108,7 +108,7 @@ El proyecto debe incluir tests unitarios, de integración y end-to-end mínimo.
 
 ### RF-027 — Despliegue
 
-El proyecto debe incluir Docker Compose y manifiestos o Helm charts para Kubernetes/GKE.
+El proyecto debe incluir Docker Compose y manifiestos para Kubernetes/GKE.
 
 ---
 
