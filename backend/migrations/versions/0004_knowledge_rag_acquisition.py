@@ -1,7 +1,7 @@
 """knowledge rag acquisition
 
-Revision ID: 0004_knowledge_rag_acquisition
-Revises: 0003_plant_identification_taxonomy
+Revision ID: 0004_knowledge_rag
+Revises: 0003_plant_id_taxonomy
 Create Date: 2026-05-26
 
 """
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0004_knowledge_rag_acquisition"
-down_revision: Union[str, None] = "0003_plant_identification_taxonomy"
+revision: str = "0004_knowledge_rag"
+down_revision: Union[str, None] = "0003_plant_id_taxonomy"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

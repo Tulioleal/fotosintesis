@@ -70,6 +70,8 @@ temp/
 *.tmp
 *.bak
 
+# Custom
 execution-order.md
 TODO.txt
 /SPECS
+*.egg-info/

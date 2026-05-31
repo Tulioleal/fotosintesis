@@ -16,6 +16,8 @@ docker compose --profile storage up frontend backend postgres minio
 
 The local stack uses mock providers by default so development can run without real model, vision, search or embedding credentials.
 
+The backend container runs `alembic upgrade head` before starting Uvicorn so a clean local Postgres volume has the required tables.
+
 ## Environment Files
 
 Copy examples when local overrides are needed:

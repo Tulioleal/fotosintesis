@@ -93,8 +93,9 @@ async function frontendRequest<T>(path: string, init: RequestInit = {}): Promise
 
 export const apiClient = {
   register: (body: RegisterRequest) =>
-    request<RegisterResponse>("/auth/register", {
+    frontendRequest<RegisterResponse>("/api/auth/register", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   requestRecovery: (body: RecoveryRequest) =>

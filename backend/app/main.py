@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,18 +17,28 @@ from app.observability.middleware import request_observability_middleware
 from app.providers.factory import get_provider_registry
 
 
-def create_app() -> FastAPI:
+class CorsApplication:
+    def __init__(self, app: FastAPI, settings: Any) -> None:
+        self.fastapi_app = app
+        self.cors_app = CORSMiddleware(
+            app=app,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        await self.cors_app(scope, receive, send)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.fastapi_app, name)
+
+
+def create_app() -> CorsApplication:
     settings = get_settings()
     configure_logging(settings.log_level)
     app = FastAPI(title=settings.app_name)
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     app.middleware("http")(request_observability_middleware)
     app.include_router(auth_router)
@@ -58,7 +70,7 @@ def create_app() -> FastAPI:
     async def metrics() -> Response:
         return Response(content=metrics_registry.to_prometheus(), media_type="text/plain")
 
-    return app
+    return CorsApplication(app, settings)
 
 
 app = create_app()

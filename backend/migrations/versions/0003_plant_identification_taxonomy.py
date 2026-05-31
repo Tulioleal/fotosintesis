@@ -1,6 +1,6 @@
 """plant identification taxonomy
 
-Revision ID: 0003_plant_identification_taxonomy
+Revision ID: 0003_plant_id_taxonomy
 Revises: 0002_authentication_home
 Create Date: 2026-05-26
 
@@ -10,7 +10,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0003_plant_identification_taxonomy"
+revision: str = "0003_plant_id_taxonomy"
 down_revision: Union[str, None] = "0002_authentication_home"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

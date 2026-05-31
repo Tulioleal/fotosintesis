@@ -1,7 +1,7 @@
 """plant profile garden
 
 Revision ID: 0005_plant_profile_garden
-Revises: 0004_knowledge_rag_acquisition
+Revises: 0004_knowledge_rag
 Create Date: 2026-05-28
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = "0005_plant_profile_garden"
-down_revision: Union[str, None] = "0004_knowledge_rag_acquisition"
+down_revision: Union[str, None] = "0004_knowledge_rag"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
