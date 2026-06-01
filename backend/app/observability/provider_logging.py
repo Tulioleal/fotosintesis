@@ -10,7 +10,13 @@ T = TypeVar("T")
 logger = get_logger(__name__)
 
 
-async def log_provider_call(provider: str, operation: str, call: Callable[[], Awaitable[T]]) -> T:
+async def log_provider_call(
+    provider: str,
+    operation: str,
+    call: Callable[[], Awaitable[T]],
+    *,
+    role: str | None = None,
+) -> T:
     started_at = perf_counter()
     try:
         result = await call()
@@ -20,6 +26,7 @@ async def log_provider_call(provider: str, operation: str, call: Callable[[], Aw
             extra={
                 "ctx_trace_id": get_trace_id(),
                 "ctx_provider": provider,
+                "ctx_role": role,
                 "ctx_operation": operation,
                 "ctx_latency_seconds": round(perf_counter() - started_at, 6),
             },
@@ -32,6 +39,7 @@ async def log_provider_call(provider: str, operation: str, call: Callable[[], Aw
             extra={
                 "ctx_trace_id": get_trace_id(),
                 "ctx_provider": provider,
+                "ctx_role": role,
                 "ctx_operation": operation,
                 "ctx_latency_seconds": round(perf_counter() - started_at, 6),
             },

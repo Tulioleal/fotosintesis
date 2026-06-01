@@ -61,6 +61,7 @@ def create_app() -> CorsApplication:
                 "object_storage": "configured" if settings.object_storage_bucket else "missing",
                 "model_provider": providers.model.__class__.__name__,
                 "vision_provider": providers.vision.__class__.__name__,
+                "judge_provider": providers.judge.__class__.__name__,
                 "embedding_provider": providers.embeddings.__class__.__name__,
                 "search_provider": providers.search.__class__.__name__,
             },

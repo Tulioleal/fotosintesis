@@ -94,7 +94,14 @@ FRONTEND_GCP_SERVICE_ACCOUNT_EMAIL=$(tofu output -raw frontend_service_account_e
 OBJECT_STORAGE_BUCKET=$(tofu output -raw object_storage_bucket)
 CLOUD_SQL_INSTANCE_CONNECTION_NAME=$(tofu output -raw cloud_sql_instance_connection_name)
 CLOUD_SQL_DATABASE_NAME=$(tofu output -raw cloud_sql_database_name)
-PROVIDER_PROFILE=mock
+MODEL_PROVIDER=mock
+VISION_PROVIDER=mock
+JUDGE_PROVIDER=mock
+SEARCH_PROVIDER=mock
+EMBEDDING_PROVIDER=mock
+OPENAI_TEXT_MODEL=gpt-5.4
+OPENAI_VISION_MODEL=gpt-5.4
+OPENAI_JUDGE_MODEL=gpt-5.4
 RUNTIME_SECRET_NAME=fotosintesis-runtime
 EOF
 ```

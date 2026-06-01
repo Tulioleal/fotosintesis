@@ -52,11 +52,52 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: CLOUD_SQL_DATABASE_NAME
-            - name: PROVIDER_PROFILE
+            - name: MODEL_PROVIDER
               valueFrom:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
-                  key: PROVIDER_PROFILE
+                  key: MODEL_PROVIDER
+            - name: VISION_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: VISION_PROVIDER
+            - name: JUDGE_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: JUDGE_PROVIDER
+            - name: SEARCH_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: SEARCH_PROVIDER
+            - name: EMBEDDING_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: EMBEDDING_PROVIDER
+            - name: OPENAI_TEXT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_TEXT_MODEL
+            - name: OPENAI_VISION_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_VISION_MODEL
+            - name: OPENAI_JUDGE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_JUDGE_MODEL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: openai-api-key
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health

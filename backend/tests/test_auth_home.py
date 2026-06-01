@@ -1,4 +1,6 @@
+from collections.abc import Iterator
 from datetime import timedelta
+import types
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -7,8 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.repository import DatabaseAuthRepository
 from app.auth.tables import identification_candidates, identification_images, recovery_tokens, sessions, users
+from app.core.settings import get_settings
 from app.identification.gbif import GbifTaxonomy
 from app.main import app
+from app.providers.types import ConfidenceLabel, ImageAnalysisResult, PlantCandidate
+
+
+@pytest.fixture(autouse=True)
+def use_mock_providers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("MODEL_PROVIDER", "mock")
+    monkeypatch.setenv("VISION_PROVIDER", "mock")
+    monkeypatch.setenv("JUDGE_PROVIDER", "mock")
+    monkeypatch.setenv("SEARCH_PROVIDER", "mock")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -228,6 +244,72 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         assert len(image_rows) == 1
         assert len(candidate_rows) == 1
         assert candidate_rows[0].accepted_scientific_name == "Cotyledon tomentosa"
+
+
+@pytest.mark.asyncio
+async def test_identification_upload_with_openai_style_vision_does_not_return_maas_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeVisionProvider:
+        async def analyze_image(
+            self, image: bytes, prompt: str | None = None, **kwargs: object
+        ) -> ImageAnalysisResult:
+            assert kwargs["mime_type"] == "image/png"
+            return ImageAnalysisResult(
+                provider="openai-vision",
+                model="gpt-4.1-mini",
+                description="OpenAI-style mocked visual analysis found a plant.",
+                candidates=[
+                    PlantCandidate(
+                        scientific_name="Pilea peperomioides",
+                        common_name="Chinese money plant",
+                        confidence_label=ConfidenceLabel.medium,
+                        visible_traits=["round green leaves"],
+                        provider="openai-vision",
+                    )
+                ],
+                metadata={"image_size_bytes": len(image), "prompt": prompt},
+            )
+
+    async def matched_name(self, scientific_name: str) -> GbifTaxonomy:
+        return GbifTaxonomy(
+            key=321,
+            accepted_key=654,
+            accepted_scientific_name=scientific_name,
+            taxonomic_status="ACCEPTED",
+            genus="Pilea",
+            family="Urticaceae",
+            species=scientific_name,
+            matched=True,
+        )
+
+    monkeypatch.setattr(
+        "app.api.identifications.get_provider_registry",
+        lambda: types.SimpleNamespace(vision=FakeVisionProvider()),
+    )
+    monkeypatch.setattr("app.identification.gbif.GbifClient.match_name", matched_name)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {"name": "Opal", "email": "opal@example.com", "password": "password123"}
+        await client.post("/auth/register", json=payload)
+        verified = await client.post(
+            "/auth/credentials/verify",
+            json={"email": payload["email"], "password": payload["password"]},
+        )
+        token = verified.json()["session_token"]
+
+        response = await client.post(
+            "/identifications",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("plant.png", b"fake-png-bytes", "image/png")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["sad_path"] != "maas_unavailable"
+    assert body["sad_path"] is None
+    assert body["status"] == "needs_confirmation"
+    assert body["candidates"][0]["suggested_scientific_name"] == "Pilea peperomioides"
 
 
 @pytest.mark.asyncio

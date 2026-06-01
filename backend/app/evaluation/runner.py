@@ -15,6 +15,7 @@ from app.evaluation.metrics import (
     visual_metrics,
 )
 from app.evaluation.report import render_markdown_report
+from app.providers.factory import get_provider_registry
 from app.providers.interfaces import JudgeEvaluationProvider
 
 
@@ -59,7 +60,7 @@ class EvaluationRunner:
         judge_provider: JudgeEvaluationProvider | None = None,
         output_dir: Path | None = None,
     ) -> None:
-        self.judge_provider = judge_provider
+        self.judge_provider = judge_provider or get_provider_registry().judge
         self.output_dir = output_dir or Path("evaluation-runs")
 
     async def run(self, cases: list[EvaluationCase] | None = None) -> EvaluationRunResult:

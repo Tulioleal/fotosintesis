@@ -16,7 +16,15 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "fotosintesis-local"
     object_storage_access_key: str | None = None
     object_storage_secret_key: str | None = None
-    provider_profile: str = "mock"
+    model_provider: str = "mock"
+    vision_provider: str = "mock"
+    judge_provider: str = "mock"
+    search_provider: str = "mock"
+    embedding_provider: str = "mock"
+    openai_api_key: str | None = None
+    openai_text_model: str = "gpt-5.4"
+    openai_vision_model: str = "gpt-5.4"
+    openai_judge_model: str = "gpt-5.4"
     log_level: str = "INFO"
     tracing_enabled: bool = True
     session_cookie_name: str = "fotosintesis_session"

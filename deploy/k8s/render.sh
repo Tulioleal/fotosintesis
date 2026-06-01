@@ -33,7 +33,14 @@ for source_file in "$base_dir"/*.yaml; do
     -e "s#__OBJECT_STORAGE_BUCKET__#${OBJECT_STORAGE_BUCKET}#g" \
     -e "s#__CLOUD_SQL_INSTANCE_CONNECTION_NAME__#${CLOUD_SQL_INSTANCE_CONNECTION_NAME}#g" \
     -e "s#__CLOUD_SQL_DATABASE_NAME__#${CLOUD_SQL_DATABASE_NAME}#g" \
-    -e "s#__PROVIDER_PROFILE__#${PROVIDER_PROFILE}#g" \
+    -e "s#__MODEL_PROVIDER__#${MODEL_PROVIDER}#g" \
+    -e "s#__VISION_PROVIDER__#${VISION_PROVIDER}#g" \
+    -e "s#__JUDGE_PROVIDER__#${JUDGE_PROVIDER}#g" \
+    -e "s#__SEARCH_PROVIDER__#${SEARCH_PROVIDER}#g" \
+    -e "s#__EMBEDDING_PROVIDER__#${EMBEDDING_PROVIDER}#g" \
+    -e "s#__OPENAI_TEXT_MODEL__#${OPENAI_TEXT_MODEL}#g" \
+    -e "s#__OPENAI_VISION_MODEL__#${OPENAI_VISION_MODEL}#g" \
+    -e "s#__OPENAI_JUDGE_MODEL__#${OPENAI_JUDGE_MODEL}#g" \
     -e "s#__RUNTIME_SECRET_NAME__#${RUNTIME_SECRET_NAME}#g" \
     "$source_file" > "$target_file"
 done

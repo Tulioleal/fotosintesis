@@ -29,7 +29,7 @@ cp backend/.env.example backend/.env
 
 Important local variables:
 
-- `PROVIDER_PROFILE=mock` keeps providers deterministic.
+- `MODEL_PROVIDER=mock`, `VISION_PROVIDER=mock`, `JUDGE_PROVIDER=mock`, `SEARCH_PROVIDER=mock` and `EMBEDDING_PROVIDER=mock` keep providers deterministic.
 - `DATABASE_URL` points to local Postgres in Compose or localhost when running directly.
 - `OBJECT_STORAGE_*` points to MinIO only when the storage profile is used.
 - `AUTH_SECRET` is required by Auth.js locally.
