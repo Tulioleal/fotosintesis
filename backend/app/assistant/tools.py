@@ -6,6 +6,7 @@ from app.assistant.repository import AssistantRepository
 from app.identification.gbif import GbifClient
 from app.knowledge.acquisition import KnowledgeAcquisitionService, TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
+from app.knowledge.plant_data import PlantDataLookupService, StructuredPlantEvidence
 from app.knowledge.rag import KnowledgeVectorIndex
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import (
@@ -70,6 +71,34 @@ class AssistantTools:
             return ToolResult(ok=True, data=await self.page_evidence_fetcher.fetch_all(results))
         except Exception as exc:
             return ToolResult(ok=False, error=f"trusted_web_search failed: {exc}")
+
+    async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:
+        try:
+            evidence = await PlantDataLookupService(
+                trefle=self.providers.trefle,
+                perenual=self.providers.perenual,
+            ).lookup(scientific_name=scientific_name, topic=topic)
+            if not evidence:
+                return ToolResult(ok=True, data=None)
+            ingestion_error = await self._ingest_structured_evidence(evidence)
+            return ToolResult(
+                ok=True,
+                data={"evidence": evidence, "ingestion_error": ingestion_error},
+            )
+        except Exception as exc:
+            return ToolResult(ok=False, error=f"plant_data_lookup failed: {exc}")
+
+    async def _ingest_structured_evidence(
+        self, evidence: StructuredPlantEvidence
+    ) -> str | None:
+        try:
+            await KnowledgeVectorIndex(self.knowledge_repository).ingest_document(
+                evidence.to_document(),
+                embedding_provider=self.providers.embeddings,
+            )
+        except Exception as exc:
+            return f"plant_data_lookup ingestion failed: {exc}"
+        return None
 
     async def ingest_web_evidence(
         self,

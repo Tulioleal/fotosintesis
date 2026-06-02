@@ -21,7 +21,11 @@ class Settings(BaseSettings):
     judge_provider: str = "mock"
     search_provider: str = "mock"
     embedding_provider: str = "mock"
+    trefle_provider: str = "mock"
+    perenual_provider: str = "mock"
     openai_api_key: str | None = None
+    trefle_api_key: str | None = None
+    perenual_api_key: str | None = None
     openai_text_model: str = "gpt-5.4"
     openai_vision_model: str = "gpt-5.4"
     openai_judge_model: str = "gpt-5.4"

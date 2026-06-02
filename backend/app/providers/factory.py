@@ -6,12 +6,15 @@ from app.providers.interfaces import (
     ImageAnalysisProvider,
     JudgeEvaluationProvider,
     ModelProvider,
+    PlantDataProvider,
     SearchProvider,
 )
 from app.providers.mocks import (
     MockEmbeddingProvider,
     MockModelProvider,
+    MockPerenualPlantDataProvider,
     MockSearchProvider,
+    MockTreflePlantDataProvider,
     MockVisionPlantIdentificationProvider,
 )
 from app.providers.openai import (
@@ -21,6 +24,7 @@ from app.providers.openai import (
     OpenAISearchProvider,
     OpenAIVisionProvider,
 )
+from app.providers.plant_data import PerenualPlantDataProvider, TreflePlantDataProvider
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,8 @@ class ProviderRegistry:
     judge: JudgeEvaluationProvider
     search: SearchProvider
     embeddings: EmbeddingProvider
+    trefle: PlantDataProvider
+    perenual: PlantDataProvider
 
 
 def get_provider_registry() -> ProviderRegistry:
@@ -41,6 +47,8 @@ def get_provider_registry() -> ProviderRegistry:
         judge=_build_judge_provider(settings.judge_provider, settings),
         search=_build_search_provider(settings.search_provider, settings),
         embeddings=_build_embedding_provider(settings.embedding_provider, settings),
+        trefle=_build_trefle_provider(settings.trefle_provider, settings),
+        perenual=_build_perenual_provider(settings.perenual_provider, settings),
     )
 
 
@@ -51,6 +59,12 @@ def _normalize_provider(value: str) -> str:
 def _require_openai_api_key(value: str | None, *, role: str) -> str:
     if not value:
         raise ValueError(f"OPENAI_API_KEY is required when {role} provider is openai")
+    return value
+
+
+def _require_api_key(value: str | None, *, env_name: str, role: str) -> str:
+    if not value:
+        raise ValueError(f"{env_name} is required when {role} provider is real")
     return value
 
 
@@ -112,3 +126,29 @@ def _build_embedding_provider(provider: str, settings: object) -> EmbeddingProvi
                 model=settings.openai_embedding_model,
             )
     raise ValueError(f"Unsupported embedding provider: {provider}")
+
+
+def _build_trefle_provider(provider: str, settings: object) -> PlantDataProvider:
+    match _normalize_provider(provider):
+        case "mock":
+            return MockTreflePlantDataProvider()
+        case "real" | "trefle":
+            return TreflePlantDataProvider(
+                api_key=_require_api_key(
+                    settings.trefle_api_key, env_name="TREFLE_API_KEY", role="trefle"
+                )
+            )
+    raise ValueError(f"Unsupported trefle provider: {provider}")
+
+
+def _build_perenual_provider(provider: str, settings: object) -> PlantDataProvider:
+    match _normalize_provider(provider):
+        case "mock":
+            return MockPerenualPlantDataProvider()
+        case "real" | "perenual":
+            return PerenualPlantDataProvider(
+                api_key=_require_api_key(
+                    settings.perenual_api_key, env_name="PERENUAL_API_KEY", role="perenual"
+                )
+            )
+    raise ValueError(f"Unsupported perenual provider: {provider}")

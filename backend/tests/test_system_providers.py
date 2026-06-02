@@ -15,6 +15,7 @@ from app.providers.openai import (
     OpenAISearchProvider,
     OpenAIVisionProvider,
 )
+from app.providers.plant_data import PerenualPlantDataProvider, TreflePlantDataProvider
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +25,11 @@ def reset_provider_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JUDGE_PROVIDER", "mock")
     monkeypatch.setenv("SEARCH_PROVIDER", "mock")
     monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+    monkeypatch.setenv("TREFLE_PROVIDER", "mock")
+    monkeypatch.setenv("PERENUAL_PROVIDER", "mock")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("TREFLE_API_KEY", "")
+    monkeypatch.setenv("PERENUAL_API_KEY", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -65,6 +70,8 @@ async def test_health_reports_mock_provider_dependencies() -> None:
     assert payload["dependencies"]["judge_provider"] == "MockModelProvider"
     assert payload["dependencies"]["embedding_provider"] == "MockEmbeddingProvider"
     assert payload["dependencies"]["search_provider"] == "MockSearchProvider"
+    assert payload["dependencies"]["trefle_provider"] == "MockTreflePlantDataProvider"
+    assert payload["dependencies"]["perenual_provider"] == "MockPerenualPlantDataProvider"
 
 
 @pytest.mark.asyncio
@@ -87,6 +94,8 @@ async def test_mock_provider_registry_returns_deterministic_local_providers() ->
     judge = await providers.judge.judge_response({}, {})
     search = await providers.search.search("Cotyledon tomentosa care")
     embeddings = await providers.embeddings.create_embeddings(["bright light"])
+    trefle = await providers.trefle.lookup("Cotyledon tomentosa")
+    perenual = await providers.perenual.lookup("Cotyledon tomentosa")
 
     assert text.provider == "mock-model"
     assert image.candidates[0].scientific_name == "Cotyledon tomentosa"
@@ -94,6 +103,46 @@ async def test_mock_provider_registry_returns_deterministic_local_providers() ->
     assert search[0].source_domain == "example.org"
     assert embeddings.provider == "mock-embedding"
     assert len(embeddings.embeddings[0]) > 0
+    assert trefle.provider == "mock-trefle"
+    assert perenual.provider == "mock-perenual"
+
+
+def test_real_trefle_provider_requires_only_trefle_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TREFLE_PROVIDER", "real")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="TREFLE_API_KEY is required when trefle provider is real"
+    ):
+        get_provider_registry()
+
+    monkeypatch.setenv("TREFLE_API_KEY", "test-trefle")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+    assert isinstance(providers.trefle, TreflePlantDataProvider)
+    assert providers.perenual.__class__.__name__ == "MockPerenualPlantDataProvider"
+
+
+def test_real_perenual_provider_requires_only_perenual_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PERENUAL_PROVIDER", "real")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="PERENUAL_API_KEY is required when perenual provider is real"
+    ):
+        get_provider_registry()
+
+    monkeypatch.setenv("PERENUAL_API_KEY", "test-perenual")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+    assert isinstance(providers.perenual, PerenualPlantDataProvider)
+    assert providers.trefle.__class__.__name__ == "MockTreflePlantDataProvider"
 
 
 def test_openai_model_selection_does_not_change_search_or_embeddings(

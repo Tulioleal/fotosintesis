@@ -64,6 +64,8 @@ def create_app() -> CorsApplication:
                 "judge_provider": providers.judge.__class__.__name__,
                 "embedding_provider": providers.embeddings.__class__.__name__,
                 "search_provider": providers.search.__class__.__name__,
+                "trefle_provider": providers.trefle.__class__.__name__,
+                "perenual_provider": providers.perenual.__class__.__name__,
             },
         }
 

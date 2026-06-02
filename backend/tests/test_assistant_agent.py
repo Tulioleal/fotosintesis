@@ -8,11 +8,13 @@ from app.assistant.graph import AssistantGraph
 from app.assistant.tools import AssistantTools, ToolResult
 from app.knowledge.acquisition import TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
+from app.knowledge.plant_data import StructuredPlantEvidence
 from app.knowledge.schemas import (
     AcquisitionStatus,
     KnowledgeAcquisitionResult,
     KnowledgeChunk,
     ReviewStatus,
+    KnowledgeSourceInput,
 )
 from app.providers.types import SearchResult
 
@@ -26,6 +28,8 @@ class FakeTools:
         web_results: list[SearchResult | TrustedPageEvidence] | None = None,
         fail_web_search: bool = False,
         fail_ingestion: bool = False,
+        plant_data: StructuredPlantEvidence | None = None,
+        plant_data_ingestion_error: str | None = None,
     ) -> None:
         self.fail_reminder = fail_reminder
         self.degraded_knowledge = degraded_knowledge
@@ -38,6 +42,10 @@ class FakeTools:
         self.web_search_query = None
         self.ingestion_calls = 0
         self.ingestion_kwargs = None
+        self.plant_data = plant_data
+        self.plant_data_ingestion_error = plant_data_ingestion_error
+        self.plant_data_calls = 0
+        self.call_order: list[str] = []
 
     async def garden_lookup(self, *, user_id: UUID) -> ToolResult:
         return ToolResult(
@@ -59,6 +67,7 @@ class FakeTools:
         )
 
     async def knowledge_search(self, *, scientific_name: str, topic: str) -> ToolResult:
+        self.call_order.append("rag")
         if self.degraded_knowledge:
             return ToolResult(
                 ok=True,
@@ -102,6 +111,7 @@ class FakeTools:
         return ToolResult(ok=True, data=None)
 
     async def trusted_web_search(self, query: str) -> ToolResult:
+        self.call_order.append("web")
         self.web_search_calls += 1
         self.web_search_query = query
         if self.fail_web_search:
@@ -115,10 +125,48 @@ class FakeTools:
             return ToolResult(ok=False, error="ingest_web_evidence failed: unavailable")
         return ToolResult(ok=True, data={"document_id": str(uuid4())})
 
+    async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:
+        self.call_order.append("plant_data")
+        self.plant_data_calls += 1
+        if not self.plant_data:
+            return ToolResult(ok=True, data=None)
+        return ToolResult(
+            ok=True,
+            data={
+                "evidence": self.plant_data,
+                "ingestion_error": self.plant_data_ingestion_error,
+            },
+        )
+
+
+def _structured_evidence(
+    *, sufficient: bool = True, confidence: float = 0.72
+) -> StructuredPlantEvidence:
+    return StructuredPlantEvidence(
+        scientific_name="Cotyledon tomentosa",
+        topic="watering",
+        content="Watering: Let soil dry between waterings. Providers: mock-trefle, mock-perenual.",
+        confidence=confidence,
+        sources=[
+            KnowledgeSourceInput(
+                title="mock-trefle structured plant data",
+                url="https://trefle.io/mock/species/cotyledon-tomentosa",
+                source_domain="trefle.io",
+                retrieved_at=datetime.now(timezone.utc),
+                validation_status="structured_api",
+            )
+        ],
+        providers=["mock-trefle", "mock-perenual"],
+        fields={"watering": "Let soil dry between waterings."},
+        sufficient=sufficient,
+        missing_fields=[] if sufficient else ["watering"],
+    )
+
 
 @pytest.mark.asyncio
 async def test_assistant_answers_botanical_questions_with_sources() -> None:
-    result = await AssistantGraph(FakeTools()).run(
+    tools = FakeTools()
+    result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como debo regar mi Pata?",
         plant_hint=None,
@@ -126,6 +174,93 @@ async def test_assistant_answers_botanical_questions_with_sources() -> None:
 
     assert "evidencia recuperada" in result["answer"]
     assert result["sources"][0]["url"] == "https://example.org/source"
+    assert tools.plant_data_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_does_not_call_structured_or_web_when_rag_sufficient() -> None:
+    tools = FakeTools(plant_data=_structured_evidence())
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+    )
+
+    assert "evidencia recuperada" in result["answer"]
+    assert tools.call_order == ["rag"]
+    assert tools.plant_data_calls == 0
+    assert tools.web_search_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_uses_structured_lookup_before_trusted_web_search() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+    )
+
+    assert tools.call_order == ["rag", "plant_data"]
+    assert tools.web_search_calls == 0
+    assert "datos estructurados" in result["answer"]
+    assert "mock-trefle" in result["answer"]
+    assert result["sources"][0]["evidence_type"] == "structured_api"
+
+
+@pytest.mark.asyncio
+async def test_assistant_uses_trusted_web_after_insufficient_structured_evidence() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(sufficient=False, confidence=0.45),
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+    )
+
+    assert tools.call_order == ["rag", "plant_data", "web"]
+    assert "evidencia web en vivo" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_records_structured_ingestion_failure_without_blocking_answer() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(),
+        plant_data_ingestion_error="plant_data_lookup ingestion failed: pgvector unavailable",
+    )
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+    )
+
+    assert "datos estructurados" in result["answer"]
+    assert "pgvector unavailable" in result["tool_failures"][0]
+
+
+@pytest.mark.asyncio
+async def test_assistant_does_not_call_structured_lookup_for_unconfirmed_plant_hint() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar esta planta?",
+        plant_hint="Cotyledon tomentosa",
+    )
+
+    assert tools.plant_data_calls == 0
+    assert tools.call_order == ["rag", "web"]
+    assert "No encontre evidencia suficiente" in result["answer"]
 
 
 @pytest.mark.asyncio
@@ -487,6 +622,83 @@ async def test_assistant_tools_persists_fetched_page_content(
     assert result.ok is True
     assert "Fetched page content with detailed watering guidance" in captured["document"].content
     assert "Snippet only" not in captured["document"].content
+
+
+@pytest.mark.asyncio
+async def test_assistant_tools_auto_ingests_structured_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeKnowledgeVectorIndex:
+        def __init__(self, repository):
+            pass
+
+        async def ingest_document(self, document, *, embedding_provider):
+            captured["document"] = document
+            captured["embedding_provider"] = embedding_provider
+            return SimpleNamespace(id=uuid4())
+
+    embedding_provider = object()
+    monkeypatch.setattr("app.assistant.tools.KnowledgeVectorIndex", FakeKnowledgeVectorIndex)
+    tools = AssistantTools(
+        repository=object(),
+        knowledge_repository=object(),
+        providers=SimpleNamespace(
+            trefle=SimpleNamespace(lookup=lambda scientific_name: None),
+            perenual=SimpleNamespace(lookup=lambda scientific_name: None),
+            embeddings=embedding_provider,
+        ),
+    )
+    evidence = _structured_evidence()
+
+    error = await tools._ingest_structured_evidence(evidence)
+
+    assert error is None
+    document = captured["document"]
+    assert document.review_status == ReviewStatus.auto_ingested
+    assert document.sources[0].validation_status == "structured_api"
+    assert captured["embedding_provider"] is embedding_provider
+
+
+@pytest.mark.asyncio
+async def test_assistant_tools_reports_structured_ingestion_failure_without_failing_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeKnowledgeVectorIndex:
+        def __init__(self, repository):
+            pass
+
+        async def ingest_document(self, document, *, embedding_provider):
+            raise RuntimeError("pgvector unavailable")
+
+    class FakeTrefle:
+        async def lookup(self, scientific_name: str):
+            return SimpleNamespace(
+                provider="fake-trefle",
+                scientific_name=scientific_name,
+                fields={"watering": "Water after drying."},
+                source_url="https://trefle.io/fake",
+            )
+
+    class FakePerenual:
+        async def lookup(self, scientific_name: str):
+            raise AssertionError("Perenual should not be called when Trefle is sufficient")
+
+    monkeypatch.setattr("app.assistant.tools.KnowledgeVectorIndex", FakeKnowledgeVectorIndex)
+    tools = AssistantTools(
+        repository=object(),
+        knowledge_repository=object(),
+        providers=SimpleNamespace(trefle=FakeTrefle(), perenual=FakePerenual(), embeddings=object()),
+    )
+
+    result = await tools.plant_data_lookup(
+        scientific_name="Cotyledon tomentosa", topic="watering"
+    )
+
+    assert result.ok is True
+    assert result.data["evidence"].sufficient is True
+    assert "pgvector unavailable" in result.data["ingestion_error"]
 
 
 @pytest.mark.asyncio

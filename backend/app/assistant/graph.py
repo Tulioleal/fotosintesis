@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.assistant.tools import AssistantTools
 from app.knowledge.page_evidence import TrustedPageEvidence
+from app.knowledge.plant_data import StructuredPlantEvidence
 from app.knowledge.schemas import AcquisitionStatus, KnowledgeAcquisitionResult, KnowledgeChunk
 from app.providers.types import SearchResult
 
@@ -57,6 +58,7 @@ class AssistantState(TypedDict, total=False):
     unsafe: bool
     retrieval: KnowledgeAcquisitionResult | None
     web_results: list[TrustedPageEvidence]
+    plant_data: StructuredPlantEvidence | None
     sufficient: bool
     sources: list[dict]
     answer: str
@@ -161,6 +163,40 @@ class AssistantGraph:
         return {
             "web_results": web_results,
             "sources": state.get("sources", []) + _sources_from_web_results(web_results),
+        }
+
+    async def fallback_plant_data(self, state: AssistantState) -> dict:
+        selected = state.get("selected_plant")
+        if (
+            not selected
+            or selected.get("id") is None
+            or not _message_confirms_selected_plant(selected, state["message"])
+        ):
+            return {}
+        scientific_name = selected.get("scientific_name")
+        if not scientific_name:
+            return {}
+        result = await self.tools.plant_data_lookup(
+            scientific_name=scientific_name,
+            topic=state.get("topic") or "care",
+        )
+        if not result.ok:
+            return {
+                "tool_failures": state.get("tool_failures", [])
+                + [result.error or "plant_data_lookup failed"]
+            }
+        payload = result.data if isinstance(result.data, dict) else {}
+        evidence = payload.get("evidence")
+        if not isinstance(evidence, StructuredPlantEvidence):
+            return {}
+        failures = state.get("tool_failures", [])
+        ingestion_error = payload.get("ingestion_error")
+        if ingestion_error:
+            failures = failures + [str(ingestion_error)]
+        return {
+            "plant_data": evidence,
+            "tool_failures": failures,
+            "sources": state.get("sources", []) + _sources_from_structured_evidence(evidence),
         }
 
     async def handle_action(self, state: AssistantState) -> dict:
@@ -275,6 +311,9 @@ class AssistantGraph:
         chunks = getattr(retrieval, "chunks", []) if retrieval else []
         limitations = list(getattr(retrieval, "limitations", []) if retrieval else [])
         if not state.get("sufficient"):
+            plant_data = state.get("plant_data")
+            if plant_data and plant_data.sufficient:
+                return self._generate_structured_answer(state, plant_data)
             web_results = state.get("web_results", [])
             if web_results:
                 return await self._generate_web_answer(state, web_results)
@@ -289,6 +328,18 @@ class AssistantGraph:
         answer = (
             f"Para {plant_name}, la evidencia recuperada indica: {evidence}"
             f"{uncertainty} Evito afirmar detalles que no esten respaldados por esas fuentes."
+        )
+        return {"answer": answer}
+
+    def _generate_structured_answer(
+        self, state: AssistantState, evidence: StructuredPlantEvidence
+    ) -> dict:
+        selected = state.get("selected_plant")
+        plant_name = selected.get("scientific_name") if selected else evidence.scientific_name
+        providers = ", ".join(evidence.providers)
+        answer = (
+            f"Para {plant_name}, los datos estructurados indican: "
+            f"{_shorten(evidence.content, 700)} Fuentes: {providers}. "
         )
         return {"answer": answer}
 
@@ -340,6 +391,7 @@ def _compile_graph(owner: AssistantGraph):
     graph.add_node("load_user_context", owner.load_user_context)
     graph.add_node("retrieve", owner.retrieve)
     graph.add_node("evaluate_sufficiency", owner.evaluate_sufficiency)
+    graph.add_node("fallback_plant_data", owner.fallback_plant_data)
     graph.add_node("fallback_web_search", owner.fallback_web_search)
     graph.add_node("handle_action", owner.handle_action)
     graph.add_node("generate_answer", owner.generate_answer)
@@ -356,6 +408,11 @@ def _compile_graph(owner: AssistantGraph):
     graph.add_conditional_edges(
         "evaluate_sufficiency",
         _route_after_sufficiency,
+        {"answer": "generate_answer", "fallback": "fallback_plant_data"},
+    )
+    graph.add_conditional_edges(
+        "fallback_plant_data",
+        _route_after_plant_data_fallback,
         {"answer": "generate_answer", "fallback": "fallback_web_search"},
     )
     graph.add_conditional_edges(
@@ -392,10 +449,12 @@ class _SequentialGraph:
             state.update(await self.owner.retrieve(state))
             state.update(await self.owner.evaluate_sufficiency(state))
             if _route_after_sufficiency(state) == "fallback":
-                state.update(await self.owner.fallback_web_search(state))
-                if _route_after_web_fallback(state) == "clarify":
-                    state.update(await self.owner.clarify(state))
-                    return state
+                state.update(await self.owner.fallback_plant_data(state))
+                if _route_after_plant_data_fallback(state) == "fallback":
+                    state.update(await self.owner.fallback_web_search(state))
+                    if _route_after_web_fallback(state) == "clarify":
+                        state.update(await self.owner.clarify(state))
+                        return state
         state.update(await self.owner.generate_answer(state))
         return state
 
@@ -410,6 +469,11 @@ def _route_after_context(state: AssistantState) -> Literal["clarify", "retrieve"
 
 def _route_after_sufficiency(state: AssistantState) -> Literal["answer", "fallback"]:
     return "answer" if state.get("sufficient") else "fallback"
+
+
+def _route_after_plant_data_fallback(state: AssistantState) -> Literal["answer", "fallback"]:
+    evidence = state.get("plant_data")
+    return "answer" if evidence and evidence.sufficient else "fallback"
 
 
 def _route_after_web_fallback(state: AssistantState) -> Literal["answer", "clarify"]:
@@ -446,6 +510,14 @@ def _select_plant(
         word in message.casefold() for word in ("mi planta", "esta planta", "esa planta")
     )
     return (garden[0], False) if len(garden) == 1 else (None, references_plant and len(garden) > 1)
+
+
+def _message_confirms_selected_plant(plant: dict, message: str) -> bool:
+    haystack = message.casefold()
+    return any(
+        value and str(value).casefold() in haystack
+        for value in (plant.get("nickname"), plant.get("scientific_name"), plant.get("common_name"))
+    )
 
 
 def _topic_for_message(message: str) -> str:
@@ -495,6 +567,19 @@ def _sources_from_web_results(results: list[TrustedPageEvidence]) -> list[dict]:
             }
         )
     return sources
+
+
+def _sources_from_structured_evidence(evidence: StructuredPlantEvidence) -> list[dict]:
+    return [
+        {
+            "title": source.title,
+            "url": str(source.url),
+            "domain": source.source_domain,
+            "confidence": evidence.confidence,
+            "evidence_type": "structured_api",
+        }
+        for source in evidence.sources
+    ]
 
 
 def _usable_web_results(data: object) -> list[TrustedPageEvidence]:

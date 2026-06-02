@@ -6,6 +6,7 @@ from app.providers.types import (
     ImageAnalysisResult,
     JudgeResult,
     JsonGenerationResult,
+    PlantDataResult,
     SearchResult,
     TextGenerationResult,
 )
@@ -50,6 +51,12 @@ class JudgeEvaluationProvider(ABC):
 class SearchProvider(ABC):
     @abstractmethod
     async def search(self, query: str, **kwargs: Any) -> list[SearchResult]:
+        raise NotImplementedError
+
+
+class PlantDataProvider(ABC):
+    @abstractmethod
+    async def lookup(self, scientific_name: str, **kwargs: Any) -> PlantDataResult | None:
         raise NotImplementedError
 
 

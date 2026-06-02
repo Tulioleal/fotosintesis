@@ -55,3 +55,13 @@ class SearchResult(BaseModel):
     url: str
     snippet: str
     source_domain: str
+
+
+class PlantDataResult(ProviderResponse):
+    scientific_name: str
+    common_name: str | None = None
+    family: str | None = None
+    genus: str | None = None
+    rank: str | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
+    source_url: str
