@@ -7,7 +7,14 @@ from httpx import ASGITransport, AsyncClient
 from app.core.settings import get_settings
 from app.main import app
 from app.providers.factory import get_provider_registry
-from app.providers.openai import OpenAIJudgeProvider, OpenAIModelProvider, OpenAIVisionProvider
+from app.providers.openai import (
+    OpenAIEmbeddingProvider,
+    OpenAIJudgeProvider,
+    OpenAIModelProvider,
+    OpenAIProviderError,
+    OpenAISearchProvider,
+    OpenAIVisionProvider,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -29,10 +36,18 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> None:
         async def create(self, **kwargs: object) -> object:
             return types.SimpleNamespace(output_text='{"score": 1, "passed": true, "reasons": []}')
 
+    class FakeEmbeddings:
+        async def create(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(
+                data=[types.SimpleNamespace(index=0, embedding=[0.1, 0.2, 0.3])],
+                usage=types.SimpleNamespace(prompt_tokens=3, total_tokens=3),
+            )
+
     class FakeAsyncOpenAI:
         def __init__(self, *, api_key: str) -> None:
             self.api_key = api_key
             self.responses = FakeResponses()
+            self.embeddings = FakeEmbeddings()
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
 
@@ -162,13 +177,51 @@ def test_openai_judge_selection_does_not_change_runtime_generation_provider(
     assert providers.model.__class__.__name__ == "MockModelProvider"
 
 
+def test_openai_search_selection_does_not_change_other_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("SEARCH_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.search, OpenAISearchProvider)
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+    assert providers.vision.__class__.__name__ == "MockVisionPlantIdentificationProvider"
+    assert providers.judge.__class__.__name__ == "MockModelProvider"
+    assert providers.embeddings.__class__.__name__ == "MockEmbeddingProvider"
+
+
+def test_openai_embedding_selection_does_not_change_other_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.embeddings, OpenAIEmbeddingProvider)
+    assert providers.embeddings.model == "text-embedding-3-small"
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+    assert providers.vision.__class__.__name__ == "MockVisionPlantIdentificationProvider"
+    assert providers.judge.__class__.__name__ == "MockModelProvider"
+    assert providers.search.__class__.__name__ == "MockSearchProvider"
+
+
 def test_missing_openai_credentials_only_fail_selected_openai_roles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "openai")
     get_settings.cache_clear()
 
-    with pytest.raises(ValueError, match="OPENAI_API_KEY is required when model provider is openai"):
+    with pytest.raises(
+        ValueError, match="OPENAI_API_KEY is required when model provider is openai"
+    ):
         get_provider_registry()
 
     monkeypatch.setenv("MODEL_PROVIDER", "mock")
@@ -176,3 +229,223 @@ def test_missing_openai_credentials_only_fail_selected_openai_roles(
 
     providers = get_provider_registry()
     assert providers.model.__class__.__name__ == "MockModelProvider"
+
+
+def test_missing_openai_credentials_fail_for_selected_search_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEARCH_PROVIDER", "openai")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="OPENAI_API_KEY is required when search provider is openai"
+    ):
+        get_provider_registry()
+
+    monkeypatch.setenv("SEARCH_PROVIDER", "mock")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+    assert providers.search.__class__.__name__ == "MockSearchProvider"
+
+
+def test_missing_openai_credentials_fail_for_selected_embedding_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="OPENAI_API_KEY is required when embedding provider is openai"
+    ):
+        get_provider_registry()
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+    assert providers.embeddings.__class__.__name__ == "MockEmbeddingProvider"
+
+
+@pytest.mark.asyncio
+async def test_health_reports_openai_embedding_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["dependencies"]["embedding_provider"] == "OpenAIEmbeddingProvider"
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_map_response_in_input_order(
+    fake_openai_module: None,
+) -> None:
+    class FakeEmbeddings:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(
+                data=[
+                    types.SimpleNamespace(index=1, embedding=[2, 2.5]),
+                    types.SimpleNamespace(index=0, embedding=[1, 1.5]),
+                ],
+                usage=types.SimpleNamespace(prompt_tokens=7, total_tokens=9),
+            )
+
+    embeddings = FakeEmbeddings()
+    provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-3-small")
+    provider._client = types.SimpleNamespace(embeddings=embeddings)
+
+    result = await provider.create_embeddings(["first", "second"], dimensions=2)
+
+    assert embeddings.kwargs == {
+        "model": "text-embedding-3-small",
+        "input": ["first", "second"],
+        "dimensions": 2,
+    }
+    assert result.provider == "openai-embedding"
+    assert result.model == "text-embedding-3-small"
+    assert result.embeddings == [[1.0, 1.5], [2.0, 2.5]]
+    assert result.metadata == {"prompt_tokens": 7, "total_tokens": 9}
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_validate_mismatched_response_count(
+    fake_openai_module: None,
+) -> None:
+    class FakeEmbeddings:
+        async def create(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(data=[types.SimpleNamespace(index=0, embedding=[1.0])])
+
+    provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-3-small")
+    provider._client = types.SimpleNamespace(embeddings=FakeEmbeddings())
+
+    with pytest.raises(OpenAIProviderError, match="returned 1 items for 2 inputs"):
+        await provider.create_embeddings(["first", "second"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item,error",
+    [
+        (types.SimpleNamespace(index="0", embedding=[1.0]), "missing an integer index"),
+        (types.SimpleNamespace(index=0, embedding=[]), "missing an embedding vector"),
+        (types.SimpleNamespace(index=0, embedding=["secret"]), "contained non-numeric values"),
+    ],
+)
+async def test_openai_embeddings_validate_malformed_items(
+    fake_openai_module: None,
+    item: object,
+    error: str,
+) -> None:
+    class FakeEmbeddings:
+        async def create(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(data=[item])
+
+    provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-3-small")
+    provider._client = types.SimpleNamespace(embeddings=FakeEmbeddings())
+
+    with pytest.raises(OpenAIProviderError, match=error):
+        await provider.create_embeddings(["first"])
+
+
+@pytest.mark.asyncio
+async def test_openai_embedding_provider_call_logging_metadata_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: None,
+) -> None:
+    logged: dict[str, object] = {}
+
+    async def fake_log_provider_call(
+        provider: str,
+        operation: str,
+        call: object,
+        *,
+        role: str | None = None,
+    ) -> object:
+        logged.update({"provider": provider, "operation": operation, "role": role})
+        return await call()
+
+    class FakeEmbeddings:
+        async def create(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(data=[types.SimpleNamespace(index=0, embedding=[1.0])])
+
+    monkeypatch.setattr("app.providers.openai.log_provider_call", fake_log_provider_call)
+    provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-3-small")
+    provider._client = types.SimpleNamespace(embeddings=FakeEmbeddings())
+
+    await provider.create_embeddings(["first"])
+
+    assert logged == {
+        "provider": "openai-embedding",
+        "operation": "create_embeddings",
+        "role": "embeddings",
+    }
+    assert "test-key" not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_openai_search_parses_url_citation_annotations(
+    fake_openai_module: None,
+) -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            text = "Kew bear paw succulent profile. Invalid citation."
+            return types.SimpleNamespace(
+                output_text=text,
+                output=[
+                    types.SimpleNamespace(
+                        content=[
+                            types.SimpleNamespace(
+                                annotations=[
+                                    types.SimpleNamespace(
+                                        type="url_citation",
+                                        title="Kew Plants of the World Online",
+                                        url="https://powo.science.kew.org/taxon/example",
+                                        start_index=0,
+                                        end_index=32,
+                                    ),
+                                    {
+                                        "type": "url_citation",
+                                        "title": "No URL",
+                                        "url": "",
+                                    },
+                                ]
+                            )
+                        ]
+                    )
+                ],
+            )
+
+    responses = FakeResponses()
+    provider = OpenAISearchProvider(api_key="test-key", model="gpt-4.1-mini")
+    provider._client = types.SimpleNamespace(responses=responses)
+
+    results = await provider.search(
+        "Cotyledon tomentosa care",
+        allowed_domains=["powo.science.kew.org"],
+        temperature=0,
+    )
+
+    assert responses.kwargs is not None
+    assert responses.kwargs["model"] == "gpt-4.1-mini"
+    assert responses.kwargs["tools"] == [{"type": "web_search"}]
+    assert "powo.science.kew.org" in str(responses.kwargs["input"])
+    assert results[0].title == "Kew Plants of the World Online"
+    assert results[0].url == "https://powo.science.kew.org/taxon/example"
+    assert results[0].snippet == "Kew bear paw succulent profile."
+    assert results[0].source_domain == "powo.science.kew.org"
+    assert len(results) == 1

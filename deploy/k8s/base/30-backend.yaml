@@ -92,6 +92,21 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: OPENAI_JUDGE_MODEL
+            - name: OPENAI_SEARCH_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_SEARCH_MODEL
+            - name: OPENAI_EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_EMBEDDING_MODEL
+            - name: EMBEDDING_DIMENSION
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: EMBEDDING_DIMENSION
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:

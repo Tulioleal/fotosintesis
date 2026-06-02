@@ -71,9 +71,7 @@ class AppEmbeddingTransform:
                     parent.result = None
                     return nodes
 
-                result = await parent.embedding_provider.create_embeddings(
-                    texts, metadata=metadata
-                )
+                result = await parent.embedding_provider.create_embeddings(texts, metadata=metadata)
                 if len(result.embeddings) != len(embeddable_nodes):
                     raise ValueError("Embedding count must match LlamaIndex node count")
 
@@ -162,7 +160,9 @@ def build_llamaindex_metadata_filters(
         try:
             from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
         except ImportError as exc:
-            raise RuntimeError("Install llama-index-core to build LlamaIndex metadata filters") from exc
+            raise RuntimeError(
+                "Install llama-index-core to build LlamaIndex metadata filters"
+            ) from exc
         metadata_filter_cls = MetadataFilter
         metadata_filters_cls = MetadataFilters
 
@@ -179,7 +179,9 @@ def create_llamaindex_pgvector_store(settings: Settings | None = None):
     try:
         from llama_index.vector_stores.postgres import PGVectorStore
     except ImportError as exc:
-        raise RuntimeError("Install llama-index-vector-stores-postgres to use PGVectorStore") from exc
+        raise RuntimeError(
+            "Install llama-index-vector-stores-postgres to use PGVectorStore"
+        ) from exc
 
     config = get_pgvector_config(settings)
     return PGVectorStore.from_params(
@@ -191,6 +193,48 @@ def create_llamaindex_pgvector_store(settings: Settings | None = None):
         table_name=config.table_name,
         embed_dim=config.embed_dim,
     )
+
+
+def create_llamaindex_embed_model(settings: Settings | None = None):
+    try:
+        from llama_index.core.embeddings import BaseEmbedding
+    except ImportError as exc:
+        raise RuntimeError("Install llama-index-core to configure LlamaIndex embeddings") from exc
+
+    settings = settings or get_settings()
+    return PrecomputedEmbeddingOnly.from_base_embedding(BaseEmbedding, settings.embedding_dimension)
+
+
+class PrecomputedEmbeddingOnly:
+    error_message = (
+        "LlamaIndex must receive precomputed embeddings from the app EmbeddingProvider; "
+        "direct LlamaIndex embedding generation is disabled."
+    )
+
+    @staticmethod
+    def from_base_embedding(base_embedding_cls, embed_dim: int):
+        class _PrecomputedEmbeddingOnly(base_embedding_cls):
+            def __init__(self) -> None:
+                super().__init__(
+                    model_name=f"precomputed-app-embedding-{embed_dim}d", embed_batch_size=1
+                )
+
+            def _get_query_embedding(self, query: str) -> list[float]:
+                raise RuntimeError(PrecomputedEmbeddingOnly.error_message)
+
+            async def _aget_query_embedding(self, query: str) -> list[float]:
+                raise RuntimeError(PrecomputedEmbeddingOnly.error_message)
+
+            def _get_text_embedding(self, text: str) -> list[float]:
+                raise RuntimeError(PrecomputedEmbeddingOnly.error_message)
+
+            async def _aget_text_embedding(self, text: str) -> list[float]:
+                raise RuntimeError(PrecomputedEmbeddingOnly.error_message)
+
+            def _get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+                raise RuntimeError(PrecomputedEmbeddingOnly.error_message)
+
+        return _PrecomputedEmbeddingOnly()
 
 
 class LlamaIndexRuntime:
@@ -301,7 +345,8 @@ class LlamaIndexRuntime:
             nodes.append(node)
 
         index = VectorStoreIndex.from_vector_store(
-            vector_store=create_llamaindex_pgvector_store(self.settings)
+            vector_store=create_llamaindex_pgvector_store(self.settings),
+            embed_model=create_llamaindex_embed_model(self.settings),
         )
         index.insert_nodes(nodes)
 
@@ -320,7 +365,8 @@ class LlamaIndexRuntime:
             raise RuntimeError("Install llama-index-core to retrieve knowledge chunks") from exc
 
         index = VectorStoreIndex.from_vector_store(
-            vector_store=create_llamaindex_pgvector_store(self.settings)
+            vector_store=create_llamaindex_pgvector_store(self.settings),
+            embed_model=create_llamaindex_embed_model(self.settings),
         )
         retriever = index.as_retriever(
             similarity_top_k=limit,
@@ -427,7 +473,11 @@ def _llamaindex_chunk_metadata(
 def _retrieved_node_from_score_node(node) -> RetrievedNode:
     raw_node = getattr(node, "node", node)
     metadata = getattr(raw_node, "metadata", {}) or {}
-    raw_id = metadata.get("chunk_id") or getattr(raw_node, "node_id", None) or getattr(raw_node, "id_", None)
+    raw_id = (
+        metadata.get("chunk_id")
+        or getattr(raw_node, "node_id", None)
+        or getattr(raw_node, "id_", None)
+    )
     if raw_id is None:
         raise ValueError("LlamaIndex node is missing chunk_id metadata")
     return RetrievedNode(chunk_id=UUID(str(raw_id)), score=getattr(node, "score", None))

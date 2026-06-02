@@ -2,15 +2,24 @@ import base64
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from app.observability.provider_logging import log_provider_call
-from app.providers.interfaces import ImageAnalysisProvider, JudgeEvaluationProvider, ModelProvider
+from app.providers.interfaces import (
+    EmbeddingProvider,
+    ImageAnalysisProvider,
+    JudgeEvaluationProvider,
+    ModelProvider,
+    SearchProvider,
+)
 from app.providers.types import (
     ConfidenceLabel,
+    EmbeddingResult,
     ImageAnalysisResult,
     JudgeResult,
     JsonGenerationResult,
     PlantCandidate,
+    SearchResult,
     TextGenerationResult,
 )
 
@@ -165,6 +174,54 @@ class OpenAIVisionProvider(ImageAnalysisProvider):
         )
 
 
+class OpenAISearchProvider(SearchProvider):
+    provider_name = "openai-search"
+
+    def __init__(self, *, api_key: str, model: str) -> None:
+        self.model = model
+        self._client = _client(api_key)
+
+    async def search(self, query: str, **kwargs: Any) -> list[SearchResult]:
+        allowed_domains = kwargs.pop("allowed_domains", None)
+        model = kwargs.pop("model", self.model)
+        response = await _logged(
+            provider=self.provider_name,
+            role="search",
+            operation="search",
+            call=lambda: self._client.responses.create(
+                model=model,
+                input=_search_prompt(query, allowed_domains),
+                tools=[{"type": "web_search"}],
+                **kwargs,
+            ),
+        )
+        return _search_results_from_response(response)
+
+
+class OpenAIEmbeddingProvider(EmbeddingProvider):
+    provider_name = "openai-embedding"
+
+    def __init__(self, *, api_key: str, model: str) -> None:
+        self.model = model
+        self._client = _client(api_key)
+
+    async def create_embeddings(self, texts: list[str], **kwargs: Any) -> EmbeddingResult:
+        model = kwargs.pop("model", self.model)
+        response = await _logged(
+            provider=self.provider_name,
+            role="embeddings",
+            operation="create_embeddings",
+            call=lambda: self._client.embeddings.create(model=model, input=texts, **kwargs),
+        )
+        embeddings = _embeddings_from_response(response, expected_count=len(texts))
+        return EmbeddingResult(
+            provider=self.provider_name,
+            model=model,
+            embeddings=embeddings,
+            metadata=_embedding_metadata(response),
+        )
+
+
 class OpenAIJudgeProvider(JudgeEvaluationProvider):
     provider_name = "openai-judge"
 
@@ -220,11 +277,133 @@ def _vision_prompt(prompt: str | None) -> str:
     return (
         f"{base_prompt}\n"
         "Return only valid JSON with this structure: "
-        "{\"description\": string, \"candidates\": ["
-        "{\"scientific_name\": string, \"common_name\": string | null, "
-        "\"confidence_label\": \"high\" | \"medium\" | \"low\" | \"inconclusive\", "
-        "\"confidence_score\": number | null, \"visible_traits\": string[]}]}"
+        '{"description": string, "candidates": ['
+        '{"scientific_name": string, "common_name": string | null, '
+        '"confidence_label": "high" | "medium" | "low" | "inconclusive", '
+        '"confidence_score": number | null, "visible_traits": string[]}]}'
     )
+
+
+def _search_prompt(query: str, allowed_domains: Any) -> str:
+    prompt = (
+        "Search the web for reliable botanical care or taxonomy sources. "
+        "Prefer primary, institutional, or persistent reference pages. "
+        f"Query: {query}"
+    )
+    domains = _string_list(allowed_domains)
+    if domains:
+        prompt += "\nPrefer results from these allowed domains: " + ", ".join(domains)
+    return prompt
+
+
+def _search_results_from_response(response: Any) -> list[SearchResult]:
+    text = getattr(response, "output_text", "")
+    if not isinstance(text, str):
+        text = ""
+    results: list[SearchResult] = []
+    seen_urls: set[str] = set()
+    for annotation in _response_annotations(response):
+        if _annotation_value(annotation, "type") != "url_citation":
+            continue
+        url = str(_annotation_value(annotation, "url") or "").strip()
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = str(_annotation_value(annotation, "title") or parsed.netloc).strip()
+        snippet = _citation_snippet(annotation, text) or title
+        results.append(
+            SearchResult(
+                title=title,
+                url=url,
+                snippet=snippet,
+                source_domain=parsed.netloc.lower(),
+            )
+        )
+    return results
+
+
+def _embeddings_from_response(response: Any, *, expected_count: int) -> list[list[float]]:
+    data = _iter_any(getattr(response, "data", None))
+    if len(data) != expected_count:
+        raise OpenAIProviderError(
+            f"OpenAI embedding response returned {len(data)} items for {expected_count} inputs"
+        )
+    ordered = sorted(data, key=lambda item: _embedding_index(item))
+    embeddings = [_embedding_vector(item) for item in ordered]
+    if sorted(_embedding_index(item) for item in ordered) != list(range(expected_count)):
+        raise OpenAIProviderError("OpenAI embedding response indexes did not match input order")
+    return embeddings
+
+
+def _embedding_index(item: Any) -> int:
+    index = _value(item, "index")
+    if not isinstance(index, int):
+        raise OpenAIProviderError("OpenAI embedding response item was missing an integer index")
+    return index
+
+
+def _embedding_vector(item: Any) -> list[float]:
+    embedding = _value(item, "embedding")
+    if not isinstance(embedding, list) or not embedding:
+        raise OpenAIProviderError("OpenAI embedding response item was missing an embedding vector")
+    if not all(isinstance(value, int | float) for value in embedding):
+        raise OpenAIProviderError("OpenAI embedding response vector contained non-numeric values")
+    return [float(value) for value in embedding]
+
+
+def _embedding_metadata(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    total_tokens = _value(usage, "total_tokens") if usage is not None else None
+    prompt_tokens = _value(usage, "prompt_tokens") if usage is not None else None
+    return {
+        key: value
+        for key, value in {
+            "total_tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+        }.items()
+        if isinstance(value, int)
+    }
+
+
+def _response_annotations(response: Any) -> list[Any]:
+    annotations: list[Any] = []
+    for output in _iter_any(getattr(response, "output", None)):
+        for content in _iter_any(_value(output, "content")):
+            annotations.extend(_iter_any(_value(content, "annotations")))
+    return annotations
+
+
+def _citation_snippet(annotation: Any, text: str) -> str:
+    start = _annotation_value(annotation, "start_index")
+    end = _annotation_value(annotation, "end_index")
+    if isinstance(start, int) and isinstance(end, int) and 0 <= start < end <= len(text):
+        return text[start:end].strip()
+    return text.strip()
+
+
+def _annotation_value(annotation: Any, key: str) -> Any:
+    return _value(annotation, key)
+
+
+def _value(value: Any, key: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _iter_any(value: Any) -> list[Any]:
+    if isinstance(value, list | tuple):
+        return list(value)
+    return []
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list | tuple | set):
+        return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 _VISION_PROMPT = """

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 from uuid import UUID
 
-from app.assistant.tools import AssistantTools, ToolResult
+from app.assistant.tools import AssistantTools
+from app.knowledge.page_evidence import TrustedPageEvidence
 from app.knowledge.schemas import AcquisitionStatus, KnowledgeAcquisitionResult, KnowledgeChunk
+from app.providers.types import SearchResult
 
 BOTANICAL_TERMS = {
     "agua",
@@ -54,6 +56,7 @@ class AssistantState(TypedDict, total=False):
     out_of_domain: bool
     unsafe: bool
     retrieval: KnowledgeAcquisitionResult | None
+    web_results: list[TrustedPageEvidence]
     sufficient: bool
     sources: list[dict]
     answer: str
@@ -83,8 +86,18 @@ class AssistantGraph:
         unsafe = any(pattern in message for pattern in INJECTION_PATTERNS)
         reminder = any(word in message for word in ("recordatorio", "recordame", "reminder"))
         light = "luz" in message or "light" in message
-        botanical = any(term in message for term in BOTANICAL_TERMS) or bool(state.get("plant_hint"))
-        intent = "reminder" if reminder else "light" if light else "botanical" if botanical else "out_of_domain"
+        botanical = any(term in message for term in BOTANICAL_TERMS) or bool(
+            state.get("plant_hint")
+        )
+        intent = (
+            "reminder"
+            if reminder
+            else "light"
+            if light
+            else "botanical"
+            if botanical
+            else "out_of_domain"
+        )
         return {
             "intent": intent,
             "topic": _topic_for_message(message),
@@ -95,7 +108,11 @@ class AssistantGraph:
     async def load_user_context(self, state: AssistantState) -> dict:
         result = await self.tools.garden_lookup(user_id=state["user_id"])
         if not result.ok:
-            return {"tool_failures": state.get("tool_failures", []) + [result.error or "garden_lookup failed"], "garden": []}
+            return {
+                "tool_failures": state.get("tool_failures", [])
+                + [result.error or "garden_lookup failed"],
+                "garden": [],
+            }
         garden = list(result.data or [])
         selected, ambiguous = _select_plant(garden, state.get("plant_hint"), state["message"])
         return {"garden": garden, "selected_plant": selected, "ambiguous": ambiguous}
@@ -112,7 +129,10 @@ class AssistantGraph:
             topic=state.get("topic") or "care",
         )
         if not result.ok:
-            return {"tool_failures": state.get("tool_failures", []) + [result.error or "knowledge_search failed"]}
+            return {
+                "tool_failures": state.get("tool_failures", [])
+                + [result.error or "knowledge_search failed"]
+            }
         retrieval = result.data
         return {"retrieval": retrieval, "sources": _sources_from_retrieval(retrieval)}
 
@@ -122,21 +142,49 @@ class AssistantGraph:
         sufficient = bool(chunks) and max((chunk.confidence for chunk in chunks), default=0) >= 0.5
         return {"sufficient": sufficient}
 
+    async def fallback_web_search(self, state: AssistantState) -> dict:
+        selected = state.get("selected_plant")
+        scientific_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        if not scientific_name:
+            return {}
+        topic = state.get("topic") or "care"
+        query = f"{scientific_name} {topic} botanical care trusted source"
+        result = await self.tools.trusted_web_search(query)
+        if not result.ok:
+            return {
+                "tool_failures": state.get("tool_failures", [])
+                + [result.error or "trusted_web_search failed"]
+            }
+        web_results = _usable_web_results(result.data)
+        if not web_results:
+            return {}
+        return {
+            "web_results": web_results,
+            "sources": state.get("sources", []) + _sources_from_web_results(web_results),
+        }
+
     async def handle_action(self, state: AssistantState) -> dict:
         if state.get("unsafe") or state.get("out_of_domain") or state.get("ambiguous"):
             return {}
         if state.get("intent") == "light":
             selected = state.get("selected_plant")
             if not selected or selected.get("id") is None:
-                return {"answer": "Necesito que indiques una planta guardada de tu jardin para consultar su medicion de luz."}
+                return {
+                    "answer": "Necesito que indiques una planta guardada de tu jardin para consultar su medicion de luz."
+                }
             result = await self.tools.light_measurement_lookup(
                 user_id=state["user_id"],
                 garden_plant_id=selected.get("id"),
             )
             if not result.ok:
-                return {"tool_failures": state.get("tool_failures", []) + [result.error or "light lookup failed"]}
+                return {
+                    "tool_failures": state.get("tool_failures", [])
+                    + [result.error or "light lookup failed"]
+                }
             if not result.data:
-                return {"answer": "No encontre mediciones de luz guardadas para esa planta. Podes medir luz desde la seccion Luz."}
+                return {
+                    "answer": "No encontre mediciones de luz guardadas para esa planta. Podes medir luz desde la seccion Luz."
+                }
         if state.get("intent") == "reminder":
             return await self._handle_reminder(state)
         return {}
@@ -184,22 +232,41 @@ class AssistantGraph:
         )
         if not result.ok:
             return {
-                "tool_failures": state.get("tool_failures", []) + [result.error or "reminder_create failed"],
+                "tool_failures": state.get("tool_failures", [])
+                + [result.error or "reminder_create failed"],
                 "answer": "No pude crear el recordatorio. La accion no fue completada.",
             }
         return {"answer": f"Listo: cree el recordatorio para {selected['scientific_name']}."}
 
     async def clarify(self, state: AssistantState) -> dict:
         if state.get("unsafe"):
-            return {"answer": "No puedo seguir instrucciones que intenten cambiar mis reglas o activar herramientas sin permiso."}
+            return {
+                "answer": "No puedo seguir instrucciones que intenten cambiar mis reglas o activar herramientas sin permiso."
+            }
         if state.get("out_of_domain"):
-            return {"answer": "Puedo ayudarte con cuidado de plantas, identificacion, luz, recordatorios y tu jardin. Reformula la pregunta dentro de ese tema."}
+            return {
+                "answer": "Puedo ayudarte con cuidado de plantas, identificacion, luz, recordatorios y tu jardin. Reformula la pregunta dentro de ese tema."
+            }
         if state.get("ambiguous"):
             names = ", ".join(_display_plant(plant) for plant in state.get("garden", [])[:5])
             return {"answer": f"¿Sobre cual planta queres consultar? En tu jardin veo: {names}."}
         if not state.get("selected_plant") and not state.get("plant_hint"):
-            return {"answer": "Necesito saber de que planta hablamos. Indica el nombre o elegi una planta de tu jardin."}
-        return {"answer": "No tengo evidencia suficiente para responder con seguridad. Puedo intentar buscar fuentes confiables o pedir mas detalles."}
+            return {
+                "answer": "Necesito saber de que planta hablamos. Indica el nombre o elegi una planta de tu jardin."
+            }
+        retrieval = state.get("retrieval")
+        limitations = list(getattr(retrieval, "limitations", []) if retrieval else [])
+        if limitations:
+            manual_url = getattr(retrieval, "manual_search_url", None)
+            answer = "No encontre evidencia suficiente en la base de conocimiento. " + " ".join(
+                limitations
+            )
+            if manual_url:
+                answer += f" Podes intentar una busqueda manual aca: {manual_url}."
+            return {"answer": answer}
+        return {
+            "answer": "No tengo evidencia suficiente para responder con seguridad. Puedo intentar buscar fuentes confiables o pedir mas detalles."
+        }
 
     async def generate_answer(self, state: AssistantState) -> dict:
         if state.get("answer"):
@@ -207,6 +274,10 @@ class AssistantGraph:
         retrieval = state.get("retrieval")
         chunks = getattr(retrieval, "chunks", []) if retrieval else []
         limitations = list(getattr(retrieval, "limitations", []) if retrieval else [])
+        if not state.get("sufficient"):
+            web_results = state.get("web_results", [])
+            if web_results:
+                return await self._generate_web_answer(state, web_results)
         if not chunks:
             return await self.clarify(state)
         evidence = " ".join(_shorten(chunk.content, 280) for chunk in chunks[:3])
@@ -221,13 +292,41 @@ class AssistantGraph:
         )
         return {"answer": answer}
 
+    async def _generate_web_answer(
+        self, state: AssistantState, web_results: list[TrustedPageEvidence]
+    ) -> dict:
+        selected = state.get("selected_plant")
+        plant_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        topic = state.get("topic") or "care"
+        evidence = " ".join(_shorten(result.evidence_text, 500) for result in web_results[:3])
+        citations = ", ".join(result.result.url for result in web_results[:3])
+        answer = (
+            f"Para {plant_name}, encontre evidencia web en vivo sobre {topic}: {evidence} "
+            "Esta evidencia viene de resultados web recientes y todavia no fue revisada como conocimiento persistido. "
+            f"Fuentes: {citations}."
+        )
+        ingestion = await self.tools.ingest_web_evidence(
+            scientific_name=str(plant_name),
+            topic=topic,
+            results=web_results,
+        )
+        if not ingestion.ok:
+            return {
+                "answer": answer,
+                "tool_failures": state.get("tool_failures", [])
+                + [ingestion.error or "ingest_web_evidence failed"],
+            }
+        return {"answer": answer}
+
     async def failure(self, state: AssistantState) -> dict:
         failures = state.get("tool_failures", [])
         if not failures:
             return {}
         if state.get("answer"):
             return {}
-        return {"answer": "No pude completar la accion solicitada porque fallo una herramienta. No se realizo ningun cambio."}
+        return {
+            "answer": "No pude completar la accion solicitada porque fallo una herramienta. No se realizo ningun cambio."
+        }
 
 
 def _compile_graph(owner: AssistantGraph):
@@ -241,17 +340,33 @@ def _compile_graph(owner: AssistantGraph):
     graph.add_node("load_user_context", owner.load_user_context)
     graph.add_node("retrieve", owner.retrieve)
     graph.add_node("evaluate_sufficiency", owner.evaluate_sufficiency)
+    graph.add_node("fallback_web_search", owner.fallback_web_search)
     graph.add_node("handle_action", owner.handle_action)
     graph.add_node("generate_answer", owner.generate_answer)
     graph.add_node("clarify", owner.clarify)
     graph.add_node("failure", owner.failure)
     graph.add_edge(START, "classify_intent")
     graph.add_edge("classify_intent", "load_user_context")
-    graph.add_conditional_edges("load_user_context", _route_after_context, {"clarify": "clarify", "retrieve": "retrieve", "action": "handle_action"})
+    graph.add_conditional_edges(
+        "load_user_context",
+        _route_after_context,
+        {"clarify": "clarify", "retrieve": "retrieve", "action": "handle_action"},
+    )
     graph.add_edge("retrieve", "evaluate_sufficiency")
-    graph.add_conditional_edges("evaluate_sufficiency", _route_after_sufficiency, {"answer": "generate_answer", "clarify": "clarify"})
+    graph.add_conditional_edges(
+        "evaluate_sufficiency",
+        _route_after_sufficiency,
+        {"answer": "generate_answer", "fallback": "fallback_web_search"},
+    )
+    graph.add_conditional_edges(
+        "fallback_web_search",
+        _route_after_web_fallback,
+        {"answer": "generate_answer", "clarify": "clarify"},
+    )
     graph.add_edge("handle_action", "failure")
-    graph.add_conditional_edges("failure", _route_after_failure, {"answer": "generate_answer", "end": END})
+    graph.add_conditional_edges(
+        "failure", _route_after_failure, {"answer": "generate_answer", "end": END}
+    )
     graph.add_edge("generate_answer", END)
     graph.add_edge("clarify", END)
     return graph.compile()
@@ -276,9 +391,11 @@ class _SequentialGraph:
         else:
             state.update(await self.owner.retrieve(state))
             state.update(await self.owner.evaluate_sufficiency(state))
-            if _route_after_sufficiency(state) == "clarify":
-                state.update(await self.owner.clarify(state))
-                return state
+            if _route_after_sufficiency(state) == "fallback":
+                state.update(await self.owner.fallback_web_search(state))
+                if _route_after_web_fallback(state) == "clarify":
+                    state.update(await self.owner.clarify(state))
+                    return state
         state.update(await self.owner.generate_answer(state))
         return state
 
@@ -291,22 +408,32 @@ def _route_after_context(state: AssistantState) -> Literal["clarify", "retrieve"
     return "retrieve"
 
 
-def _route_after_sufficiency(state: AssistantState) -> Literal["answer", "clarify"]:
-    return "answer" if state.get("sufficient") else "clarify"
+def _route_after_sufficiency(state: AssistantState) -> Literal["answer", "fallback"]:
+    return "answer" if state.get("sufficient") else "fallback"
+
+
+def _route_after_web_fallback(state: AssistantState) -> Literal["answer", "clarify"]:
+    return "answer" if state.get("web_results") else "clarify"
 
 
 def _route_after_failure(state: AssistantState) -> Literal["answer", "end"]:
     return "end" if state.get("answer") else "answer"
 
 
-def _select_plant(garden: list[dict], plant_hint: str | None, message: str) -> tuple[dict | None, bool]:
+def _select_plant(
+    garden: list[dict], plant_hint: str | None, message: str
+) -> tuple[dict | None, bool]:
     haystack = f"{plant_hint or ''} {message}".casefold()
     matches = [
         plant
         for plant in garden
         if any(
             value and str(value).casefold() in haystack
-            for value in (plant.get("nickname"), plant.get("scientific_name"), plant.get("common_name"))
+            for value in (
+                plant.get("nickname"),
+                plant.get("scientific_name"),
+                plant.get("common_name"),
+            )
         )
     ]
     if len(matches) == 1:
@@ -315,7 +442,9 @@ def _select_plant(garden: list[dict], plant_hint: str | None, message: str) -> t
         return None, True
     if plant_hint:
         return {"scientific_name": plant_hint, "id": None}, False
-    references_plant = any(word in message.casefold() for word in ("mi planta", "esta planta", "esa planta"))
+    references_plant = any(
+        word in message.casefold() for word in ("mi planta", "esta planta", "esa planta")
+    )
     return (garden[0], False) if len(garden) == 1 else (None, references_plant and len(garden) > 1)
 
 
@@ -346,6 +475,38 @@ def _sources_from_retrieval(retrieval: object) -> list[dict]:
             }
         )
     return sources
+
+
+def _sources_from_web_results(results: list[TrustedPageEvidence]) -> list[dict]:
+    sources = []
+    seen = set()
+    for evidence in results:
+        result = evidence.result
+        if result.url in seen:
+            continue
+        seen.add(result.url)
+        sources.append(
+            {
+                "title": result.title,
+                "url": result.url,
+                "domain": result.source_domain,
+                "confidence": None,
+                "evidence_type": "live_web",
+            }
+        )
+    return sources
+
+
+def _usable_web_results(data: object) -> list[TrustedPageEvidence]:
+    if not isinstance(data, list):
+        return []
+    results: list[TrustedPageEvidence] = []
+    for item in data:
+        if isinstance(item, TrustedPageEvidence) and item.result.url and item.evidence_text:
+            results.append(item)
+        elif isinstance(item, SearchResult) and item.url and item.snippet:
+            results.append(TrustedPageEvidence(result=item))
+    return results
 
 
 def _extract_due_at(message: str) -> datetime | None:

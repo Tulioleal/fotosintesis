@@ -102,9 +102,16 @@ EMBEDDING_PROVIDER=mock
 OPENAI_TEXT_MODEL=gpt-5.4
 OPENAI_VISION_MODEL=gpt-5.4
 OPENAI_JUDGE_MODEL=gpt-5.4
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSION=8
 RUNTIME_SECRET_NAME=fotosintesis-runtime
 EOF
 ```
+
+For OpenAI embeddings, set `EMBEDDING_PROVIDER=openai`, provide `OPENAI_API_KEY`, choose
+`OPENAI_EMBEDDING_MODEL`, and set `EMBEDDING_DIMENSION` to the selected model's vector size
+and the existing pgvector table dimension. Changing dimensions requires rebuilding or migrating
+stored vectors before rollout.
 
 These values map to OpenTofu outputs:
 

@@ -14,7 +14,13 @@ from app.providers.mocks import (
     MockSearchProvider,
     MockVisionPlantIdentificationProvider,
 )
-from app.providers.openai import OpenAIJudgeProvider, OpenAIModelProvider, OpenAIVisionProvider
+from app.providers.openai import (
+    OpenAIEmbeddingProvider,
+    OpenAIJudgeProvider,
+    OpenAIModelProvider,
+    OpenAISearchProvider,
+    OpenAIVisionProvider,
+)
 
 
 @dataclass(frozen=True)
@@ -33,8 +39,8 @@ def get_provider_registry() -> ProviderRegistry:
         model=_build_model_provider(settings.model_provider, settings),
         vision=_build_vision_provider(settings.vision_provider, settings),
         judge=_build_judge_provider(settings.judge_provider, settings),
-        search=_build_search_provider(settings.search_provider),
-        embeddings=_build_embedding_provider(settings.embedding_provider),
+        search=_build_search_provider(settings.search_provider, settings),
+        embeddings=_build_embedding_provider(settings.embedding_provider, settings),
     )
 
 
@@ -84,15 +90,25 @@ def _build_judge_provider(provider: str, settings: object) -> JudgeEvaluationPro
     raise ValueError(f"Unsupported judge provider: {provider}")
 
 
-def _build_search_provider(provider: str) -> SearchProvider:
+def _build_search_provider(provider: str, settings: object) -> SearchProvider:
     match _normalize_provider(provider):
         case "mock":
             return MockSearchProvider()
+        case "openai":
+            return OpenAISearchProvider(
+                api_key=_require_openai_api_key(settings.openai_api_key, role="search"),
+                model=settings.openai_search_model,
+            )
     raise ValueError(f"Unsupported search provider: {provider}")
 
 
-def _build_embedding_provider(provider: str) -> EmbeddingProvider:
+def _build_embedding_provider(provider: str, settings: object) -> EmbeddingProvider:
     match _normalize_provider(provider):
         case "mock":
             return MockEmbeddingProvider()
+        case "openai":
+            return OpenAIEmbeddingProvider(
+                api_key=_require_openai_api_key(settings.openai_api_key, role="embedding"),
+                model=settings.openai_embedding_model,
+            )
     raise ValueError(f"Unsupported embedding provider: {provider}")

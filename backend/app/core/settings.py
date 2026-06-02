@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     openai_text_model: str = "gpt-5.4"
     openai_vision_model: str = "gpt-5.4"
     openai_judge_model: str = "gpt-5.4"
+    openai_search_model: str = "gpt-5.4"
+    openai_embedding_model: str = "text-embedding-3-small"
     log_level: str = "INFO"
     tracing_enabled: bool = True
     session_cookie_name: str = "fotosintesis_session"
@@ -34,12 +36,16 @@ class Settings(BaseSettings):
     knowledge_vector_table: str = "knowledge_embeddings"
     embedding_dimension: int = 8
     trusted_source_domains: list[str] = [
-        "gbif.org",
-        "powo.science.kew.org",
-        "worldfloraonline.org",
-        "tropicos.org",
-        "eol.org",
-        "example.org",
+        "www.rhs.org.uk",
+        "gardeningsolutions.ifas.ufl.edu",
+        "extension.umd.edu",
+        "yardandgarden.extension.iastate.edu",
+        "extension.oregonstate.edu",
+        "fieldreport.caes.uga.edu",
+        "hgic.clemson.edu",
+        "extension.msstate.edu",
+        "thespruce.com",
+        "gardens.si.edu"
     ]
 
 
