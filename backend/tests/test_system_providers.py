@@ -107,6 +107,236 @@ async def test_mock_provider_registry_returns_deterministic_local_providers() ->
     assert perenual.provider == "mock-perenual"
 
 
+@pytest.mark.asyncio
+async def test_real_trefle_provider_fetches_detail_after_exact_search_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        calls.append(url)
+        if "/plants/search" in url:
+            return {
+                "data": [
+                    {
+                        "scientific_name": "Cotyledon tomentosa",
+                        "slug": "cotyledon-tomentosa",
+                        "links": {"self": "/api/v1/species/cotyledon-tomentosa"},
+                    }
+                ]
+            }
+        return {
+            "data": {
+                "scientific_name": "Cotyledon tomentosa",
+                "common_name": "Bear paw succulent",
+                "family": "Crassulaceae",
+                "genus": "Cotyledon",
+                "rank": "species",
+                "growth": {"description": "Compact succulent growth."},
+                "links": {"self": "/api/v1/species/cotyledon-tomentosa"},
+            }
+        }
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await TreflePlantDataProvider(api_key="test-token").lookup("Cotyledon tomentosa")
+
+    assert result is not None
+    assert calls[0].startswith("https://trefle.io/api/v1/plants/search?")
+    assert "/api/v1/species/cotyledon-tomentosa?token=test-token" in calls[1]
+    assert result.source_url == "https://trefle.io/api/v1/species/cotyledon-tomentosa"
+    assert result.fields["description"] == "Compact succulent growth."
+
+
+@pytest.mark.asyncio
+async def test_real_trefle_provider_uses_slug_match_before_normalized_name_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        if "/plants/search" in url:
+            return {
+                "data": [
+                    {
+                        "scientific_name": "Other species",
+                        "slug": "other-species",
+                        "synonyms": ["Cotyledon tomentosa"],
+                    },
+                    {
+                        "scientific_name": "Cotyledon tomentosa Harv.",
+                        "slug": "cotyledon-tomentosa",
+                    },
+                ]
+            }
+        assert "/api/v1/species/cotyledon-tomentosa" in url
+        return {
+            "data": {
+                "scientific_name": "Cotyledon tomentosa Harv.",
+                "family": "Crassulaceae",
+                "links": {"self": "/api/v1/species/cotyledon-tomentosa"},
+            }
+        }
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await TreflePlantDataProvider(api_key="test-token").lookup("Cotyledon tomentosa")
+
+    assert result is not None
+    assert result.scientific_name == "Cotyledon tomentosa Harv."
+
+
+@pytest.mark.asyncio
+async def test_real_trefle_provider_uses_normalized_synonym_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        if "/plants/search" in url:
+            return {
+                "data": [
+                    {
+                        "scientific_name": "Cotyledon ladismithiensis",
+                        "slug": "cotyledon-ladismithiensis",
+                        "synonyms": ["Cotyledon tomentosa"],
+                    }
+                ]
+            }
+        return {
+            "data": {
+                "scientific_name": "Cotyledon ladismithiensis",
+                "links": {"self": "/api/v1/species/cotyledon-ladismithiensis"},
+            }
+        }
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await TreflePlantDataProvider(api_key="test-token").lookup("Cotyledon tomentosa")
+
+    assert result is not None
+    assert result.scientific_name == "Cotyledon ladismithiensis"
+
+
+@pytest.mark.asyncio
+async def test_real_trefle_provider_returns_none_when_search_has_no_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        calls.append(url)
+        return {"data": [{"scientific_name": "Cocos nucifera", "slug": "cocos-nucifera"}]}
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await TreflePlantDataProvider(api_key="test-token").lookup("Cotyledon tomentosa")
+
+    assert result is None
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_perenual_provider_searches_binomial_but_prefers_full_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        calls.append(url)
+        if "/species-list" in url:
+            return {
+                "data": [
+                    {
+                        "id": 1,
+                        "common_name": "Bear paw",
+                        "scientific_name": ["Cotyledon tomentosa"],
+                        "genus": "Cotyledon",
+                    },
+                    {
+                        "id": 2,
+                        "common_name": "Bear paw subspecies",
+                        "scientific_name": ["Cotyledon tomentosa ladismithiensis"],
+                        "genus": "Cotyledon",
+                    },
+                ]
+            }
+        assert "/species/details/2?" in url
+        return {
+            "id": 2,
+            "common_name": "Bear paw subspecies",
+            "scientific_name": ["Cotyledon tomentosa ladismithiensis"],
+            "family": "Crassulaceae",
+            "genus": "Cotyledon",
+            "watering": "Minimum",
+            "sunlight": ["full sun"],
+            "soil": ["Well-drained"],
+        }
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await PerenualPlantDataProvider(api_key="test-key").lookup(
+        "Cotyledon tomentosa ladismithiensis"
+    )
+
+    assert result is not None
+    assert calls[0].startswith("https://perenual.com/api/v2/species-list?")
+    assert "q=Cotyledon+tomentosa" in calls[0]
+    assert result.scientific_name == "Cotyledon tomentosa ladismithiensis"
+    assert result.family == "Crassulaceae"
+    assert result.fields["watering"] == "Minimum"
+
+
+@pytest.mark.asyncio
+async def test_real_perenual_provider_handles_scientific_name_list_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        if "/species-list" in url:
+            return {
+                "data": [
+                    {
+                        "id": 1,
+                        "scientific_name": ["Abies alba"],
+                        "other_name": ["Common Silver Fir"],
+                    },
+                    {
+                        "id": 2,
+                        "scientific_name": ["Abies alba 'Pyramidalis'"],
+                    },
+                ]
+            }
+        assert "/species/details/1?" in url
+        return {
+            "id": 1,
+            "common_name": "European Silver Fir",
+            "scientific_name": ["Abies alba"],
+            "watering": "Frequent",
+        }
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await PerenualPlantDataProvider(api_key="test-key").lookup("Abies alba")
+
+    assert result is not None
+    assert result.scientific_name == "Abies alba"
+    assert result.common_name == "European Silver Fir"
+
+
+@pytest.mark.asyncio
+async def test_real_perenual_provider_returns_none_when_search_has_no_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_fetch_json(url: str) -> dict[str, object]:
+        calls.append(url)
+        return {"data": [{"id": 1, "scientific_name": ["Cocos nucifera"]}]}
+
+    monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
+
+    result = await PerenualPlantDataProvider(api_key="test-key").lookup("Cotyledon tomentosa")
+
+    assert result is None
+    assert len(calls) == 1
+
+
 def test_real_trefle_provider_requires_only_trefle_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
