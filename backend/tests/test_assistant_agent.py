@@ -30,6 +30,8 @@ class FakeTools:
         fail_ingestion: bool = False,
         plant_data: StructuredPlantEvidence | None = None,
         plant_data_ingestion_error: str | None = None,
+        model_response: str = "Respuesta sintetizada por modelo.",
+        fail_model: bool = False,
     ) -> None:
         self.fail_reminder = fail_reminder
         self.degraded_knowledge = degraded_knowledge
@@ -45,6 +47,10 @@ class FakeTools:
         self.plant_data = plant_data
         self.plant_data_ingestion_error = plant_data_ingestion_error
         self.plant_data_calls = 0
+        self.model_response = model_response
+        self.fail_model = fail_model
+        self.model_calls = 0
+        self.model_prompts: list[str] = []
         self.call_order: list[str] = []
 
     async def garden_lookup(self, *, user_id: UUID) -> ToolResult:
@@ -118,6 +124,13 @@ class FakeTools:
             return ToolResult(ok=False, error="trusted_web_search failed: unavailable")
         return ToolResult(ok=True, data=self.web_results)
 
+    async def generate_text(self, prompt: str) -> ToolResult:
+        self.model_calls += 1
+        self.model_prompts.append(prompt)
+        if self.fail_model:
+            return ToolResult(ok=False, error="model_generate_text failed: unavailable")
+        return ToolResult(ok=True, data=self.model_response)
+
     async def ingest_web_evidence(self, **kwargs) -> ToolResult:
         self.ingestion_calls += 1
         self.ingestion_kwargs = kwargs
@@ -172,9 +185,28 @@ async def test_assistant_answers_botanical_questions_with_sources() -> None:
         plant_hint=None,
     )
 
-    assert "evidencia recuperada" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.model_calls == 1
+    assert "Tipo de evidencia: rag" in tools.model_prompts[0]
+    assert "Requiere riego moderado" in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/source"
     assert tools.plant_data_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_falls_back_to_deterministic_answer_when_model_fails() -> None:
+    tools = FakeTools(fail_model=True)
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+    )
+
+    assert tools.model_calls == 1
+    assert "evidencia recuperada" in result["answer"]
+    assert "Requiere riego moderado" in result["answer"]
+    assert "model_generate_text failed" in result["tool_failures"][0]
+    assert result["sources"][0]["url"] == "https://example.org/source"
 
 
 @pytest.mark.asyncio
@@ -186,8 +218,9 @@ async def test_assistant_does_not_call_structured_or_web_when_rag_sufficient() -
         plant_hint=None,
     )
 
-    assert "evidencia recuperada" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.call_order == ["rag"]
+    assert tools.model_calls == 1
     assert tools.plant_data_calls == 0
     assert tools.web_search_calls == 0
 
@@ -203,8 +236,10 @@ async def test_assistant_uses_structured_lookup_before_trusted_web_search() -> N
 
     assert tools.call_order == ["rag", "plant_data"]
     assert tools.web_search_calls == 0
-    assert "datos estructurados" in result["answer"]
-    assert "mock-trefle" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.model_calls == 1
+    assert "Tipo de evidencia: structured_api" in tools.model_prompts[0]
+    assert "mock-trefle" in tools.model_prompts[0]
     assert result["sources"][0]["evidence_type"] == "structured_api"
 
 
@@ -229,7 +264,9 @@ async def test_assistant_uses_trusted_web_after_insufficient_structured_evidence
     )
 
     assert tools.call_order == ["rag", "plant_data", "web"]
-    assert "evidencia web en vivo" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.model_calls == 1
+    assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -245,7 +282,8 @@ async def test_assistant_records_structured_ingestion_failure_without_blocking_a
         plant_hint=None,
     )
 
-    assert "datos estructurados" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.model_calls == 1
     assert "pgvector unavailable" in result["tool_failures"][0]
 
 
@@ -299,9 +337,10 @@ async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     )
 
     assert tools.web_search_calls == 1
-    assert "evidencia web en vivo" in result["answer"]
-    assert "todavia no fue revisada" in result["answer"]
-    assert "Water when the substrate dries" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.model_calls == 1
+    assert "todavia no fue revisada" in tools.model_prompts[0]
+    assert "Water when the substrate dries" in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/watering"
     assert result["sources"][0]["evidence_type"] == "live_web"
     assert tools.ingestion_calls == 1
@@ -331,8 +370,9 @@ async def test_assistant_fallback_answer_uses_fetched_page_content() -> None:
         plant_hint=None,
     )
 
-    assert "water only after the substrate dries deeply" in result["answer"]
-    assert "Short search snippet" not in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert "water only after the substrate dries deeply" in tools.model_prompts[0]
+    assert "Short search snippet" not in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/watering"
     assert tools.ingestion_kwargs["results"][0].content.startswith("Full trusted page content")
 
@@ -359,8 +399,9 @@ async def test_assistant_fallback_answer_degrades_to_snippet_when_fetch_fails() 
         plant_hint=None,
     )
 
-    assert "Snippet says water moderately" in result["answer"]
-    assert "evidencia web en vivo" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert "Snippet says water moderately" in tools.model_prompts[0]
+    assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -399,8 +440,8 @@ async def test_assistant_records_ingestion_failure_without_blocking_web_answer()
     )
 
     assert tools.ingestion_calls == 1
-    assert "evidencia web en vivo" in result["answer"]
-    assert "Use a fast-draining substrate" in result["answer"]
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert "Use a fast-draining substrate" in tools.model_prompts[0]
     assert "ingest_web_evidence failed" in result["tool_failures"][0]
 
 
@@ -750,13 +791,15 @@ async def test_page_evidence_fetcher_returns_snippet_fallback_on_fetch_failure()
 
 @pytest.mark.asyncio
 async def test_assistant_asks_for_ambiguous_plant_reference() -> None:
-    result = await AssistantGraph(FakeTools()).run(
+    tools = FakeTools()
+    result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como cuido esta planta?",
         plant_hint=None,
     )
 
     assert "Sobre cual planta" in result["answer"]
+    assert tools.model_calls == 0
 
 
 @pytest.mark.asyncio
@@ -770,11 +813,13 @@ async def test_assistant_rejects_prompt_injection_before_tool_actions() -> None:
 
     assert "No puedo seguir instrucciones" in result["answer"]
     assert tools.created_reminders == 0
+    assert tools.model_calls == 0
 
 
 @pytest.mark.asyncio
 async def test_failed_tool_action_is_not_claimed_complete() -> None:
-    result = await AssistantGraph(FakeTools(fail_reminder=True)).run(
+    tools = FakeTools(fail_reminder=True)
+    result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Crea un recordatorio para Pata el 2026-06-01 10:30 regar semanal",
         plant_hint=None,
@@ -782,6 +827,7 @@ async def test_failed_tool_action_is_not_claimed_complete() -> None:
 
     assert "no fue completada" in result["answer"].lower()
     assert result["tool_failures"]
+    assert tools.model_calls == 0
 
 
 @pytest.mark.asyncio

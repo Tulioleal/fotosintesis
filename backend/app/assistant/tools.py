@@ -72,6 +72,13 @@ class AssistantTools:
         except Exception as exc:
             return ToolResult(ok=False, error=f"trusted_web_search failed: {exc}")
 
+    async def generate_text(self, prompt: str) -> ToolResult:
+        try:
+            result = await self.providers.model.generate_text(prompt)
+        except Exception as exc:
+            return ToolResult(ok=False, error=f"model_generate_text failed: {exc}")
+        return ToolResult(ok=True, data=result.text)
+
     async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:
         try:
             evidence = await PlantDataLookupService(
