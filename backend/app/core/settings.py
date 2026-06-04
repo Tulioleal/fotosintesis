@@ -49,7 +49,9 @@ class Settings(BaseSettings):
         "hgic.clemson.edu",
         "extension.msstate.edu",
         "thespruce.com",
-        "gardens.si.edu"
+        "gardens.si.edu",
+        "perenual.com",
+        "trefle.io"
     ]
 
 

@@ -188,6 +188,8 @@ async def test_assistant_answers_botanical_questions_with_sources() -> None:
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
     assert "Tipo de evidencia: rag" in tools.model_prompts[0]
+    assert "da primero una guia practica" in tools.model_prompts[0]
+    assert "Evita frases defensivas" in tools.model_prompts[0]
     assert "fuentes proveedoras estructuradas" not in tools.model_prompts[0]
     assert "Requiere riego moderado" in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/source"
@@ -204,7 +206,7 @@ async def test_assistant_falls_back_to_deterministic_answer_when_model_fails() -
     )
 
     assert tools.model_calls == 1
-    assert "evidencia recuperada" in result["answer"]
+    assert "guia practica" in result["answer"]
     assert "Requiere riego moderado" in result["answer"]
     assert "model_generate_text failed" in result["tool_failures"][0]
     assert result["sources"][0]["url"] == "https://example.org/source"
@@ -342,7 +344,7 @@ async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     assert tools.web_search_calls == 1
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
-    assert "todavia no fue revisada" in tools.model_prompts[0]
+    assert "aun no incorporadas al conocimiento persistido" in tools.model_prompts[0]
     assert "Water when the substrate dries" in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/watering"
     assert result["sources"][0]["evidence_type"] == "live_web"
