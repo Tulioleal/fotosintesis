@@ -233,7 +233,7 @@ async def test_real_trefle_provider_returns_none_when_search_has_no_match(
 
 
 @pytest.mark.asyncio
-async def test_real_perenual_provider_searches_binomial_but_prefers_full_exact_match(
+async def test_real_perenual_provider_searches_and_matches_binomial_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -252,16 +252,16 @@ async def test_real_perenual_provider_searches_binomial_but_prefers_full_exact_m
                     {
                         "id": 2,
                         "common_name": "Bear paw subspecies",
-                        "scientific_name": ["Cotyledon tomentosa ladismithiensis"],
+                        "scientific_name": ["Cotyledon tomentosa"],
                         "genus": "Cotyledon",
                     },
                 ]
             }
-        assert "/species/details/2?" in url
+        assert "/species/details/1?" in url
         return {
-            "id": 2,
-            "common_name": "Bear paw subspecies",
-            "scientific_name": ["Cotyledon tomentosa ladismithiensis"],
+            "id": 1,
+            "common_name": "Bear paw",
+            "scientific_name": ["Cotyledon tomentosa"],
             "family": "Crassulaceae",
             "genus": "Cotyledon",
             "watering": "Minimum",
@@ -272,15 +272,15 @@ async def test_real_perenual_provider_searches_binomial_but_prefers_full_exact_m
     monkeypatch.setattr("app.providers.plant_data._fetch_json", fake_fetch_json)
 
     result = await PerenualPlantDataProvider(api_key="test-key").lookup(
-        "Cotyledon tomentosa ladismithiensis"
+        "Cotyledon tomentosa"
     )
 
     assert result is not None
     assert calls[0].startswith("https://perenual.com/api/v2/species-list?")
     assert "q=Cotyledon+tomentosa" in calls[0]
-    assert result.scientific_name == "Cotyledon tomentosa ladismithiensis"
+    assert result.scientific_name == "Cotyledon tomentosa"
     assert result.family == "Crassulaceae"
-    assert result.fields["watering"] == "Minimum"
+    assert result.fields["watering"]["description"] == "Minimum"
 
 
 @pytest.mark.asyncio

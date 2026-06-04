@@ -6,11 +6,11 @@ Define provider abstraction and observability requirements for Fotosintesis AI, 
 
 ### Requirement: Provider interfaces
 
-The backend MUST depend on internal interfaces for text generation, JSON generation, image analysis, embeddings and judge evaluation instead of provider SDKs in domain logic.
+The backend MUST depend on internal interfaces for text generation, JSON generation, image analysis, search, embeddings and judge evaluation instead of provider SDKs in domain logic.
 
 #### Scenario: Provider replaced by configuration
 
-- **WHEN** the configured model, vision or embedding provider changes
+- **WHEN** the configured model, vision, search or embedding provider changes
 - **THEN** domain services continue to call the same internal interface without product-rule changes
 
 ### Requirement: Mock providers
@@ -68,9 +68,14 @@ The backend SHALL configure model generation, vision analysis, judge evaluation,
 - **WHEN** the judge provider is configured as OpenAI and the model provider remains configured as mock or another provider
 - **THEN** evaluation judging uses OpenAI and runtime assistant generation continues using the configured model provider
 
+#### Scenario: OpenAI search does not change other provider roles
+
+- **WHEN** the search provider is configured as OpenAI and model, vision, judge or embedding providers remain configured as mock or another provider
+- **THEN** acquisition search uses OpenAI and all other roles continue using their configured providers
+
 ### Requirement: OpenAI role providers
 
-The system SHALL provide OpenAI-backed implementations for model generation, vision analysis and judge evaluation through internal provider interfaces.
+The system SHALL provide OpenAI-backed implementations for model generation, vision analysis, search and judge evaluation through internal provider interfaces.
 
 #### Scenario: OpenAI model selected
 
@@ -87,10 +92,48 @@ The system SHALL provide OpenAI-backed implementations for model generation, vis
 - **WHEN** the configured judge provider is OpenAI and valid OpenAI credentials and model settings are present
 - **THEN** evaluation judge calls return internal judge result objects with score, pass status and reasons populated from OpenAI responses
 
+#### Scenario: OpenAI search selected
+
+- **WHEN** the configured search provider is OpenAI and valid OpenAI credentials and search model settings are present
+- **THEN** search calls return internal search result objects populated from OpenAI web search citations
+
 #### Scenario: OpenAI role missing credentials
 
 - **WHEN** a provider role is configured as OpenAI without required OpenAI credentials
 - **THEN** provider construction or startup fails with a clear configuration error for that selected role without requiring credentials for unselected roles
+
+### Requirement: OpenAI embeddings provider
+
+The backend SHALL provide an OpenAI-backed implementation for embeddings through the existing internal embedding provider interface.
+
+#### Scenario: OpenAI embeddings selected
+
+- **WHEN** the configured embedding provider is OpenAI and valid OpenAI credentials and embedding model settings are present
+- **THEN** embedding calls return internal embedding result objects populated from OpenAI embedding responses
+
+#### Scenario: OpenAI embeddings preserve caller contract
+
+- **WHEN** RAG ingestion, knowledge acquisition or assistant tools request embeddings through the provider registry
+- **THEN** those callers continue using `EmbeddingProvider.create_embeddings()` without depending on OpenAI SDK response types
+
+#### Scenario: OpenAI embedding role missing credentials
+
+- **WHEN** the embedding provider is configured as OpenAI without required OpenAI credentials
+- **THEN** provider construction or startup fails with a clear configuration error for the embedding role without requiring credentials for unselected roles
+
+### Requirement: OpenAI embedding role independence
+
+The backend SHALL configure OpenAI embeddings independently from model generation, vision analysis, judge evaluation and search provider roles.
+
+#### Scenario: OpenAI embeddings do not change generation providers
+
+- **WHEN** the embedding provider is configured as OpenAI and model, vision and judge providers remain configured as mock or another provider
+- **THEN** retrieval and ingestion use OpenAI only for embeddings while generation, image analysis and judging continue using their configured providers
+
+#### Scenario: OpenAI embeddings do not change search provider
+
+- **WHEN** the embedding provider is configured as OpenAI and the search provider remains configured as mock or another provider
+- **THEN** trusted-source lookup continues using the configured search provider
 
 ### Requirement: Provider role mock defaults
 
@@ -107,5 +150,19 @@ OpenAI-backed provider calls SHALL emit the same structured provider-call logs, 
 
 #### Scenario: OpenAI call fails
 
-- **WHEN** an OpenAI-backed model, vision or judge call fails or times out
+- **WHEN** an OpenAI-backed model, vision, search or judge call fails or times out
 - **THEN** the system records provider name, operation, role, latency, request correlation and sanitized error details
+
+### Requirement: OpenAI embedding observability
+
+OpenAI-backed embedding calls SHALL emit structured provider-call logs, metrics and traces without exposing secrets or raw credentials.
+
+#### Scenario: OpenAI embedding call fails
+
+- **WHEN** an OpenAI-backed embedding call fails or times out
+- **THEN** the system records provider name, operation, role, latency, request correlation and sanitized error details
+
+#### Scenario: OpenAI embedding call succeeds
+
+- **WHEN** an OpenAI-backed embedding call succeeds
+- **THEN** the system records sanitized provider-call metadata for the embedding role without logging raw credentials
