@@ -188,6 +188,7 @@ async def test_assistant_answers_botanical_questions_with_sources() -> None:
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
     assert "Tipo de evidencia: rag" in tools.model_prompts[0]
+    assert "fuentes proveedoras estructuradas" not in tools.model_prompts[0]
     assert "Requiere riego moderado" in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/source"
     assert tools.plant_data_calls == 0
@@ -239,6 +240,7 @@ async def test_assistant_uses_structured_lookup_before_trusted_web_search() -> N
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
     assert "Tipo de evidencia: structured_api" in tools.model_prompts[0]
+    assert "menciona en la respuesta final las fuentes proveedoras estructuradas usadas" in tools.model_prompts[0]
     assert "mock-trefle" in tools.model_prompts[0]
     assert result["sources"][0]["evidence_type"] == "structured_api"
 
@@ -267,6 +269,7 @@ async def test_assistant_uses_trusted_web_after_insufficient_structured_evidence
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
     assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
+    assert "fuentes proveedoras estructuradas" not in tools.model_prompts[0]
 
 
 @pytest.mark.asyncio
