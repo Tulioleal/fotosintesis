@@ -343,6 +343,10 @@ export interface components {
             message: string;
             /** Plant */
             plant?: string | null;
+            /** Plant Binomial Name */
+            plant_binomial_name?: string | null;
+            /** Plant Scientific Name */
+            plant_scientific_name?: string | null;
         };
         /** AssistantChatResponse */
         AssistantChatResponse: {
@@ -800,6 +804,8 @@ export interface components {
         TaxonomyCandidate: {
             /** Accepted Scientific Name */
             accepted_scientific_name?: string | null;
+            /** Binomial Name */
+            binomial_name?: string | null;
             /** Common Name */
             common_name?: string | null;
             /** Confidence Label */

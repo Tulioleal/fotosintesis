@@ -48,9 +48,11 @@ class FakeTools:
         self.web_search_query = None
         self.ingestion_calls = 0
         self.ingestion_kwargs = None
+        self.knowledge_search_kwargs = None
         self.plant_data = plant_data
         self.plant_data_ingestion_error = plant_data_ingestion_error
         self.plant_data_calls = 0
+        self.plant_data_kwargs = None
         self.model_response = model_response
         self.fail_model = fail_model
         self.model_calls = 0
@@ -78,6 +80,7 @@ class FakeTools:
 
     async def knowledge_search(self, *, scientific_name: str, topic: str) -> ToolResult:
         self.call_order.append("rag")
+        self.knowledge_search_kwargs = {"scientific_name": scientific_name, "topic": topic}
         if self.degraded_knowledge:
             return ToolResult(
                 ok=True,
@@ -145,6 +148,7 @@ class FakeTools:
     async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:
         self.call_order.append("plant_data")
         self.plant_data_calls += 1
+        self.plant_data_kwargs = {"scientific_name": scientific_name, "topic": topic}
         if not self.plant_data:
             return ToolResult(ok=True, data=None)
         return ToolResult(
@@ -186,6 +190,14 @@ def _structured_evidence(
         sufficient=sufficient,
         missing_fields=[] if sufficient else ["watering"],
     )
+
+
+def test_assistant_chat_request_accepts_legacy_plant_payload() -> None:
+    payload = AssistantChatRequest(message="Como debo regar mi Pata?", plant="Pata")
+
+    assert payload.plant == "Pata"
+    assert payload.plant_binomial_name is None
+    assert payload.plant_scientific_name is None
 
 
 @pytest.mark.asyncio
@@ -335,6 +347,66 @@ async def test_assistant_reports_degraded_knowledge_limitations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_assistant_uses_binomial_name_for_operational_calls() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar esta planta?",
+        plant_hint="Tomato",
+        plant_binomial_name="Solanum lycopersicum",
+        plant_scientific_name="Solanum lycopersicum var. cerasiforme",
+    )
+
+    assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.knowledge_search_kwargs["scientific_name"] == "Solanum lycopersicum"
+    assert tools.plant_data_kwargs["scientific_name"] == "Solanum lycopersicum"
+    assert "Planta seleccionada: Tomato" in tools.model_prompts[0]
+    assert "Nombre operacional para busqueda/API/RAG: Solanum lycopersicum" in tools.model_prompts[0]
+    assert "Nombre cientifico completo: Solanum lycopersicum var. cerasiforme" in tools.model_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_assistant_uses_scientific_name_when_binomial_is_missing() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar esta planta?",
+        plant_hint="Tomato",
+        plant_scientific_name="Solanum lycopersicum var. cerasiforme",
+    )
+
+    assert tools.knowledge_search_kwargs["scientific_name"] == "Solanum lycopersicum var. cerasiforme"
+    assert tools.plant_data_kwargs["scientific_name"] == "Solanum lycopersicum var. cerasiforme"
+
+
+@pytest.mark.asyncio
+async def test_assistant_uses_legacy_plant_when_taxonomy_fields_are_missing() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar Cotyledon tomentosa?",
+        plant_hint="Cotyledon tomentosa",
+    )
+
+    assert tools.knowledge_search_kwargs["scientific_name"] == "Cotyledon tomentosa"
+    assert tools.plant_data_kwargs["scientific_name"] == "Cotyledon tomentosa"
+
+
+@pytest.mark.asyncio
+async def test_assistant_ignores_blank_taxonomy_values_for_name_priority() -> None:
+    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar Cotyledon tomentosa?",
+        plant_hint="Cotyledon tomentosa",
+        plant_binomial_name="  ",
+        plant_scientific_name="",
+    )
+
+    assert tools.knowledge_search_kwargs["scientific_name"] == "Cotyledon tomentosa"
+
+
+@pytest.mark.asyncio
 async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     tools = FakeTools(
         degraded_knowledge=True,
@@ -466,9 +538,17 @@ async def test_assistant_records_ingestion_failure_without_blocking_web_answer()
 async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    ) -> None:
     class FakeGraph:
-        async def run(self, *, user_id: UUID, message: str, plant_hint: str | None):
+        async def run(
+            self,
+            *,
+            user_id: UUID,
+            message: str,
+            plant_hint: str | None,
+            plant_binomial_name: str | None = None,
+            plant_scientific_name: str | None = None,
+        ):
             return {
                 "answer": "Respuesta sintetizada por modelo.",
                 "sources": [
@@ -499,6 +579,43 @@ async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
     assert "pgvector unavailable" in response.tool_failures[0]
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[1].metadata["tool_failures"] == response.tool_failures
+
+
+@pytest.mark.asyncio
+async def test_assistant_service_passes_taxonomy_context_to_graph(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"answer": "Respuesta sintetizada por modelo.", "sources": [], "tool_failures": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(
+                message="Como debo regar esta planta?",
+                plant="Tomato",
+                plant_binomial_name="Solanum lycopersicum",
+                plant_scientific_name="Solanum lycopersicum var. cerasiforme",
+            ),
+        )
+        messages = (await session.execute(select(conversation_messages))).all()
+
+    assert captured["plant_hint"] == "Tomato"
+    assert captured["plant_binomial_name"] == "Solanum lycopersicum"
+    assert captured["plant_scientific_name"] == "Solanum lycopersicum var. cerasiforme"
+    assert messages[0].metadata["display_plant_name"] == "Tomato"
+    assert messages[0].metadata["operational_plant_name"] == "Solanum lycopersicum"
 
 
 @pytest.mark.asyncio

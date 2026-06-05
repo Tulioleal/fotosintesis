@@ -76,6 +76,12 @@ export function PlantProfileView({
   const limitations = profile.limitations ?? [];
   const sections = profile.sections ?? {};
   const sources = profile.sources ?? [];
+  const binomialName = profileBinomialName(profile);
+  const assistantHref = buildAssistantHref({
+    plant: profile.selected_alias ?? profile.common_name ?? profile.scientific_name,
+    binomial: binomialName,
+    scientific: profile.scientific_name,
+  });
 
   return (
     <section className={styles.profile}>
@@ -93,7 +99,7 @@ export function PlantProfileView({
 
       <div className={styles.ctas}>
         <a href="#save">Agregar a Mi Jardin</a>
-        <Link href={`/assistant?plant=${encodeURIComponent(profile.scientific_name)}`}>Preguntar al asistente</Link>
+        <Link href={assistantHref}>Preguntar al asistente</Link>
         <Link href={`/reminders?plant=${encodeURIComponent(profile.scientific_name)}`}>Crear recordatorio</Link>
         <Link href={`/light-meter?plant=${encodeURIComponent(profile.scientific_name)}`}>Medir luz</Link>
       </div>
@@ -139,4 +145,16 @@ export function PlantProfileView({
       </article>
     </section>
   );
+}
+
+function profileBinomialName(profile: PlantProfile) {
+  return (profile as PlantProfile & { binomial_name?: string | null }).binomial_name ?? null;
+}
+
+function buildAssistantHref(values: { plant?: string | null; binomial?: string | null; scientific?: string | null }) {
+  const params = Object.entries(values)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return `/assistant${params ? `?${params}` : ""}`;
 }

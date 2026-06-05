@@ -49,6 +49,10 @@ class AssistantState(TypedDict, total=False):
     user_id: UUID
     message: str
     plant_hint: str | None
+    plant_binomial_name: str | None
+    plant_scientific_name: str | None
+    operational_plant_name: str | None
+    display_plant_name: str | None
     intent: str
     topic: str
     garden: list[dict]
@@ -72,11 +76,33 @@ class AssistantGraph:
         self.tools = tools
         self.graph = _compile_graph(self)
 
-    async def run(self, *, user_id: UUID, message: str, plant_hint: str | None) -> AssistantState:
+    async def run(
+        self,
+        *,
+        user_id: UUID,
+        message: str,
+        plant_hint: str | None,
+        plant_binomial_name: str | None = None,
+        plant_scientific_name: str | None = None,
+    ) -> AssistantState:
+        operation_name = operational_plant_name(
+            plant=plant_hint,
+            plant_binomial_name=plant_binomial_name,
+            plant_scientific_name=plant_scientific_name,
+        )
+        display_name = display_plant_name(
+            plant=plant_hint,
+            plant_binomial_name=plant_binomial_name,
+            plant_scientific_name=plant_scientific_name,
+        )
         state: AssistantState = {
             "user_id": user_id,
             "message": message.strip(),
-            "plant_hint": plant_hint,
+            "plant_hint": _normalize_plant_name(plant_hint),
+            "plant_binomial_name": _normalize_plant_name(plant_binomial_name),
+            "plant_scientific_name": _normalize_plant_name(plant_scientific_name),
+            "operational_plant_name": operation_name,
+            "display_plant_name": display_name,
             "tool_failures": [],
             "sources": [],
             "requires_confirmation": False,
@@ -89,7 +115,7 @@ class AssistantGraph:
         reminder = any(word in message for word in ("recordatorio", "recordame", "reminder"))
         light = "luz" in message or "light" in message
         botanical = any(term in message for term in BOTANICAL_TERMS) or bool(
-            state.get("plant_hint")
+            state.get("operational_plant_name")
         )
         intent = (
             "reminder"
@@ -116,14 +142,17 @@ class AssistantGraph:
                 "garden": [],
             }
         garden = list(result.data or [])
-        selected, ambiguous = _select_plant(garden, state.get("plant_hint"), state["message"])
+        selected, ambiguous = _select_plant(
+            garden,
+            state.get("display_plant_name") or state.get("operational_plant_name"),
+            state["message"],
+        )
         return {"garden": garden, "selected_plant": selected, "ambiguous": ambiguous}
 
     async def retrieve(self, state: AssistantState) -> dict:
         if state.get("out_of_domain") or state.get("unsafe") or state.get("ambiguous"):
             return {}
-        selected = state.get("selected_plant")
-        scientific_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        scientific_name = _operational_name_for_tools(state)
         if not scientific_name:
             return {}
         result = await self.tools.knowledge_search(
@@ -145,8 +174,7 @@ class AssistantGraph:
         return {"sufficient": sufficient}
 
     async def fallback_web_search(self, state: AssistantState) -> dict:
-        selected = state.get("selected_plant")
-        scientific_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        scientific_name = _operational_name_for_tools(state)
         if not scientific_name:
             return {}
         topic = state.get("topic") or "care"
@@ -167,14 +195,8 @@ class AssistantGraph:
 
     async def fallback_plant_data(self, state: AssistantState) -> dict:
         selected = state.get("selected_plant")
-        if (
-            not selected
-            or selected.get("id") is None
-            or not _message_confirms_selected_plant(selected, state["message"])
-        ):
-            return {}
-        scientific_name = selected.get("scientific_name")
-        if not scientific_name:
+        scientific_name = _operational_name_for_tools(state)
+        if not scientific_name or not _has_confirmed_taxonomy_context(state, selected):
             return {}
         result = await self.tools.plant_data_lookup(
             scientific_name=scientific_name,
@@ -286,7 +308,7 @@ class AssistantGraph:
         if state.get("ambiguous"):
             names = ", ".join(_display_plant(plant) for plant in state.get("garden", [])[:5])
             return {"answer": f"¿Sobre cual planta queres consultar? En tu jardin veo: {names}."}
-        if not state.get("selected_plant") and not state.get("plant_hint"):
+        if not state.get("selected_plant") and not state.get("operational_plant_name"):
             return {
                 "answer": "Necesito saber de que planta hablamos. Indica el nombre o elegi una planta de tu jardin."
             }
@@ -320,8 +342,7 @@ class AssistantGraph:
         if not chunks:
             return await self.clarify(state)
         evidence = " ".join(_shorten(chunk.content, 280) for chunk in chunks[:3])
-        selected = state.get("selected_plant")
-        plant_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        plant_name = _display_name_for_answer(state)
         fallback = _rag_fallback_answer(plant_name, evidence, retrieval, limitations)
         return await self._generate_grounded_answer(
             state,
@@ -336,8 +357,7 @@ class AssistantGraph:
     async def _generate_structured_answer(
         self, state: AssistantState, evidence: StructuredPlantEvidence
     ) -> dict:
-        selected = state.get("selected_plant")
-        plant_name = selected.get("scientific_name") if selected else evidence.scientific_name
+        plant_name = _display_name_for_answer(state) or evidence.scientific_name
         providers = ", ".join(evidence.providers)
         fallback = _structured_fallback_answer(plant_name, evidence)
         source_metadata = state.get("sources", []) + [{"providers": evidence.providers}]
@@ -355,8 +375,7 @@ class AssistantGraph:
     async def _generate_web_answer(
         self, state: AssistantState, web_results: list[TrustedPageEvidence]
     ) -> dict:
-        selected = state.get("selected_plant")
-        plant_name = selected.get("scientific_name") if selected else state.get("plant_hint")
+        plant_name = _display_name_for_answer(state)
         topic = state.get("topic") or "care"
         evidence = " ".join(_shorten(result.evidence_text, 500) for result in web_results[:3])
         citations = ", ".join(result.result.url for result in web_results[:3])
@@ -373,7 +392,7 @@ class AssistantGraph:
             fallback=fallback,
         )
         ingestion = await self.tools.ingest_web_evidence(
-            scientific_name=str(plant_name),
+            scientific_name=str(_operational_name_for_tools(state) or plant_name),
             topic=topic,
             results=web_results,
         )
@@ -405,7 +424,7 @@ class AssistantGraph:
             evidence=evidence,
             limitations=limitations,
             source_metadata=source_metadata,
-            extra_context=extra_context,
+            extra_context=_taxonomy_context(state, extra_context),
         )
         result = await self.tools.generate_text(prompt)
         if not result.ok:
@@ -536,6 +555,72 @@ def _route_after_web_fallback(state: AssistantState) -> Literal["answer", "clari
 
 def _route_after_failure(state: AssistantState) -> Literal["answer", "end"]:
     return "end" if state.get("answer") else "answer"
+
+
+def operational_plant_name(
+    *,
+    plant: str | None,
+    plant_binomial_name: str | None,
+    plant_scientific_name: str | None,
+) -> str | None:
+    return _first_non_blank(plant_binomial_name, plant_scientific_name, plant)
+
+
+def display_plant_name(
+    *,
+    plant: str | None,
+    plant_binomial_name: str | None,
+    plant_scientific_name: str | None,
+) -> str | None:
+    return _first_non_blank(plant, plant_scientific_name, plant_binomial_name)
+
+
+def _first_non_blank(*values: str | None) -> str | None:
+    for value in values:
+        normalized = _normalize_plant_name(value)
+        if normalized:
+            return normalized
+    return None
+
+
+def _normalize_plant_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _operational_name_for_tools(state: AssistantState) -> str | None:
+    selected = state.get("selected_plant")
+    return state.get("operational_plant_name") or (
+        selected.get("scientific_name") if selected else None
+    )
+
+
+def _display_name_for_answer(state: AssistantState) -> str | None:
+    selected = state.get("selected_plant")
+    return state.get("display_plant_name") or (_display_plant(selected) if selected else None)
+
+
+def _has_confirmed_taxonomy_context(state: AssistantState, selected: dict | None) -> bool:
+    if state.get("plant_binomial_name") or state.get("plant_scientific_name"):
+        return True
+    return bool(selected and selected.get("id") is not None and _message_confirms_selected_plant(selected, state["message"]))
+
+
+def _taxonomy_context(state: AssistantState, extra_context: str = "") -> str:
+    parts = [extra_context] if extra_context else []
+    operational = state.get("operational_plant_name")
+    display = state.get("display_plant_name")
+    scientific = state.get("plant_scientific_name")
+    binomial = state.get("plant_binomial_name")
+    if operational and operational != display:
+        parts.append(f"Nombre operacional para busqueda/API/RAG: {operational}.")
+    if scientific and scientific not in {operational, display}:
+        parts.append(f"Nombre cientifico completo: {scientific}.")
+    if binomial and binomial not in {operational, display}:
+        parts.append(f"Nombre binomial: {binomial}.")
+    return " ".join(parts)
 
 
 def _select_plant(

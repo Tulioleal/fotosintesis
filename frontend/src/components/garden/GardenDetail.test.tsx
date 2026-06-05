@@ -17,6 +17,7 @@ const plant = {
   profile: {
     aliases: [],
     common_name: "Helecho",
+    binomial_name: "Nephrolepis exaltata",
     confidence: 0.9,
     id: "profile-1",
     limitations: [],
@@ -79,6 +80,15 @@ describe("GardenDetail", () => {
     expect(await screen.findByRole("link", { name: "Ver perfil" })).toHaveAttribute(
       "href",
       "/profiles/Nephrolepis%20exaltata?candidateId=candidate-1",
+    );
+  });
+
+  it("links to the assistant with garden display, binomial and scientific context", async () => {
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByRole("link", { name: "Preguntar al asistente" })).toHaveAttribute(
+      "href",
+      "/assistant?plant=Helecho&binomial=Nephrolepis%20exaltata&scientific=Nephrolepis%20exaltata",
     );
   });
 

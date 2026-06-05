@@ -12,6 +12,7 @@ type Candidate = {
   visible_traits: string[];
   possible_match_copy: string;
   accepted_scientific_name: string | null;
+  binomial_name: string | null;
   validation_status: "validated" | "no_gbif_match";
   gbif_key: number | null;
   genus: string | null;
@@ -140,8 +141,10 @@ export function IdentifyFlow() {
             <article className={styles.card} key={candidate.id}>
               <div>
                 <p className={styles.eyebrow}>{confidenceCopy[candidate.confidence_label] ?? candidate.confidence_label}</p>
-                <h2>{candidate.common_name ?? candidate.suggested_scientific_name}</h2>
-                <p><em>{candidate.accepted_scientific_name ?? candidate.suggested_scientific_name}</em></p>
+                <h2>{candidateDisplayName(candidate)}</h2>
+                {candidateScientificName(candidate) !== candidateDisplayName(candidate) ? (
+                  <p><em>{candidateScientificName(candidate)}</em></p>
+                ) : null}
               </div>
               <p>{candidate.possible_match_copy}</p>
               <ul>
@@ -161,12 +164,20 @@ export function IdentifyFlow() {
                 {candidate.confirmed_at ? "Candidata confirmada" : "Confirmar candidata validada"}
               </button>
               {candidate.confirmed_at ? (
-                <Link
-                  className={styles.profileLink}
-                  href={`/profiles/${encodeURIComponent(candidate.accepted_scientific_name ?? candidate.suggested_scientific_name)}?candidateId=${candidate.id}`}
-                >
-                  Ver perfil y agregar a Mi Jardin
-                </Link>
+                <>
+                  <Link
+                    className={styles.profileLink}
+                    href={`/profiles/${encodeURIComponent(candidate.accepted_scientific_name ?? candidate.suggested_scientific_name)}?candidateId=${candidate.id}`}
+                  >
+                    Ver perfil y agregar a Mi Jardin
+                  </Link>
+                  <Link
+                    className={styles.profileLink}
+                    href={assistantHrefForCandidate(candidate)}
+                  >
+                    Preguntar al asistente
+                  </Link>
+                </>
               ) : null}
             </article>
           ))}
@@ -174,4 +185,29 @@ export function IdentifyFlow() {
       ) : null}
     </section>
   );
+}
+
+function assistantHrefForCandidate(candidate: Candidate) {
+  const scientific = candidate.accepted_scientific_name ?? candidate.suggested_scientific_name;
+  return buildAssistantHref({
+    plant: candidateDisplayName(candidate),
+    binomial: candidate.binomial_name,
+    scientific,
+  });
+}
+
+function candidateDisplayName(candidate: Candidate) {
+  return candidate.common_name ?? candidate.binomial_name ?? candidateScientificName(candidate);
+}
+
+function candidateScientificName(candidate: Candidate) {
+  return candidate.accepted_scientific_name ?? candidate.suggested_scientific_name;
+}
+
+function buildAssistantHref(values: { plant?: string | null; binomial?: string | null; scientific?: string | null }) {
+  const params = Object.entries(values)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return `/assistant${params ? `?${params}` : ""}`;
 }

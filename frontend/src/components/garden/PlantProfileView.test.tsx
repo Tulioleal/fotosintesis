@@ -6,6 +6,7 @@ import { PlantProfileView } from "./PlantProfileView";
 const profile = {
   aliases: [{ country: null, language: "es", name: "Helecho", region: null }],
   common_name: "Helecho",
+  binomial_name: "Nephrolepis exaltata",
   confidence: 0.9,
   id: "profile-1",
   limitations: [],
@@ -70,6 +71,15 @@ describe("PlantProfileView", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("candidateId=candidate-1"));
     expect(await screen.findByText("Guardada en Mi Jardin como Mi helecho.")).toBeInTheDocument();
+  });
+
+  it("links to the assistant with display, binomial and scientific context", async () => {
+    renderWithQueryClient(<PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />);
+
+    expect(await screen.findByRole("link", { name: "Preguntar al asistente" })).toHaveAttribute(
+      "href",
+      "/assistant?plant=Helecho&binomial=Nephrolepis%20exaltata&scientific=Nephrolepis%20exaltata",
+    );
   });
 
   it("renders a user-facing error when the garden save mutation fails", async () => {

@@ -49,6 +49,12 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   const profileHref = plant.confirmed_candidate_id
     ? `${profilePath}?candidateId=${encodeURIComponent(plant.confirmed_candidate_id)}`
     : profilePath;
+  const binomialName = profileBinomialName(plant.profile);
+  const assistantHref = buildAssistantHref({
+    plant: plant.nickname ?? plant.profile.selected_alias ?? plant.profile.common_name ?? plant.profile.scientific_name,
+    binomial: binomialName,
+    scientific: plant.profile.scientific_name,
+  });
 
   return (
     <section className={styles.profile}>
@@ -65,7 +71,7 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
       </article>
       <div className={styles.ctas}>
         <Link href={profileHref}>Ver perfil</Link>
-        <Link href={`/assistant?plant=${encodeURIComponent(plant.profile.scientific_name)}`}>Preguntar al asistente</Link>
+        <Link href={assistantHref}>Preguntar al asistente</Link>
         <Link href={`/reminders?plant=${encodeURIComponent(plant.profile.scientific_name)}`}>Crear recordatorio</Link>
         <Link href={`/light-meter?plant=${encodeURIComponent(plant.profile.scientific_name)}`}>Medir luz</Link>
       </div>
@@ -81,4 +87,16 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
       )}
     </section>
   );
+}
+
+function profileBinomialName(profile: { scientific_name: string } & { binomial_name?: string | null }) {
+  return profile.binomial_name ?? null;
+}
+
+function buildAssistantHref(values: { plant?: string | null; binomial?: string | null; scientific?: string | null }) {
+  const params = Object.entries(values)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return `/assistant${params ? `?${params}` : ""}`;
 }

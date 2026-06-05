@@ -16,6 +16,7 @@ const identificationPayload = {
       visible_traits: ["hojas carnosas"],
       possible_match_copy: "Coincide con una suculenta compacta.",
       accepted_scientific_name: "Cotyledon tomentosa",
+      binomial_name: "Cotyledon tomentosa",
       validation_status: "validated",
       gbif_key: 123,
       genus: "Cotyledon",
@@ -61,7 +62,66 @@ describe("IdentifyFlow", () => {
         "href",
         "/profiles/Cotyledon%20tomentosa?candidateId=candidate-1",
       );
+      expect(screen.getByRole("link", { name: "Preguntar al asistente" })).toHaveAttribute(
+        "href",
+        "/assistant?plant=Pata%20de%20oso&binomial=Cotyledon%20tomentosa&scientific=Cotyledon%20tomentosa",
+      );
     });
+  });
+
+  it("renders the binomial name as primary text when common name is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...identificationPayload,
+          candidates: [{
+            ...identificationPayload.candidates[0],
+            common_name: null,
+            suggested_scientific_name: "Solanum lycopersicum var. cerasiforme",
+            accepted_scientific_name: "Solanum lycopersicum var. cerasiforme",
+            binomial_name: "Solanum lycopersicum",
+          }],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ candidate: { confirmed_at: "2026-01-01T00:00:00Z" } }) }));
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector('input[accept="image/jpeg,image/png,image/webp"]') as HTMLInputElement;
+
+    fireEvent.change(upload, { target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] } });
+
+    expect(await screen.findByRole("heading", { name: "Solanum lycopersicum" })).toBeInTheDocument();
+    expect(screen.getByText("Solanum lycopersicum var. cerasiforme")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar candidata validada" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Preguntar al asistente" })).toHaveAttribute(
+        "href",
+        "/assistant?plant=Solanum%20lycopersicum&binomial=Solanum%20lycopersicum&scientific=Solanum%20lycopersicum%20var.%20cerasiforme",
+      );
+    });
+  });
+
+  it("falls back to the scientific name when binomial name is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ...identificationPayload,
+        candidates: [{
+          ...identificationPayload.candidates[0],
+          common_name: null,
+          accepted_scientific_name: "Cotyledon tomentosa L.",
+          binomial_name: null,
+        }],
+      }),
+    }));
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector('input[accept="image/jpeg,image/png,image/webp"]') as HTMLInputElement;
+
+    fireEvent.change(upload, { target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] } });
+
+    expect(await screen.findByRole("heading", { name: "Cotyledon tomentosa L." })).toBeInTheDocument();
   });
 
   it("blocks confirmation for candidates without GBIF validation", async () => {

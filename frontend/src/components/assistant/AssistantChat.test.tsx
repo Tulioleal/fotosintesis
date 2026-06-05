@@ -5,10 +5,11 @@ import { AssistantChat } from "./AssistantChat";
 const mocks = vi.hoisted(() => ({
   createReminder: vi.fn(),
   sendAssistantMessage: vi.fn(),
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: () => null }),
+  useSearchParams: () => mocks.searchParams,
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -22,6 +23,7 @@ describe("AssistantChat", () => {
   beforeEach(() => {
     mocks.createReminder.mockReset();
     mocks.sendAssistantMessage.mockReset();
+    mocks.searchParams = new URLSearchParams();
     mocks.createReminder.mockResolvedValue({ id: "reminder-1" });
     mocks.sendAssistantMessage.mockResolvedValue({
       conversation_id: "conversation-1",
@@ -77,5 +79,49 @@ describe("AssistantChat", () => {
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
     });
     expect(await screen.findByRole("button", { name: "Recordatorio creado" })).toBeDisabled();
+  });
+
+  it("maps assistant taxonomy query parameters to the chat payload", async () => {
+    mocks.searchParams = new URLSearchParams({
+      plant: "Tomato",
+      binomial: "Solanum lycopersicum",
+      scientific: "Solanum lycopersicum var. cerasiforme",
+    });
+
+    render(<AssistantChat />);
+
+    expect(screen.getByText("Contexto inicial: Tomato")).toBeInTheDocument();
+    expect(screen.getByText("Solanum lycopersicum")).toBeInTheDocument();
+    expect(screen.queryByText("Solanum lycopersicum var. cerasiforme")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledWith({
+        message: "Tengo una consulta sobre Tomato:",
+        conversation_id: null,
+        plant: "Tomato",
+        plant_binomial_name: "Solanum lycopersicum",
+        plant_scientific_name: "Solanum lycopersicum var. cerasiforme",
+      });
+    });
+  });
+
+  it("keeps plant-only assistant requests compatible", async () => {
+    mocks.searchParams = new URLSearchParams({ plant: "Pata" });
+
+    render(<AssistantChat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledWith({
+        message: "Tengo una consulta sobre Pata:",
+        conversation_id: null,
+        plant: "Pata",
+        plant_binomial_name: null,
+        plant_scientific_name: null,
+      });
+    });
   });
 });

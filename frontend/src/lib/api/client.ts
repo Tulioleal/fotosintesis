@@ -32,6 +32,8 @@ export type AssistantChatRequest = {
   message: string;
   conversation_id?: string | null;
   plant?: string | null;
+  plant_binomial_name?: string | null;
+  plant_scientific_name?: string | null;
 };
 export type AssistantChatResponse = {
   conversation_id: string;

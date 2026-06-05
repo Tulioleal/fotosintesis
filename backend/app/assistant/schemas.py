@@ -31,6 +31,8 @@ class AssistantChatRequest(ApiSchema):
     message: str
     conversation_id: UUID | None = None
     plant: str | None = None
+    plant_binomial_name: str | None = None
+    plant_scientific_name: str | None = None
 
 
 class AssistantChatResponse(ApiSchema):

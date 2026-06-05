@@ -22,6 +22,9 @@ const recurrenceLabels: Record<ReminderCreate["recurrence"], string> = {
 export function AssistantChat() {
   const searchParams = useSearchParams();
   const plant = searchParams.get("plant");
+  const binomial = searchParams.get("binomial");
+  const scientific = searchParams.get("scientific");
+  const secondaryContext = binomial && binomial !== plant ? binomial : null;
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sources, setSources] = useState<AssistantSource[]>([]);
@@ -40,7 +43,13 @@ export function AssistantChat() {
     setMessages((current) => [...current, { role: "user", content: trimmed }]);
     setMessage("");
     try {
-      const response = await apiClient.sendAssistantMessage({ message: trimmed, conversation_id: conversationId, plant });
+      const response = await apiClient.sendAssistantMessage({
+        message: trimmed,
+        conversation_id: conversationId,
+        plant,
+        plant_binomial_name: binomial,
+        plant_scientific_name: scientific,
+      });
       setConversationId(response.conversation_id);
       setMessages((current) => [
         ...current,
@@ -88,7 +97,12 @@ export function AssistantChat() {
         <p className={styles.eyebrow}>Asistente botanico</p>
         <h1>Pregunta con contexto.</h1>
         <p>Responde con evidencia, pide aclaraciones cuando falta informacion y no afirma acciones fallidas.</p>
-        {plant ? <p className={styles.meta}>Contexto inicial: {plant}</p> : null}
+        {plant ? (
+          <p className={styles.meta}>
+            Contexto inicial: {plant}
+            {secondaryContext ? <><br /><em>{secondaryContext}</em></> : null}
+          </p>
+        ) : null}
       </div>
 
       <div className={styles.thread} aria-live="polite">

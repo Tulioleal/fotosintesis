@@ -3,7 +3,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.assistant.graph import AssistantGraph
+from app.assistant.graph import AssistantGraph, display_plant_name, operational_plant_name
 from app.assistant.repository import AssistantRepository
 from app.assistant.schemas import AssistantChatRequest, AssistantChatResponse, AssistantMessage, AssistantSource
 from app.assistant.tools import AssistantTools
@@ -19,6 +19,27 @@ class AssistantService:
         self.graph = AssistantGraph(self.tools)
 
     async def chat(self, *, user_id: UUID, payload: AssistantChatRequest) -> AssistantChatResponse:
+        operation_name = operational_plant_name(
+            plant=payload.plant,
+            plant_binomial_name=payload.plant_binomial_name,
+            plant_scientific_name=payload.plant_scientific_name,
+        )
+        display_name = display_plant_name(
+            plant=payload.plant,
+            plant_binomial_name=payload.plant_binomial_name,
+            plant_scientific_name=payload.plant_scientific_name,
+        )
+        plant_metadata = {
+            key: value
+            for key, value in {
+                "plant": payload.plant,
+                "plant_binomial_name": payload.plant_binomial_name,
+                "plant_scientific_name": payload.plant_scientific_name,
+                "operational_plant_name": operation_name,
+                "display_plant_name": display_name,
+            }.items()
+            if value
+        }
         conversation_id = await self.repository.get_or_create_conversation(
             user_id=user_id,
             conversation_id=payload.conversation_id,
@@ -28,12 +49,14 @@ class AssistantService:
             conversation_id=conversation_id,
             role="user",
             content=payload.message,
-            metadata={"plant": payload.plant} if payload.plant else {},
+            metadata=plant_metadata,
         )
         state = await self.graph.run(
             user_id=user_id,
             message=payload.message,
             plant_hint=payload.plant,
+            plant_binomial_name=payload.plant_binomial_name,
+            plant_scientific_name=payload.plant_scientific_name,
         )
         answer = state.get("answer") or "No pude generar una respuesta segura. Intenta con mas detalles."
         if state.get("tool_failures"):

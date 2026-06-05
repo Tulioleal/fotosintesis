@@ -29,6 +29,28 @@
               }
             ],
             "title": "Plant"
+          },
+          "plant_binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plant Binomial Name"
+          },
+          "plant_scientific_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plant Scientific Name"
           }
         },
         "required": [
@@ -1216,6 +1238,17 @@
               }
             ],
             "title": "Accepted Scientific Name"
+          },
+          "binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binomial Name"
           },
           "common_name": {
             "anyOf": [
