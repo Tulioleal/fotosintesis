@@ -26,6 +26,7 @@ class TaxonomyCandidate(BaseModel):
     gbif_key: int | None = None
     gbif_accepted_key: int | None = None
     accepted_scientific_name: str | None = None
+    binomial_name: str | None = None
     taxonomic_status: str | None = None
     synonyms: list[str] = Field(default_factory=list)
     genus: str | None = None

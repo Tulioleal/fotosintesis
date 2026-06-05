@@ -83,6 +83,7 @@ identification_candidates = sa.Table(
     sa.Column("gbif_key", sa.Integer(), nullable=True),
     sa.Column("gbif_accepted_key", sa.Integer(), nullable=True),
     sa.Column("accepted_scientific_name", sa.String(length=240), nullable=True),
+    sa.Column("binomial_name", sa.String(length=240), nullable=True),
     sa.Column("taxonomic_status", sa.String(length=80), nullable=True),
     sa.Column("synonyms", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
     sa.Column("genus", sa.String(length=160), nullable=True),

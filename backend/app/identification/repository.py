@@ -70,6 +70,7 @@ class IdentificationRepository:
                 gbif_key=taxonomy.key,
                 gbif_accepted_key=taxonomy.accepted_key,
                 accepted_scientific_name=taxonomy.accepted_scientific_name,
+                binomial_name=taxonomy.binomial_name,
                 taxonomic_status=taxonomy.taxonomic_status,
                 synonyms=taxonomy.synonyms,
                 genus=taxonomy.genus,

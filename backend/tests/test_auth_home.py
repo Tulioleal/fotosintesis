@@ -200,6 +200,7 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
             key=123,
             accepted_key=456,
             accepted_scientific_name=scientific_name,
+            binomial_name="Cotyledon tomentosa",
             taxonomic_status="ACCEPTED",
             synonyms=["Cotyledon ladismithiensis"],
             genus="Cotyledon",
@@ -230,6 +231,11 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         assert body["status"] == "needs_confirmation"
         assert body["candidates"][0]["validation_status"] == "validated"
         assert body["candidates"][0]["gbif_key"] == 123
+        assert body["candidates"][0]["binomial_name"] == "Cotyledon tomentosa"
+        assert body["candidates"][0]["accepted_scientific_name"] == "Cotyledon tomentosa"
+        assert body["candidates"][0]["genus"] == "Cotyledon"
+        assert body["candidates"][0]["family"] == "Crassulaceae"
+        assert body["candidates"][0]["species"] == "Cotyledon tomentosa"
 
         confirmed = await client.post(
             f"/identifications/{body['id']}/candidates/{body['candidates'][0]['id']}/confirm",
@@ -237,6 +243,7 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         )
         assert confirmed.status_code == 200
         assert confirmed.json()["candidate"]["confirmed_at"] is not None
+        assert confirmed.json()["candidate"]["binomial_name"] == "Cotyledon tomentosa"
 
     async with session_factory() as session:
         image_rows = (await session.execute(select(identification_images))).all()
@@ -244,6 +251,7 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         assert len(image_rows) == 1
         assert len(candidate_rows) == 1
         assert candidate_rows[0].accepted_scientific_name == "Cotyledon tomentosa"
+        assert candidate_rows[0].binomial_name == "Cotyledon tomentosa"
 
 
 @pytest.mark.asyncio
@@ -340,3 +348,4 @@ async def test_identification_reports_no_gbif_match(
         body = response.json()
         assert body["status"] == "retry_needed"
         assert body["sad_path"] == "no_gbif_match"
+        assert body["candidates"][0]["binomial_name"] is None

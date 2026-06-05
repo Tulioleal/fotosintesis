@@ -10,12 +10,28 @@ class GbifTaxonomy:
     key: int | None = None
     accepted_key: int | None = None
     accepted_scientific_name: str | None = None
+    binomial_name: str | None = None
     taxonomic_status: str | None = None
     synonyms: list[str] = field(default_factory=list)
     genus: str | None = None
     family: str | None = None
     species: str | None = None
     matched: bool = False
+
+    def __post_init__(self) -> None:
+        if self.binomial_name or not self.genus or not self.species:
+            return
+
+        species = self.species.strip()
+        genus = self.genus.strip()
+        if not species or not genus:
+            return
+
+        if species.startswith(f"{genus} "):
+            object.__setattr__(self, "binomial_name", species)
+            return
+
+        object.__setattr__(self, "binomial_name", f"{genus} {species}")
 
 
 class GbifClient:
@@ -39,6 +55,7 @@ class GbifClient:
 
         accepted_key = payload.get("acceptedUsageKey") or usage_key
         accepted_name = payload.get("acceptedScientificName") or payload.get("scientificName")
+        canonical_name = payload.get("canonicalName")
         synonyms = []
         if payload.get("synonym") and payload.get("scientificName") != accepted_name:
             synonyms.append(payload.get("scientificName"))
@@ -47,6 +64,7 @@ class GbifClient:
             key=usage_key,
             accepted_key=accepted_key,
             accepted_scientific_name=accepted_name,
+            binomial_name=(canonical_name.strip() or None) if isinstance(canonical_name, str) else None,
             taxonomic_status=payload.get("status"),
             synonyms=synonyms,
             genus=payload.get("genus"),
