@@ -59,6 +59,7 @@ class AssistantTools:
                 ),
             )
         except Exception as exc:
+            await self.knowledge_repository.rollback()
             return ToolResult(ok=False, error=f"knowledge_search failed: {exc}")
         return ToolResult(ok=True, data=result)
 
@@ -104,6 +105,7 @@ class AssistantTools:
                 embedding_provider=self.providers.embeddings,
             )
         except Exception as exc:
+            await self.knowledge_repository.rollback()
             return f"plant_data_lookup ingestion failed: {exc}"
         return None
 
@@ -146,6 +148,7 @@ class AssistantTools:
                 embedding_provider=self.providers.embeddings,
             )
         except Exception as exc:
+            await self.knowledge_repository.rollback()
             return ToolResult(ok=False, error=f"ingest_web_evidence failed: {exc}")
         return ToolResult(ok=True, data={"document_id": str(persisted.id)})
 

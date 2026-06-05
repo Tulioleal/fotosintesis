@@ -75,6 +75,7 @@ class KnowledgeAcquisitionService:
                 query_embedding=query_embedding,
             )
         except Exception:
+            await self.repository.rollback()
             return _degraded_result(
                 scientific_name,
                 topic,
@@ -114,6 +115,7 @@ class KnowledgeAcquisitionService:
                 document_id=persisted.id,
             )
         except Exception:
+            await self.repository.rollback()
             return _degraded_result(
                 scientific_name,
                 topic,
@@ -138,7 +140,7 @@ class KnowledgeAcquisitionService:
             },
         }
         prompt = (
-            "Create a structured botanical knowledge document using only these trusted sources. "
+            "Create a structured botanical knowledge document as JSON using only these trusted sources. "
             f"Species: {scientific_name}. Topic: {topic}. Sources: "
             + " | ".join(f"{source.title}: {source.snippet}" for source in sources)
         )

@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.tables import (
@@ -32,7 +35,7 @@ from app.knowledge.schemas import (
     KnowledgeSourceInput,
     ReviewStatus,
 )
-from app.providers.types import EmbeddingResult, SearchResult
+from app.providers.types import EmbeddingResult, JsonGenerationResult, SearchResult
 
 
 class FakeHeaders:
@@ -157,6 +160,39 @@ class RecordingEmbeddingProvider:
         )
 
 
+class RecordingJsonModelProvider:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def generate_json(self, prompt: str, schema: dict, **kwargs) -> JsonGenerationResult:
+        self.prompts.append(prompt)
+        return JsonGenerationResult(
+            provider="recording",
+            model="recording-model",
+            data={"title": "Recorded", "content": "Recorded content.", "confidence": 0.7},
+        )
+
+
+class FakeSearchProvider:
+    def __init__(self, results: list[SearchResult] | None = None) -> None:
+        self.results = results if results is not None else [_search_result()]
+
+    async def search(self, query: str, **kwargs) -> list[SearchResult]:
+        return self.results
+
+
+def _providers(
+    *,
+    model: RecordingJsonModelProvider | None = None,
+    search_results: list[SearchResult] | None = None,
+):
+    return SimpleNamespace(
+        model=model or RecordingJsonModelProvider(),
+        search=FakeSearchProvider(search_results),
+        embeddings=RecordingEmbeddingProvider(),
+    )
+
+
 class FakeTransformComponent:
     pass
 
@@ -179,6 +215,16 @@ class FakeNode:
 class NoSqlVectorRepository(KnowledgeRepository):
     async def retrieve_chunks(self, *args, **kwargs):
         raise AssertionError("runtime retrieval must not use SQL-only repository retrieval")
+
+
+class RecordingRollbackRepository(KnowledgeRepository):
+    def __init__(self, session) -> None:
+        super().__init__(session)
+        self.rollback_calls = 0
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
+        await super().rollback()
 
 
 @pytest.mark.asyncio
@@ -207,6 +253,27 @@ async def test_knowledge_document_persists_chunks_sources_and_embeddings(
     assert chunks[0].metadata["scientific_name"] == "Cotyledon tomentosa"
     assert chunks[0].metadata["review_status"] == "auto_ingested"
     assert embeddings[0].embedding_dimension == 8
+
+
+@pytest.mark.asyncio
+async def test_add_embeddings_rejects_wrong_dimension_before_insert(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        repository = KnowledgeRepository(session)
+        persisted = await repository.save_document(_document())
+
+        with pytest.raises(ValueError, match="expected 8, got 3"):
+            await repository.add_embeddings(
+                chunks=persisted.chunks,
+                embeddings=[[0.1, 0.2, 0.3]],
+                provider="test",
+                model="wrong-dimension",
+            )
+
+        embeddings = (await session.execute(select(knowledge_embeddings))).all()
+
+    assert embeddings == []
 
 
 @pytest.mark.asyncio
@@ -251,6 +318,7 @@ async def test_acquisition_uses_trusted_sources_embeds_and_retrieves(
         runtime = FakeLlamaRuntime()
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["example.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=runtime),
         )
@@ -269,6 +337,28 @@ async def test_acquisition_uses_trusted_sources_embeds_and_retrieves(
 
 
 @pytest.mark.asyncio
+async def test_acquisition_generate_json_prompt_explicitly_requests_json(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        model = RecordingJsonModelProvider()
+        service = KnowledgeAcquisitionService(
+            KnowledgeRepository(session),
+            providers=_providers(model=model),
+            vector_index=KnowledgeVectorIndex(KnowledgeRepository(session), runtime=FakeLlamaRuntime()),
+        )
+
+        await service._generate_document(
+            "Cotyledon tomentosa",
+            "watering",
+            [_search_result(snippet="Water when the substrate dries.")],
+        )
+
+    assert model.prompts
+    assert "json" in model.prompts[0].casefold()
+
+
+@pytest.mark.asyncio
 async def test_acquisition_degrades_when_no_trusted_source_is_available(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -276,6 +366,7 @@ async def test_acquisition_degrades_when_no_trusted_source_is_available(
         repository = KnowledgeRepository(session)
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["gbif.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=FakeLlamaRuntime()),
         )
@@ -298,6 +389,7 @@ async def test_acquisition_degrades_when_llamaindex_retrieval_fails(
         repository = KnowledgeRepository(session)
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["example.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=FailingLlamaRuntime()),
         )
@@ -316,9 +408,10 @@ async def test_acquisition_degrades_when_llamaindex_ingestion_fails(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
-        repository = KnowledgeRepository(session)
+        repository = RecordingRollbackRepository(session)
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["example.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=FailingIngestionRuntime()),
         )
@@ -330,6 +423,7 @@ async def test_acquisition_degrades_when_llamaindex_ingestion_fails(
     assert result.status == AcquisitionStatus.degraded
     assert result.retry_available is True
     assert "Trusted acquisition failed" in result.limitations[0]
+    assert repository.rollback_calls == 1
 
 
 @pytest.mark.asyncio
@@ -341,6 +435,7 @@ async def test_acquisition_does_not_use_sql_only_retrieval_path(
         runtime = FakeLlamaRuntime()
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["example.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=runtime),
         )
@@ -366,6 +461,7 @@ async def test_acquisition_uses_llamaindex_ingestion_instead_of_custom_chunking(
         runtime = FakeLlamaRuntime()
         service = KnowledgeAcquisitionService(
             repository,
+            providers=_providers(),
             trusted_sources=TrustedSourceValidator(["example.org"]),
             vector_index=KnowledgeVectorIndex(repository, runtime=runtime),
         )
@@ -405,6 +501,32 @@ def test_llamaindex_metadata_filter_mapping_supports_all_retrieval_fields() -> N
     assert mapped[("review_status", None)] == "auto_ingested"
     assert mapped[("retrieved_at", ">=")] == retrieved_at.isoformat()
     assert mapped[("created_at", "<=")] == created_at.isoformat()
+
+
+def test_knowledge_embedding_vector_column_uses_pgvector_type() -> None:
+    vector_type = knowledge_embeddings.c.embedding_vector.type
+
+    assert not isinstance(vector_type, sa.Text)
+    assert vector_type.compile(dialect=postgresql.dialect()).lower() == "vector(8)"
+
+
+def test_knowledge_embedding_insert_binds_pgvector_type_for_postgresql() -> None:
+    embedding = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    statement = sa.insert(knowledge_embeddings).values(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        chunk_id=UUID("00000000-0000-0000-0000-000000000002"),
+        provider="test",
+        model="test-embedding",
+        embedding=embedding,
+        embedding_vector=embedding,
+        embedding_dimension=len(embedding),
+    )
+
+    compiled = statement.compile(dialect=postgresql.dialect())
+    vector_bind = compiled.binds["embedding_vector"]
+
+    assert not isinstance(vector_bind.type, sa.Text | sa.String)
+    assert vector_bind.type.compile(dialect=postgresql.dialect()).lower() == "vector(8)"
 
 
 def test_llamaindex_metadata_filters_can_be_built_with_injected_classes() -> None:
@@ -524,6 +646,8 @@ async def test_app_embedding_transform_attaches_embeddings_to_pipeline_nodes() -
     assert result == nodes
     assert nodes[0].embedding == [1.0]
     assert nodes[1].embedding == [2.0]
+    assert nodes[0].metadata == {"topic": "watering"}
+    assert nodes[1].metadata == {"topic": "light"}
     assert adapter.result is not None
     assert adapter.result.provider == "recording"
     assert adapter.result.model == "recording-model"

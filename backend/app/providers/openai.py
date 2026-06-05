@@ -201,12 +201,20 @@ class OpenAISearchProvider(SearchProvider):
 class OpenAIEmbeddingProvider(EmbeddingProvider):
     provider_name = "openai-embedding"
 
-    def __init__(self, *, api_key: str, model: str) -> None:
+    def __init__(self, *, api_key: str, model: str, embedding_dimension: int | None = None) -> None:
         self.model = model
+        self.embedding_dimension = embedding_dimension
         self._client = _client(api_key)
 
     async def create_embeddings(self, texts: list[str], **kwargs: Any) -> EmbeddingResult:
         model = kwargs.pop("model", self.model)
+        kwargs.pop("metadata", None)
+        if (
+            self.embedding_dimension is not None
+            and "dimensions" not in kwargs
+            and _supports_embedding_dimensions(model)
+        ):
+            kwargs["dimensions"] = self.embedding_dimension
         response = await _logged(
             provider=self.provider_name,
             role="embeddings",
@@ -214,6 +222,8 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             call=lambda: self._client.embeddings.create(model=model, input=texts, **kwargs),
         )
         embeddings = _embeddings_from_response(response, expected_count=len(texts))
+        if self.embedding_dimension is not None:
+            _validate_embedding_dimensions(embeddings, expected_dimension=self.embedding_dimension)
         return EmbeddingResult(
             provider=self.provider_name,
             model=model,
@@ -334,6 +344,21 @@ def _embeddings_from_response(response: Any, *, expected_count: int) -> list[lis
     if sorted(_embedding_index(item) for item in ordered) != list(range(expected_count)):
         raise OpenAIProviderError("OpenAI embedding response indexes did not match input order")
     return embeddings
+
+
+def _supports_embedding_dimensions(model: str) -> bool:
+    return model.startswith("text-embedding-3")
+
+
+def _validate_embedding_dimensions(
+    embeddings: list[list[float]], *, expected_dimension: int
+) -> None:
+    for index, embedding in enumerate(embeddings):
+        if len(embedding) != expected_dimension:
+            raise OpenAIProviderError(
+                "OpenAI embedding response dimension mismatch: "
+                f"expected {expected_dimension}, got {len(embedding)} at index {index}"
+            )
 
 
 def _embedding_index(item: Any) -> int:

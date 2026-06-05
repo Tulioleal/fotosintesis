@@ -3,9 +3,13 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.assistant.graph import AssistantGraph
+from app.assistant.schemas import AssistantChatRequest
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
+from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
 from app.knowledge.plant_data import StructuredPlantEvidence
@@ -150,6 +154,14 @@ class FakeTools:
                 "ingestion_error": self.plant_data_ingestion_error,
             },
         )
+
+
+class RollbackRecordingKnowledgeRepository:
+    def __init__(self) -> None:
+        self.rollback_calls = 0
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
 
 
 def _structured_evidence(
@@ -451,6 +463,45 @@ async def test_assistant_records_ingestion_failure_without_blocking_web_answer()
 
 
 @pytest.mark.asyncio
+async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeGraph:
+        async def run(self, *, user_id: UUID, message: str, plant_hint: str | None):
+            return {
+                "answer": "Respuesta sintetizada por modelo.",
+                "sources": [
+                    {
+                        "url": "https://example.org/watering",
+                        "title": "Trusted watering guide",
+                        "domain": "example.org",
+                    }
+                ],
+                "tool_failures": ["ingest_web_evidence failed: pgvector unavailable"],
+            }
+
+    monkeypatch.setattr(
+        "app.assistant.tools.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        response = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="Como debo regar mi Pata?", plant="Pata"),
+        )
+
+        messages = (await session.execute(select(conversation_messages))).all()
+
+    assert response.message.content == "Respuesta sintetizada por modelo."
+    assert "pgvector unavailable" in response.tool_failures[0]
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[1].metadata["tool_failures"] == response.tool_failures
+
+
+@pytest.mark.asyncio
 async def test_assistant_tools_passes_configured_providers_to_acquisition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -732,9 +783,10 @@ async def test_assistant_tools_reports_structured_ingestion_failure_without_fail
             raise AssertionError("Perenual should not be called when Trefle is sufficient")
 
     monkeypatch.setattr("app.assistant.tools.KnowledgeVectorIndex", FakeKnowledgeVectorIndex)
+    knowledge_repository = RollbackRecordingKnowledgeRepository()
     tools = AssistantTools(
         repository=object(),
-        knowledge_repository=object(),
+        knowledge_repository=knowledge_repository,
         providers=SimpleNamespace(trefle=FakeTrefle(), perenual=FakePerenual(), embeddings=object()),
     )
 
@@ -745,6 +797,45 @@ async def test_assistant_tools_reports_structured_ingestion_failure_without_fail
     assert result.ok is True
     assert result.data["evidence"].sufficient is True
     assert "pgvector unavailable" in result.data["ingestion_error"]
+    assert knowledge_repository.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_assistant_tools_rolls_back_failed_web_evidence_ingestion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeKnowledgeVectorIndex:
+        def __init__(self, repository):
+            pass
+
+        async def ingest_document(self, document, *, embedding_provider):
+            raise RuntimeError("pgvector dimension mismatch")
+
+    monkeypatch.setattr("app.assistant.tools.KnowledgeVectorIndex", FakeKnowledgeVectorIndex)
+    knowledge_repository = RollbackRecordingKnowledgeRepository()
+    tools = AssistantTools(
+        repository=object(),
+        knowledge_repository=knowledge_repository,
+        providers=SimpleNamespace(search=object(), embeddings=object()),
+        trusted_sources=TrustedSourceValidator(["example.org"]),
+    )
+
+    result = await tools.ingest_web_evidence(
+        scientific_name="Cotyledon tomentosa",
+        topic="watering",
+        results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    assert result.ok is False
+    assert "pgvector dimension mismatch" in result.error
+    assert knowledge_repository.rollback_calls == 1
 
 
 @pytest.mark.asyncio

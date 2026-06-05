@@ -10,6 +10,7 @@ from app.auth.tables import (
     knowledge_embeddings,
     knowledge_sources,
 )
+from app.core.settings import Settings, get_settings
 from app.knowledge.chunking import chunk_document
 from app.knowledge.schemas import (
     KnowledgeChunk,
@@ -21,8 +22,12 @@ from app.knowledge.schemas import (
 
 
 class KnowledgeRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
         self.session = session
+        self.settings = settings or get_settings()
+
+    async def rollback(self) -> None:
+        await self.session.rollback()
 
     async def save_document(
         self,
@@ -106,6 +111,7 @@ class KnowledgeRepository:
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             if chunk.id is None:
                 raise ValueError("Cannot store embedding for an unsaved chunk")
+            self._validate_embedding_dimension(embedding)
             await self.session.execute(
                 insert(knowledge_embeddings).values(
                     id=uuid4(),
@@ -113,11 +119,19 @@ class KnowledgeRepository:
                     provider=provider,
                     model=model,
                     embedding=embedding,
-                    embedding_vector=_vector_literal(embedding),
+                    embedding_vector=embedding,
                     embedding_dimension=len(embedding),
                 )
             )
         await self.session.commit()
+
+    def _validate_embedding_dimension(self, embedding: list[float]) -> None:
+        expected_dimension = self.settings.embedding_dimension
+        if len(embedding) != expected_dimension:
+            raise ValueError(
+                "Embedding dimension mismatch: "
+                f"expected {expected_dimension}, got {len(embedding)}"
+            )
 
     async def retrieve_chunks(
         self,
@@ -226,7 +240,3 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if left_norm == 0 or right_norm == 0:
         return 0.0
     return numerator / (left_norm * right_norm)
-
-
-def _vector_literal(embedding: list[float]) -> str:
-    return "[" + ",".join(str(value) for value in embedding) + "]"

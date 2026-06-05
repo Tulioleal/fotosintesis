@@ -139,6 +139,40 @@ The assistant MUST record trusted web-search or fallback persistence failures in
 - **WHEN** trusted web search returns usable evidence but fallback evidence persistence fails
 - **THEN** the assistant records the persistence failure and still returns the web-evidence answer with sources
 
+### Requirement: Fallback persistence failures do not poison chat persistence
+
+The assistant MUST keep fallback evidence persistence failures non-blocking and MUST preserve a usable database session for conversation persistence after those failures.
+
+#### Scenario: Fallback ingestion fails before chat message save
+
+- **WHEN** trusted web fallback evidence is available but fallback evidence ingestion, embedding or indexing fails
+- **THEN** the assistant records the persistence failure as non-blocking failure metadata
+- **AND** rolls back the failed persistence transaction before saving the assistant chat response
+
+#### Scenario: Chat response continues after fallback persistence failure
+
+- **WHEN** fallback evidence persistence fails after usable trusted evidence was found
+- **THEN** the assistant still returns the web-evidence answer with sources
+- **AND** the conversation and assistant message can be saved successfully
+
+### Requirement: Tool ingestion failures preserve chat persistence
+
+The assistant SHALL keep the chat database session usable after best-effort knowledge ingestion fails inside an assistant tool and is reported as a non-blocking tool failure.
+
+#### Scenario: Structured ingestion failure does not abort assistant response save
+
+- **WHEN** structured plant-data evidence is available but its knowledge ingestion fails after database work has started
+- **THEN** the assistant records the ingestion failure as tool failure metadata
+- **AND** rolls back the failed database transaction before continuing
+- **AND** saves and returns the assistant response for the chat request
+
+#### Scenario: Web evidence ingestion failure does not abort assistant response save
+
+- **WHEN** trusted web fallback evidence is available but fallback evidence ingestion fails after database work has started
+- **THEN** the assistant records the ingestion failure as tool failure metadata
+- **AND** rolls back the failed database transaction before continuing
+- **AND** saves and returns the assistant response for the chat request
+
 ### Requirement: Safety and failure handling
 
 The assistant MUST resist prompt injection and MUST NOT claim a failed tool action was completed.

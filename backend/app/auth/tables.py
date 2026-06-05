@@ -1,4 +1,5 @@
 import sqlalchemy as sa
+from pgvector.sqlalchemy import VECTOR
 
 
 metadata = sa.MetaData()
@@ -173,7 +174,7 @@ knowledge_embeddings = sa.Table(
     sa.Column("provider", sa.String(length=120), nullable=False),
     sa.Column("model", sa.String(length=120), nullable=True),
     sa.Column("embedding", sa.JSON(), nullable=False),
-    sa.Column("embedding_vector", sa.Text(), nullable=True),
+    sa.Column("embedding_vector", VECTOR(8).with_variant(sa.JSON(), "sqlite"), nullable=True),
     sa.Column("embedding_dimension", sa.Integer(), nullable=False),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
 )

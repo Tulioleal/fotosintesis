@@ -124,6 +124,7 @@ def _build_embedding_provider(provider: str, settings: object) -> EmbeddingProvi
             return OpenAIEmbeddingProvider(
                 api_key=_require_openai_api_key(settings.openai_api_key, role="embedding"),
                 model=settings.openai_embedding_model,
+                embedding_dimension=settings.embedding_dimension,
             )
     raise ValueError(f"Unsupported embedding provider: {provider}")
 

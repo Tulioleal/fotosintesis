@@ -486,6 +486,7 @@ def test_openai_embedding_selection_does_not_change_other_providers(
 
     assert isinstance(providers.embeddings, OpenAIEmbeddingProvider)
     assert providers.embeddings.model == "text-embedding-3-small"
+    assert providers.embeddings.embedding_dimension == 8
     assert providers.model.__class__.__name__ == "MockModelProvider"
     assert providers.vision.__class__.__name__ == "MockVisionPlantIdentificationProvider"
     assert providers.judge.__class__.__name__ == "MockModelProvider"
@@ -595,6 +596,64 @@ async def test_openai_embeddings_map_response_in_input_order(
     assert result.model == "text-embedding-3-small"
     assert result.embeddings == [[1.0, 1.5], [2.0, 2.5]]
     assert result.metadata == {"prompt_tokens": 7, "total_tokens": 9}
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_drop_metadata_and_use_configured_dimensions(
+    fake_openai_module: None,
+) -> None:
+    class FakeEmbeddings:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(
+                data=[types.SimpleNamespace(index=0, embedding=[0.1] * 8)],
+                usage=types.SimpleNamespace(prompt_tokens=1, total_tokens=1),
+            )
+
+    embeddings = FakeEmbeddings()
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-3-small",
+        embedding_dimension=8,
+    )
+    provider._client = types.SimpleNamespace(embeddings=embeddings)
+
+    result = await provider.create_embeddings(
+        ["first"],
+        metadata=[{"topic": "watering"}],
+    )
+
+    assert embeddings.kwargs == {
+        "model": "text-embedding-3-small",
+        "input": ["first"],
+        "dimensions": 8,
+    }
+    assert len(result.embeddings[0]) == 8
+
+
+@pytest.mark.asyncio
+async def test_openai_embeddings_reject_wrong_configured_dimension(
+    fake_openai_module: None,
+) -> None:
+    class FakeEmbeddings:
+        async def create(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(
+                data=[types.SimpleNamespace(index=0, embedding=[0.1, 0.2, 0.3])],
+                usage=types.SimpleNamespace(prompt_tokens=1, total_tokens=1),
+            )
+
+    provider = OpenAIEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-3-small",
+        embedding_dimension=8,
+    )
+    provider._client = types.SimpleNamespace(embeddings=FakeEmbeddings())
+
+    with pytest.raises(OpenAIProviderError, match="expected 8, got 3"):
+        await provider.create_embeddings(["first"])
 
 
 @pytest.mark.asyncio

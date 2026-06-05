@@ -75,6 +75,29 @@ The system SHALL create embeddings after successful ingestion, persist them into
 - **WHEN** LlamaIndex returns matching vector nodes
 - **THEN** the system maps retrieved nodes back to structured knowledge chunks with document, source, confidence, review status and date metadata
 
+### Requirement: Pgvector embedding persistence contract
+
+The system SHALL persist knowledge embedding vectors using a database binding compatible with the PostgreSQL pgvector column type and the configured embedding dimension.
+
+#### Scenario: Embedding vector insert uses pgvector-compatible binding
+
+- **WHEN** a knowledge chunk embedding is persisted to `knowledge_embeddings.embedding_vector`
+- **THEN** the insert value is bound or cast as a pgvector-compatible vector value rather than as `VARCHAR`
+
+#### Scenario: Embedding dimension remains validated
+
+- **WHEN** an embedding dimension does not match the configured embedding dimension
+- **THEN** the system rejects the embedding before persisting it
+
+### Requirement: JSON formatted acquisition prompt
+
+The system SHALL make structured knowledge acquisition prompts compatible with provider JSON object response formatting.
+
+#### Scenario: OpenAI JSON object formatting is requested
+
+- **WHEN** the acquisition flow calls the configured model provider with JSON object response formatting
+- **THEN** the input prompt explicitly instructs the provider to return JSON
+
 ### Requirement: Structured API fallback before trusted web acquisition
 
 The system SHALL attempt structured plant-data API evidence after LlamaIndex pgvector retrieval is unavailable or insufficient and before trusted web search/page-fetch acquisition.
@@ -215,3 +238,28 @@ The system MUST NOT block the user experience completely when structured plant-d
 
 - **WHEN** the LlamaIndex pgvector retriever cannot query or index evidence
 - **THEN** the system attempts eligible structured plant-data lookup and then returns a degraded result with a limitation notice and retry or manual search path instead of silently using SQL-only vector retrieval as the successful path
+
+### Requirement: Failed acquisition rolls back poisoned transactions
+
+The system SHALL roll back failed database work before returning degraded acquisition or fallback results when best-effort knowledge ingestion, embedding persistence or vector indexing fails.
+
+#### Scenario: Trusted acquisition persistence fails after database work starts
+
+- **WHEN** trusted acquisition attempts to persist or index generated knowledge and the operation fails after database work has started
+- **THEN** the system rolls back the failed transaction before returning a degraded acquisition result
+- **AND** the same request can continue using the database session for later assistant persistence
+
+#### Scenario: Fallback evidence persistence failure is isolated
+
+- **WHEN** fallback web evidence ingestion fails after usable web evidence exists
+- **THEN** the system reports the persistence failure as non-blocking tool failure metadata
+- **AND** the failed transaction is rolled back before the assistant response is generated or saved
+
+### Requirement: Acquisition failure transaction recovery
+
+The system MUST recover the active database transaction after best-effort knowledge acquisition persistence or embedding failure before continuing with later database writes.
+
+#### Scenario: Best-effort acquisition persistence fails
+
+- **WHEN** trusted knowledge acquisition, embedding persistence or vector indexing fails in a path that continues execution
+- **THEN** the system rolls back the failed transaction before performing subsequent database writes
