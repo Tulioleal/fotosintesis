@@ -53,6 +53,10 @@
   padding: 0.9rem 1rem;
 }
 
+.messageContent {
+  white-space: pre-wrap;
+}
+
 .messageGroup {
   display: grid;
   gap: 0.65rem;

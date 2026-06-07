@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select
 
-from app.assistant.graph import AssistantGraph
-from app.assistant.schemas import AssistantChatRequest
+from app.assistant.graph import AssistantGraph, _grounded_answer_prompt
+from app.assistant.schemas import AssistantChatRequest, AssistantMessage
 from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
@@ -198,6 +198,33 @@ def test_assistant_chat_request_accepts_legacy_plant_payload() -> None:
     assert payload.plant == "Pata"
     assert payload.plant_binomial_name is None
     assert payload.plant_scientific_name is None
+
+
+def test_assistant_message_defaults_to_plain_text_content_format() -> None:
+    message = AssistantMessage(role="assistant", content="Respuesta")
+
+    assert message.content_format == "plain_text"
+
+
+def test_grounded_answer_prompt_requires_plain_text_output() -> None:
+    prompt = _grounded_answer_prompt(
+        user_message="Como debo regar mi Pata?",
+        plant_name="Cotyledon tomentosa",
+        topic="watering",
+        evidence_type="rag",
+        evidence="Requiere riego moderado.",
+        limitations=[],
+        source_metadata=[],
+        extra_context="",
+    )
+
+    assert "texto plano solamente" in prompt
+    assert "No uses Markdown" in prompt
+    assert "HTML" in prompt
+    assert "tablas" in prompt
+    assert "bloques de codigo" in prompt
+    assert "headings" in prompt
+    assert "listas con viñetas o numeradas" in prompt
 
 
 @pytest.mark.asyncio
@@ -576,8 +603,10 @@ async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
         messages = (await session.execute(select(conversation_messages))).all()
 
     assert response.message.content == "Respuesta sintetizada por modelo."
+    assert response.message.content_format == "plain_text"
     assert "pgvector unavailable" in response.tool_failures[0]
     assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[1].metadata["content_format"] == "plain_text"
     assert messages[1].metadata["tool_failures"] == response.tool_failures
 
 

@@ -2,12 +2,21 @@
 
 import { FormEvent, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiClient, type AssistantReminderSuggestion, type AssistantSource, type ReminderCreate } from "@/lib/api/client";
+import {
+  apiClient,
+  type AssistantMessage,
+  type AssistantReminderSuggestion,
+  type AssistantSource,
+  type ReminderCreate,
+} from "@/lib/api/client";
 import styles from "./AssistantChat.module.scss";
+
+type AssistantMessageContentFormat = NonNullable<AssistantMessage["content_format"]>;
 
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  contentFormat?: AssistantMessageContentFormat | null;
   reminderSuggestion?: AssistantReminderSuggestion | null;
   suggestionStatus?: "accepted" | "error";
 };
@@ -53,7 +62,12 @@ export function AssistantChat() {
       setConversationId(response.conversation_id);
       setMessages((current) => [
         ...current,
-        { role: "assistant", content: response.message.content, reminderSuggestion: response.reminder_suggestion },
+        {
+          role: "assistant",
+          content: response.message.content,
+          contentFormat: response.message.content_format,
+          reminderSuggestion: response.reminder_suggestion,
+        },
       ]);
       setSources(response.sources);
     } catch (caught) {
@@ -112,7 +126,11 @@ export function AssistantChat() {
             <article
               className={`${styles.message} ${item.role === "user" ? styles.user : styles.assistantMessage}`}
             >
-              {item.content}
+              {item.role === "assistant" ? (
+                <AssistantMessageContent content={item.content} contentFormat={item.contentFormat} />
+              ) : (
+                item.content
+              )}
             </article>
             {item.reminderSuggestion ? (
               <article className={styles.suggestionCard}>
@@ -164,6 +182,17 @@ export function AssistantChat() {
       ) : null}
     </section>
   );
+}
+
+export function AssistantMessageContent({
+  content,
+  contentFormat = "plain_text",
+}: {
+  content: string;
+  contentFormat?: AssistantMessageContentFormat | null;
+}) {
+  void contentFormat;
+  return <span className={styles.messageContent}>{content}</span>;
 }
 
 function formatDateTime(value: string) {

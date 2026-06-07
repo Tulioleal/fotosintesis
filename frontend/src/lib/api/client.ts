@@ -21,28 +21,11 @@ export type MeasurementReliability = components["schemas"]["MeasurementReliabili
 export type MeasurementSource = components["schemas"]["MeasurementSource"];
 export type LightMeasurementCreate = components["schemas"]["LightMeasurementCreate"];
 export type LightMeasurement = components["schemas"]["LightMeasurementDto"];
-export type AssistantSource = {
-  title?: string | null;
-  url: string;
-  domain?: string | null;
-  confidence?: number | null;
-};
+export type AssistantSource = components["schemas"]["AssistantSource"];
+export type AssistantMessage = components["schemas"]["AssistantMessage"];
 export type AssistantReminderSuggestion = components["schemas"]["AssistantReminderSuggestion"];
-export type AssistantChatRequest = {
-  message: string;
-  conversation_id?: string | null;
-  plant?: string | null;
-  plant_binomial_name?: string | null;
-  plant_scientific_name?: string | null;
-};
-export type AssistantChatResponse = {
-  conversation_id: string;
-  message: { role: string; content: string; created_at?: string | null };
-  sources: AssistantSource[];
-  requires_confirmation: boolean;
-  reminder_suggestion?: AssistantReminderSuggestion | null;
-  tool_failures: string[];
-};
+export type AssistantChatRequest = components["schemas"]["AssistantChatRequest"];
+export type AssistantChatResponse = components["schemas"]["AssistantChatResponse"];
 
 type ErrorPayload = {
   detail?: string;

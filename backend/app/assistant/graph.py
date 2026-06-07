@@ -754,6 +754,8 @@ def _grounded_answer_prompt(
     )
     return (
         "Sos un asistente botanico para cuidado de plantas. Responde en español claro, directo y practico. "
+        "Formato de salida: texto plano solamente. No uses Markdown, HTML, tablas, bloques de codigo, "
+        "headings ni listas con viñetas o numeradas. "
         "Usa la evidencia provista como base; no inventes umbrales, tratamientos, diagnosticos ni recomendaciones no respaldadas. "
         "Cuando la evidencia sea limitada, incompleta o degradada, no abras con una disculpa ni bloquees la respuesta: "
         "da primero una guia practica respaldada por la evidencia y menciona la limitacion una sola vez al final, de forma breve. "

@@ -114,6 +114,15 @@
             "title": "Content",
             "type": "string"
           },
+          "content_format": {
+            "default": "plain_text",
+            "enum": [
+              "plain_text",
+              "markdown"
+            ],
+            "title": "Content Format",
+            "type": "string"
+          },
           "created_at": {
             "anyOf": [
               {

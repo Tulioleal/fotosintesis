@@ -377,6 +377,12 @@ export interface components {
         AssistantMessage: {
             /** Content */
             content: string;
+            /**
+             * Content Format
+             * @default plain_text
+             * @enum {string}
+             */
+            content_format: "plain_text" | "markdown";
             /** Created At */
             created_at?: string | null;
             /** Role */

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AssistantChat } from "./AssistantChat";
+import { AssistantChat, AssistantMessageContent } from "./AssistantChat";
 
 const mocks = vi.hoisted(() => ({
   createReminder: vi.fn(),
@@ -27,7 +27,11 @@ describe("AssistantChat", () => {
     mocks.createReminder.mockResolvedValue({ id: "reminder-1" });
     mocks.sendAssistantMessage.mockResolvedValue({
       conversation_id: "conversation-1",
-      message: { role: "assistant", content: "Tengo una sugerencia lista para confirmar." },
+      message: {
+        role: "assistant",
+        content: "Tengo una sugerencia lista para confirmar.",
+        content_format: "plain_text",
+      },
       sources: [],
       requires_confirmation: true,
       reminder_suggestion: {
@@ -123,5 +127,61 @@ describe("AssistantChat", () => {
         plant_scientific_name: null,
       });
     });
+  });
+
+  it("renders assistant plain text with newline characters preserved in content", async () => {
+    mocks.sendAssistantMessage.mockResolvedValue({
+      conversation_id: "conversation-1",
+      message: { role: "assistant", content: "Linea uno\nLinea dos", content_format: "plain_text" },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Como riego?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    const content = await screen.findByText(
+      (_, element) => element?.tagName === "SPAN" && element.textContent === "Linea uno\nLinea dos",
+    );
+
+    expect(content).toBeInTheDocument();
+    expect(content.className).toContain("messageContent");
+  });
+
+  it("renders markdown format as raw text without parsing", async () => {
+    mocks.sendAssistantMessage.mockResolvedValue({
+      conversation_id: "conversation-1",
+      message: { role: "assistant", content: "**No parsear**", content_format: "markdown" },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Como riego?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("**No parsear**")).toBeInTheDocument();
+    expect(screen.queryByText("No parsear", { selector: "strong" })).not.toBeInTheDocument();
+  });
+
+  it("renders missing and unsupported content formats as raw text", () => {
+    const { rerender } = render(<AssistantMessageContent content="Sin formato" />);
+
+    expect(screen.getByText("Sin formato")).toBeInTheDocument();
+
+    rerender(<AssistantMessageContent content="Formato futuro" contentFormat={"future" as never} />);
+
+    expect(screen.getByText("Formato futuro")).toBeInTheDocument();
   });
 });

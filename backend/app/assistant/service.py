@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assistant.graph import AssistantGraph, display_plant_name, operational_plant_name
 from app.assistant.repository import AssistantRepository
-from app.assistant.schemas import AssistantChatRequest, AssistantChatResponse, AssistantMessage, AssistantSource
+from app.assistant.schemas import (
+    DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
+    AssistantChatRequest,
+    AssistantChatResponse,
+    AssistantMessage,
+    AssistantSource,
+)
 from app.assistant.tools import AssistantTools
 from app.knowledge.repository import KnowledgeRepository
 
@@ -68,11 +74,19 @@ class AssistantService:
             conversation_id=conversation_id,
             role="assistant",
             content=answer,
-            metadata={"sources": state.get("sources", []), "tool_failures": state.get("tool_failures", [])},
+            metadata={
+                "content_format": DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
+                "sources": state.get("sources", []),
+                "tool_failures": state.get("tool_failures", []),
+            },
         )
         return AssistantChatResponse(
             conversation_id=conversation_id,
-            message=AssistantMessage(role="assistant", content=answer),
+            message=AssistantMessage(
+                role="assistant",
+                content=answer,
+                content_format=DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
+            ),
             sources=[AssistantSource.model_validate(source) for source in state.get("sources", [])],
             requires_confirmation=bool(state.get("requires_confirmation")),
             reminder_suggestion=state.get("reminder_suggestion"),

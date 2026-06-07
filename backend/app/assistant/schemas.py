@@ -1,8 +1,13 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from app.schemas.common import ApiSchema
 from app.schemas.reminders import ReminderRecurrence
+
+
+AssistantMessageContentFormat = Literal["plain_text", "markdown"]
+DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT: AssistantMessageContentFormat = "plain_text"
 
 
 class AssistantSource(ApiSchema):
@@ -15,6 +20,7 @@ class AssistantSource(ApiSchema):
 class AssistantMessage(ApiSchema):
     role: str
     content: str
+    content_format: AssistantMessageContentFormat = DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT
     created_at: datetime | None = None
 
 
