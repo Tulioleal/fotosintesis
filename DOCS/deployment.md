@@ -102,7 +102,12 @@ EMBEDDING_PROVIDER=mock
 OPENAI_TEXT_MODEL=gpt-5.4
 OPENAI_VISION_MODEL=gpt-5.4
 OPENAI_JUDGE_MODEL=gpt-5.4
+OPENAI_SEARCH_MODEL=gpt-5.4
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+GEMINI_TEXT_MODEL=gemini-2.5-flash
+GEMINI_VISION_MODEL=gemini-2.5-flash
+GEMINI_JUDGE_MODEL=gemini-2.5-flash
+GEMINI_SEARCH_MODEL=gemini-2.5-flash
 EMBEDDING_DIMENSION=8
 RUNTIME_SECRET_NAME=fotosintesis-runtime
 EOF
@@ -112,6 +117,25 @@ For OpenAI embeddings, set `EMBEDDING_PROVIDER=openai`, provide `OPENAI_API_KEY`
 `OPENAI_EMBEDDING_MODEL`, and set `EMBEDDING_DIMENSION` to the selected model's vector size
 and the existing pgvector table dimension. Changing dimensions requires rebuilding or migrating
 stored vectors before rollout.
+
+To run Gemini for all non-embedding AI roles, keep embeddings on OpenAI and configure:
+
+```env
+MODEL_PROVIDER=gemini
+VISION_PROVIDER=gemini
+JUDGE_PROVIDER=gemini
+SEARCH_PROVIDER=gemini
+EMBEDDING_PROVIDER=openai
+GEMINI_TEXT_MODEL=gemini-2.5-flash
+GEMINI_VISION_MODEL=gemini-2.5-flash
+GEMINI_JUDGE_MODEL=gemini-2.5-flash
+GEMINI_SEARCH_MODEL=gemini-2.5-flash
+```
+
+This runtime requires `GEMINI_API_KEY` for Gemini model, vision, judge and search roles, plus
+`OPENAI_API_KEY` for OpenAI embeddings. `SEARCH_PROVIDER=gemini` uses Gemini Google Search
+grounding and should be smoke-tested with a real `/health` request and an `/assistant/chat`
+question that requires live botanical evidence before production rollout.
 
 These values map to OpenTofu outputs:
 

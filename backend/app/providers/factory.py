@@ -17,6 +17,12 @@ from app.providers.mocks import (
     MockTreflePlantDataProvider,
     MockVisionPlantIdentificationProvider,
 )
+from app.providers.gemini import (
+    GeminiJudgeProvider,
+    GeminiModelProvider,
+    GeminiSearchProvider,
+    GeminiVisionProvider,
+)
 from app.providers.openai import (
     OpenAIEmbeddingProvider,
     OpenAIJudgeProvider,
@@ -62,6 +68,12 @@ def _require_openai_api_key(value: str | None, *, role: str) -> str:
     return value
 
 
+def _require_gemini_api_key(value: str | None, *, role: str) -> str:
+    if not value:
+        raise ValueError(f"GEMINI_API_KEY is required when {role} provider is gemini")
+    return value
+
+
 def _require_api_key(value: str | None, *, env_name: str, role: str) -> str:
     if not value:
         raise ValueError(f"{env_name} is required when {role} provider is real")
@@ -77,6 +89,11 @@ def _build_model_provider(provider: str, settings: object) -> ModelProvider:
                 api_key=_require_openai_api_key(settings.openai_api_key, role="model"),
                 model=settings.openai_text_model,
             )
+        case "gemini":
+            return GeminiModelProvider(
+                api_key=_require_gemini_api_key(settings.gemini_api_key, role="model"),
+                model=settings.gemini_text_model,
+            )
     raise ValueError(f"Unsupported model provider: {provider}")
 
 
@@ -88,6 +105,11 @@ def _build_vision_provider(provider: str, settings: object) -> ImageAnalysisProv
             return OpenAIVisionProvider(
                 api_key=_require_openai_api_key(settings.openai_api_key, role="vision"),
                 model=settings.openai_vision_model,
+            )
+        case "gemini":
+            return GeminiVisionProvider(
+                api_key=_require_gemini_api_key(settings.gemini_api_key, role="vision"),
+                model=settings.gemini_vision_model,
             )
     raise ValueError(f"Unsupported vision provider: {provider}")
 
@@ -101,6 +123,11 @@ def _build_judge_provider(provider: str, settings: object) -> JudgeEvaluationPro
                 api_key=_require_openai_api_key(settings.openai_api_key, role="judge"),
                 model=settings.openai_judge_model,
             )
+        case "gemini":
+            return GeminiJudgeProvider(
+                api_key=_require_gemini_api_key(settings.gemini_api_key, role="judge"),
+                model=settings.gemini_judge_model,
+            )
     raise ValueError(f"Unsupported judge provider: {provider}")
 
 
@@ -112,6 +139,11 @@ def _build_search_provider(provider: str, settings: object) -> SearchProvider:
             return OpenAISearchProvider(
                 api_key=_require_openai_api_key(settings.openai_api_key, role="search"),
                 model=settings.openai_search_model,
+            )
+        case "gemini":
+            return GeminiSearchProvider(
+                api_key=_require_gemini_api_key(settings.gemini_api_key, role="search"),
+                model=settings.gemini_search_model,
             )
     raise ValueError(f"Unsupported search provider: {provider}")
 

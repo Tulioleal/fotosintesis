@@ -102,6 +102,26 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: OPENAI_EMBEDDING_MODEL
+            - name: GEMINI_TEXT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_TEXT_MODEL
+            - name: GEMINI_VISION_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_VISION_MODEL
+            - name: GEMINI_JUDGE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_JUDGE_MODEL
+            - name: GEMINI_SEARCH_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_SEARCH_MODEL
             - name: EMBEDDING_DIMENSION
               valueFrom:
                 configMapKeyRef:
@@ -112,6 +132,12 @@ spec:
                 secretKeyRef:
                   name: __RUNTIME_SECRET_NAME__
                   key: openai-api-key
+                  optional: true
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: gemini-api-key
                   optional: true
           readinessProbe:
             httpGet:

@@ -36,6 +36,7 @@ class KnowledgeDocumentInput(BaseModel):
     review_status: ReviewStatus = ReviewStatus.auto_ingested
     species_id: UUID | None = None
     sources: list[KnowledgeSourceInput]
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class KnowledgeChunk(BaseModel):
@@ -65,6 +66,8 @@ class KnowledgeRetrievalFilters(BaseModel):
     source_url: str | None = None
     min_confidence: float | None = Field(default=None, ge=0, le=1)
     review_status: ReviewStatus | None = None
+    covered_aspect: str | None = None
+    evidence_type: str | None = None
     retrieved_after: datetime | None = None
     retrieved_before: datetime | None = None
     created_after: datetime | None = None

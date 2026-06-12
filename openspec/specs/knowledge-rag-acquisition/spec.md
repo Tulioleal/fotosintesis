@@ -34,32 +34,116 @@ The system SHALL use LlamaIndex `PGVectorStore` and `VectorStoreIndex` backed by
 
 ### Requirement: Trusted source acquisition
 
-The system MUST restrict incremental acquisition and assistant fallback evidence persistence to approved or explicitly validated trusted sources, regardless of whether search results come from the mock search provider, the configured OpenAI search provider, or assistant fallback web search.
+The system MUST restrict incremental acquisition and assistant fallback evidence persistence to approved, explicitly validated trusted sources, or one explicitly marked external fallback source selected by the assistant trusted-first web search policy. External fallback evidence MUST be distinguishable from trusted-domain evidence and MUST NOT be treated as trusted-source evidence.
 
-#### Scenario: Untrusted source is sole result
+#### Scenario: Untrusted source is sole result outside fallback policy
 
-- **WHEN** only blogs, stores, unmoderated forums or non-persistent URLs are available
-- **THEN** the system does not use them as the sole basis for persistent knowledge
+- **WHEN** only blogs, stores, unmoderated forums or non-persistent URLs are available outside the assistant external fallback policy
+- **THEN** the system does not use them as the sole basis for persistent trusted knowledge
 
 #### Scenario: OpenAI search returns mixed trust results
 
 - **WHEN** OpenAI-backed search returns both trusted and untrusted source URLs
-- **THEN** the acquisition flow uses the existing trusted-source validation rules before persisting or using acquired knowledge
+- **THEN** the acquisition flow uses the existing trusted-source validation rules before persisting or using acquired trusted knowledge
 
-#### Scenario: Assistant fallback persistence receives untrusted web results
+#### Scenario: Gemini search returns mixed trust results
 
-- **WHEN** assistant fallback web search returns usable results that fail trusted-source validation
+- **WHEN** Gemini-backed search returns both allowed-domain and external source URLs
+- **THEN** the assistant trusted-first search policy uses allowed-domain results before considering any external fallback result
+
+#### Scenario: Assistant fallback persistence receives untrusted web results outside fallback policy
+
+- **WHEN** assistant fallback web search returns usable results that fail trusted-source validation and are not the selected external fallback result
 - **THEN** the system does not persist, chunk, embed or index those results as knowledge
 
 #### Scenario: Assistant fallback persistence receives mixed trust results
 
 - **WHEN** assistant fallback web evidence includes both trusted and untrusted source URLs
-- **THEN** the system persists, chunks, embeds and indexes only the trusted fallback results through the existing knowledge ingestion path
+- **THEN** the system persists, chunks, embeds and indexes only the trusted fallback results through the existing knowledge ingestion path unless the assistant trusted-first policy selected exactly one external fallback result because no allowed-domain results were available
 
 #### Scenario: Assistant fallback search requests trusted domains
 
 - **WHEN** the assistant runs fallback web search after insufficient RAG evidence
-- **THEN** the system passes the configured trusted source domains to the search provider when the provider supports domain filtering
+- **THEN** the system passes the configured trusted source domains to the search provider when the provider supports domain filtering or domain guidance
+
+### Requirement: Aspect-aware evidence validation
+
+Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL combine LLM semantic validation with deterministic guardrails and SHALL return answerability, covered aspects, missing aspects, unsupported-claim risk, reason, and confidence.
+
+#### Scenario: Generic care evidence fails specific aspect validation
+
+- **WHEN** retrieved RAG evidence contains generic plant-care information but does not directly cover the requested watering frequency aspect
+- **THEN** evidence validation does not mark `watering_frequency_or_trigger` as covered
+- **AND** the evidence is not treated as fully answerable for that aspect
+
+#### Scenario: Covered aspects constrained to request
+
+- **WHEN** evidence validation returns covered aspects
+- **THEN** every covered aspect is a subset of the requested `required_aspects`
+
+#### Scenario: Missing aspects make evidence partially answerable
+
+- **WHEN** validation covers only some requested required aspects
+- **THEN** the validation result marks the uncovered requested aspects as missing and does not mark the evidence fully answerable
+
+#### Scenario: Low-confidence validation rejected
+
+- **WHEN** validation confidence is below the configured evidence validation threshold
+- **THEN** the evidence is treated as not answerable for the requested aspects
+
+#### Scenario: Safety-sensitive validation uses higher threshold
+
+- **WHEN** the requested aspect is safety-sensitive, including pet toxicity or human edibility
+- **THEN** validation requires direct evidence and the configured safety-sensitive threshold before marking the aspect covered
+
+### Requirement: Targeted missing-aspect web fallback
+
+Trusted web fallback for assistant plant-care answers SHALL run only after local evidence validation fails to cover all requested required aspects. Web search SHALL target the missing aspects only, using confirmed taxonomy as the plant term and excluding nicknames, display names, and classifier plant references from search construction.
+
+#### Scenario: RAG covers no requested aspects
+
+- **WHEN** local RAG validation covers none of the requested required aspects
+- **THEN** trusted web fallback searches for all requested required aspects using confirmed taxonomy
+
+#### Scenario: RAG covers some requested aspects
+
+- **WHEN** local RAG validation covers some requested required aspects and leaves others missing
+- **THEN** trusted web fallback searches only for the missing required aspects using confirmed taxonomy
+
+#### Scenario: Search query excludes display name
+
+- **WHEN** the display plant name differs from confirmed taxonomy
+- **THEN** trusted web fallback query construction uses `plant_binomial_name` or `plant_scientific_name` and does not use the display name, nickname, apodo, or classifier plant reference
+
+#### Scenario: Web fallback skipped when local evidence complete
+
+- **WHEN** local evidence validation covers all requested required aspects above threshold
+- **THEN** trusted web fallback is not called for that answer
+
+### Requirement: Validated web evidence persistence metadata
+
+The system SHALL persist assistant web fallback evidence only when that web evidence has been validated as relevant to at least one requested required aspect. Persisted validated web evidence SHALL include filterable metadata for confirmed taxonomy, topic, required aspects, covered aspects, language, evidence type, validation confidence, source domain when available, review status, and source provenance.
+
+#### Scenario: Validated web evidence is persisted with covered aspects
+
+- **WHEN** trusted web evidence validates above threshold for one or more requested required aspects
+- **THEN** the system persists, chunks, embeds, and indexes only the validated relevant evidence
+- **AND** persisted metadata includes `covered_aspects`, `required_aspects`, `topic`, `language`, `evidence_type: "validated_web"`, validation confidence, source domain when available, and `review_status: "auto_ingested"`
+
+#### Scenario: Unvalidated web evidence is not persisted
+
+- **WHEN** web evidence is selected by search but fails aspect validation or falls below the validation threshold
+- **THEN** the system does not persist, chunk, embed, or index that evidence
+
+#### Scenario: Multi-source web validation persists only relevant evidence
+
+- **WHEN** web fallback returns multiple candidate sources and only some validate against requested aspects
+- **THEN** the system persists only the validated relevant sources and excludes unvalidated or off-aspect sources from embeddings
+
+#### Scenario: Validated web evidence remains filterable
+
+- **WHEN** validated web evidence is persisted
+- **THEN** future retrieval can filter or constrain results by confirmed taxonomy, topic, covered aspects, review status, evidence type, and source domain when available
 
 ### Requirement: Re-embedding and re-retrieval
 
@@ -188,22 +272,48 @@ The system SHALL persist fetched trusted page content through the existing knowl
 
 ### Requirement: Assistant fallback web evidence persistence
 
-The system SHALL persist assistant fallback web evidence through the existing trusted knowledge ingestion path when web-search results are used to answer after insufficient RAG evidence.
+The system SHALL persist assistant fallback web evidence through the existing knowledge ingestion path only when selected web-search results are independently validated for at least one requested missing care aspect. Trusted-domain fallback evidence SHALL retain trusted provenance, while selected external fallback evidence SHALL be persisted as lower-confidence auto-ingested evidence with source validation status `external_fallback`. Each independently validated fallback source SHALL be persisted as a separate knowledge document with source-specific covered aspects and validation confidence.
 
-#### Scenario: Fallback evidence is ingested
+#### Scenario: Trusted fallback evidence is ingested
 
 - **WHEN** the assistant answers a botanical question from trusted web-search results because RAG evidence was insufficient
-- **THEN** the system builds a knowledge document from the web snippets and source metadata, marks it `auto_ingested`, and ingests it through the LlamaIndex-backed knowledge vector index
+- **THEN** the system builds one knowledge document per independently validated trusted source from that source's web snippet or fetched page content and source metadata, marks each document `auto_ingested`, and ingests each document through the LlamaIndex-backed knowledge vector index
+- **AND** each source validation status remains trusted
+
+#### Scenario: External fallback evidence is ingested
+
+- **WHEN** the assistant answers a botanical question from one selected external fallback web result because RAG evidence was insufficient and no allowed-domain search results were returned
+- **THEN** the system builds a knowledge document from that independently validated fallback evidence and source metadata
+- **AND** the document is marked `auto_ingested`
+- **AND** the document confidence is lower than trusted-domain web evidence confidence
+- **AND** the source validation status is `external_fallback`
 
 #### Scenario: Fallback evidence is embedded and indexed
 
-- **WHEN** fallback web evidence ingestion succeeds
-- **THEN** the system chunks, embeds, persists and indexes the evidence using the configured embedding provider so future retrieval can find it
+- **WHEN** fallback web evidence ingestion succeeds for an independently validated source
+- **THEN** the system chunks, embeds, persists and indexes that source's evidence using the configured embedding provider so future retrieval can find it
 
 #### Scenario: Fallback evidence persistence is best effort
 
 - **WHEN** fallback evidence ingestion, embedding or indexing fails after usable web evidence was found
 - **THEN** the system does not block the assistant answer and records the persistence limitation for observability or response metadata
+
+#### Scenario: Off-aspect fallback evidence is not persisted
+
+- **WHEN** assistant fallback web search returns a trusted source that does not independently validate for any requested missing aspect
+- **THEN** the system does not persist, chunk, embed or vector-index that source
+
+#### Scenario: Source-specific aspects are persisted
+
+- **WHEN** multiple fallback web sources independently validate for different requested missing aspects
+- **THEN** the system persists each validated source as a separate knowledge document
+- **AND** each document metadata includes only that source's validated `covered_aspects`
+- **AND** each document metadata includes that source's validation confidence
+
+#### Scenario: Overall web validation confidence remains conservative
+
+- **WHEN** multiple independently validated web sources are used for one fallback answer
+- **THEN** the fallback answer's overall web validation confidence is the minimum validation confidence among the included validated sources
 
 ### Requirement: Snippet degradation remains available
 

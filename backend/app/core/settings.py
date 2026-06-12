@@ -24,13 +24,20 @@ class Settings(BaseSettings):
     trefle_provider: str = "mock"
     perenual_provider: str = "mock"
     openai_api_key: str | None = None
+    gemini_api_key: str | None = None
     trefle_api_key: str | None = None
     perenual_api_key: str | None = None
     openai_text_model: str = "gpt-5.4"
+    openai_classifier_model: str = "gpt-5.4-mini"
     openai_vision_model: str = "gpt-5.4"
     openai_judge_model: str = "gpt-5.4"
     openai_search_model: str = "gpt-5.4"
     openai_embedding_model: str = "text-embedding-3-small"
+    gemini_text_model: str = "gemini-2.5-flash"
+    gemini_classifier_model: str = "gemini-2.5-flash-lite"
+    gemini_vision_model: str = "gemini-2.5-flash"
+    gemini_judge_model: str = "gemini-2.5-flash"
+    gemini_search_model: str = "gemini-2.5-flash"
     log_level: str = "INFO"
     tracing_enabled: bool = True
     session_cookie_name: str = "fotosintesis_session"
@@ -39,6 +46,10 @@ class Settings(BaseSettings):
     recovery_token_ttl_minutes: int = 30
     knowledge_vector_table: str = "knowledge_embeddings"
     embedding_dimension: int = 8
+    assistant_classifier_timeout_seconds: float = 8.0
+    assistant_classification_accept_threshold: float = 0.70
+    assistant_evidence_validation_threshold: float = 0.75
+    assistant_safety_validation_threshold: float = 0.85
     trusted_source_domains: list[str] = [
         "www.rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",

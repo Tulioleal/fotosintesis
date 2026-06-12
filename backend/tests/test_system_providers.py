@@ -7,6 +7,14 @@ from httpx import ASGITransport, AsyncClient
 from app.core.settings import get_settings
 from app.main import app
 from app.providers.factory import get_provider_registry
+from app.providers.gemini import (
+    GeminiJudgeProvider,
+    GeminiModelProvider,
+    GeminiProviderError,
+    GeminiSearchProvider,
+    GeminiVisionProvider,
+    _VISION_SCHEMA,
+)
 from app.providers.openai import (
     OpenAIEmbeddingProvider,
     OpenAIJudgeProvider,
@@ -16,6 +24,7 @@ from app.providers.openai import (
     OpenAIVisionProvider,
 )
 from app.providers.plant_data import PerenualPlantDataProvider, TreflePlantDataProvider
+from app.providers.types import SearchResult
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +37,7 @@ def reset_provider_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TREFLE_PROVIDER", "mock")
     monkeypatch.setenv("PERENUAL_PROVIDER", "mock")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("TREFLE_API_KEY", "")
     monkeypatch.setenv("PERENUAL_API_KEY", "")
     get_settings.cache_clear()
@@ -55,6 +65,49 @@ def fake_openai_module(monkeypatch: pytest.MonkeyPatch) -> None:
             self.embeddings = FakeEmbeddings()
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI))
+
+
+@pytest.fixture
+def fake_gemini_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    google_module = types.ModuleType("google")
+    genai_module = types.ModuleType("google.genai")
+    genai_types_module = types.ModuleType("google.genai.types")
+
+    class FakeGenerateContentConfig:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakePart:
+        @staticmethod
+        def from_bytes(*, data: bytes, mime_type: str) -> dict[str, object]:
+            return {"data": data, "mime_type": mime_type}
+
+    class FakeGoogleSearch:
+        pass
+
+    class FakeTool:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(text='{"score": 1, "passed": true, "reasons": []}')
+
+    class FakeClient:
+        def __init__(self, *, api_key: str) -> None:
+            self.api_key = api_key
+            self.aio = types.SimpleNamespace(models=FakeModels())
+
+    genai_types_module.GenerateContentConfig = FakeGenerateContentConfig
+    genai_types_module.Part = FakePart
+    genai_types_module.GoogleSearch = FakeGoogleSearch
+    genai_types_module.Tool = FakeTool
+    genai_module.Client = FakeClient
+    genai_module.types = genai_types_module
+    google_module.genai = genai_module
+    monkeypatch.setitem(sys.modules, "google", google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai.types", genai_types_module)
 
 
 @pytest.mark.asyncio
@@ -456,6 +509,183 @@ def test_openai_judge_selection_does_not_change_runtime_generation_provider(
     assert providers.model.__class__.__name__ == "MockModelProvider"
 
 
+def test_gemini_model_selection_does_not_change_search_or_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.model, GeminiModelProvider)
+    assert providers.search.__class__.__name__ == "MockSearchProvider"
+    assert providers.embeddings.__class__.__name__ == "MockEmbeddingProvider"
+
+
+def test_gemini_vision_selection_does_not_change_model_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("VISION_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.vision, GeminiVisionProvider)
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+
+
+def test_gemini_judge_selection_does_not_change_runtime_generation_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("JUDGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.judge, GeminiJudgeProvider)
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+
+
+def test_gemini_roles_can_be_selected_independently(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv("VISION_PROVIDER", "gemini")
+    monkeypatch.setenv("JUDGE_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_TEXT_MODEL", "gemini-text-test")
+    monkeypatch.setenv("GEMINI_VISION_MODEL", "gemini-vision-test")
+    monkeypatch.setenv("GEMINI_JUDGE_MODEL", "gemini-judge-test")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.model, GeminiModelProvider)
+    assert isinstance(providers.vision, GeminiVisionProvider)
+    assert isinstance(providers.judge, GeminiJudgeProvider)
+    assert providers.model.model == "gemini-text-test"
+    assert providers.vision.model == "gemini-vision-test"
+    assert providers.judge.model == "gemini-judge-test"
+    assert providers.search.__class__.__name__ == "MockSearchProvider"
+    assert providers.embeddings.__class__.__name__ == "MockEmbeddingProvider"
+
+
+def test_gemini_search_selection_does_not_change_other_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("SEARCH_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_SEARCH_MODEL", "gemini-search-test")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.search, GeminiSearchProvider)
+    assert providers.search.model == "gemini-search-test"
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+    assert providers.vision.__class__.__name__ == "MockVisionPlantIdentificationProvider"
+    assert providers.judge.__class__.__name__ == "MockModelProvider"
+    assert providers.embeddings.__class__.__name__ == "MockEmbeddingProvider"
+
+
+def test_all_gemini_roles_except_embeddings_can_be_selected(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv("VISION_PROVIDER", "gemini")
+    monkeypatch.setenv("JUDGE_PROVIDER", "gemini")
+    monkeypatch.setenv("SEARCH_PROVIDER", "gemini")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.model, GeminiModelProvider)
+    assert isinstance(providers.vision, GeminiVisionProvider)
+    assert isinstance(providers.judge, GeminiJudgeProvider)
+    assert isinstance(providers.search, GeminiSearchProvider)
+    assert isinstance(providers.embeddings, OpenAIEmbeddingProvider)
+
+
+def test_missing_gemini_credentials_only_fail_selected_gemini_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="GEMINI_API_KEY is required when model provider is gemini"
+    ):
+        get_provider_registry()
+
+    monkeypatch.setenv("MODEL_PROVIDER", "mock")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+    assert providers.model.__class__.__name__ == "MockModelProvider"
+
+
+def test_missing_gemini_credentials_fail_for_selected_vision_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VISION_PROVIDER", "gemini")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="GEMINI_API_KEY is required when vision provider is gemini"
+    ):
+        get_provider_registry()
+
+
+def test_missing_gemini_credentials_fail_for_selected_judge_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JUDGE_PROVIDER", "gemini")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="GEMINI_API_KEY is required when judge provider is gemini"
+    ):
+        get_provider_registry()
+
+
+def test_missing_gemini_credentials_fail_for_selected_search_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SEARCH_PROVIDER", "gemini")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError, match="GEMINI_API_KEY is required when search provider is gemini"
+    ):
+        get_provider_registry()
+
+
+def test_gemini_is_not_supported_for_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "gemini")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="Unsupported embedding provider: gemini"):
+        get_provider_registry()
+
+
 def test_openai_search_selection_does_not_change_other_providers(
     monkeypatch: pytest.MonkeyPatch,
     fake_openai_module: None,
@@ -694,6 +924,404 @@ async def test_openai_embeddings_validate_malformed_items(
 
     with pytest.raises(OpenAIProviderError, match=error):
         await provider.create_embeddings(["first"])
+
+
+@pytest.mark.asyncio
+async def test_gemini_text_generation_maps_response(fake_gemini_module: None) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(text="Gemini plant care answer")
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    result = await provider.generate_text("care prompt", temperature=0)
+
+    assert models.kwargs is not None
+    assert models.kwargs["model"] == "gemini-2.5-flash"
+    assert models.kwargs["contents"] == "care prompt"
+    assert models.kwargs["config"].kwargs == {"temperature": 0}
+    assert result.provider == "gemini-model"
+    assert result.model == "gemini-2.5-flash"
+    assert result.text == "Gemini plant care answer"
+
+
+@pytest.mark.asyncio
+async def test_gemini_json_generation_maps_object_response(fake_gemini_module: None) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(text='{"answer": "water sparingly"}')
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    result = await provider.generate_json("Return care JSON", {"answer": {"type": "string"}})
+
+    assert models.kwargs is not None
+    assert models.kwargs["config"].kwargs["response_mime_type"] == "application/json"
+    assert models.kwargs["config"].kwargs["response_schema"] == {"answer": {"type": "string"}}
+    assert result.provider == "gemini-model"
+    assert result.data == {"answer": "water sparingly"}
+    assert result.metadata == {"schema_keys": ["answer"]}
+
+
+@pytest.mark.asyncio
+async def test_gemini_json_generation_normalizes_nullable_schema(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(text='{"plant_reference": null}')
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+    schema = {
+        "type": "object",
+        "properties": {"plant_reference": {"type": ["string", "null"]}},
+    }
+
+    await provider.generate_json("Return care JSON", schema)
+
+    assert models.kwargs is not None
+    assert models.kwargs["config"].kwargs["response_schema"] == {
+        "type": "object",
+        "properties": {
+            "plant_reference": {"type": "string", "nullable": True},
+        },
+    }
+    assert schema["properties"]["plant_reference"]["type"] == ["string", "null"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response,error",
+    [
+        (types.SimpleNamespace(text="not json"), "not valid JSON"),
+        (types.SimpleNamespace(text='["not", "object"]'), "must be an object"),
+    ],
+)
+async def test_gemini_json_generation_rejects_invalid_responses(
+    fake_gemini_module: None,
+    response: object,
+    error: str,
+) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return response
+
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    with pytest.raises(GeminiProviderError, match=error):
+        await provider.generate_json("Return care JSON", {})
+
+
+@pytest.mark.asyncio
+async def test_gemini_vision_maps_candidate_response(fake_gemini_module: None) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(
+                parsed={
+                    "description": "round green leaves",
+                    "candidates": [
+                        {
+                            "scientific_name": "Pilea peperomioides",
+                            "common_name": "Chinese money plant",
+                            "confidence_label": "medium",
+                            "confidence_score": 0.72,
+                            "visible_traits": ["round leaves"],
+                        }
+                    ],
+                }
+            )
+
+    models = FakeModels()
+    provider = GeminiVisionProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    result = await provider.analyze_image(
+        b"png-bytes", prompt="Endpoint prompt.", mime_type="image/png", temperature=0
+    )
+
+    assert models.kwargs is not None
+    assert models.kwargs["model"] == "gemini-2.5-flash"
+    assert models.kwargs["contents"][0].startswith("Endpoint prompt.")
+    assert models.kwargs["contents"][1] == {"data": b"png-bytes", "mime_type": "image/png"}
+    assert models.kwargs["config"].kwargs["response_mime_type"] == "application/json"
+    assert result.provider == "gemini-vision"
+    assert result.description == "round green leaves"
+    assert result.candidates[0].scientific_name == "Pilea peperomioides"
+    assert result.candidates[0].provider == "gemini-vision"
+
+
+def test_gemini_vision_schema_is_sdk_compatible() -> None:
+    genai_types = pytest.importorskip("google.genai.types")
+
+    schema = genai_types.Schema.model_validate(_VISION_SCHEMA)
+    candidate_schema = schema.properties["candidates"].items.properties
+
+    assert candidate_schema["common_name"].nullable is True
+    assert candidate_schema["confidence_score"].nullable is True
+
+
+def test_gemini_vision_schema_uses_nullable_fields() -> None:
+    candidate_schema = _VISION_SCHEMA["properties"]["candidates"]["items"]["properties"]
+
+    assert candidate_schema["common_name"] == {"type": "string", "nullable": True}
+    assert candidate_schema["confidence_score"] == {"type": "number", "nullable": True}
+
+
+@pytest.mark.asyncio
+async def test_gemini_judge_maps_response(fake_gemini_module: None) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(
+                text='{"score": 0.75, "passed": false, "reasons": ["weak grounding"]}'
+            )
+
+    provider = GeminiJudgeProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    result = await provider.judge_response({"answer": "x"}, {"passing_score": 0.8})
+
+    assert result.provider == "gemini-judge"
+    assert result.model == "gemini-2.5-flash"
+    assert result.score == 0.75
+    assert result.passed is False
+    assert result.reasons == ["weak grounding"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_search_maps_grounded_citations(fake_gemini_module: None) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(
+                text="Use the RHS guide for watering.",
+                candidates=[
+                    types.SimpleNamespace(
+                        grounding_metadata=types.SimpleNamespace(
+                            grounding_chunks=[
+                                types.SimpleNamespace(
+                                    web=types.SimpleNamespace(
+                                        uri="https://www.rhs.org.uk/plants/cotyledon",
+                                        title="RHS Cotyledon guide",
+                                    )
+                                )
+                            ],
+                            grounding_supports=[
+                                types.SimpleNamespace(
+                                    segment=types.SimpleNamespace(
+                                        text="Use the RHS guide for watering.",
+                                    ),
+                                    grounding_chunk_indices=[0],
+                                )
+                            ],
+                        )
+                    )
+                ],
+            )
+
+    models = FakeModels()
+    provider = GeminiSearchProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    results = await provider.search("Cotyledon watering", allowed_domains=["www.rhs.org.uk"])
+
+    assert models.kwargs is not None
+    assert models.kwargs["model"] == "gemini-2.5-flash"
+    assert "www.rhs.org.uk" in models.kwargs["contents"]
+    assert models.kwargs["config"].kwargs["tools"][0].kwargs
+    assert results == [
+        SearchResult(
+            title="RHS Cotyledon guide",
+            url="https://www.rhs.org.uk/plants/cotyledon",
+            snippet="Use the RHS guide for watering.",
+            source_domain="www.rhs.org.uk",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_search_filters_malformed_and_duplicate_citations(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(
+                text="Grounded answer.",
+                candidates=[
+                    types.SimpleNamespace(
+                        grounding_metadata={
+                            "grounding_chunks": [
+                                {"web": {"uri": "not-a-url", "title": "Bad URL"}},
+                                {"web": {"uri": "https://example.org/a", "title": "First"}},
+                                {"web": {"uri": "https://example.org/a", "title": "Duplicate"}},
+                            ],
+                            "grounding_supports": [],
+                        }
+                    )
+                ],
+            )
+
+    provider = GeminiSearchProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    results = await provider.search("care")
+
+    assert results == [
+        SearchResult(
+            title="First",
+            url="https://example.org/a",
+            snippet="First",
+            source_domain="example.org",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_search_returns_empty_when_no_valid_citations(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(
+                text="Grounded answer without usable URLs.",
+                candidates=[
+                    types.SimpleNamespace(
+                        grounding_metadata=types.SimpleNamespace(
+                            grounding_chunks=[types.SimpleNamespace(web=types.SimpleNamespace(uri=""))],
+                            grounding_supports=[],
+                        )
+                    )
+                ],
+            )
+
+    provider = GeminiSearchProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    assert await provider.search("care") == []
+
+
+@pytest.mark.asyncio
+async def test_gemini_search_rejects_ungrounded_response(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(text="Ungrounded answer.")
+
+    provider = GeminiSearchProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    with pytest.raises(GeminiProviderError, match="grounding metadata was unavailable"):
+        await provider.search("care")
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_errors_wrap_sdk_failures(fake_gemini_module: None) -> None:
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            raise RuntimeError("sdk failure")
+
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    with pytest.raises(GeminiProviderError, match="Gemini generate_text call failed"):
+        await provider.generate_text("care prompt")
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_call_logging_metadata_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    logged: dict[str, object] = {}
+
+    async def fake_log_provider_call(
+        provider: str,
+        operation: str,
+        call: object,
+        *,
+        role: str | None = None,
+    ) -> object:
+        logged.update({"provider": provider, "operation": operation, "role": role})
+        return await call()
+
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            return types.SimpleNamespace(text="Gemini answer")
+
+    monkeypatch.setattr("app.providers.gemini.log_provider_call", fake_log_provider_call)
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-2.5-flash",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=FakeModels())),
+    )
+
+    await provider.generate_text("care prompt")
+
+    assert logged == {
+        "provider": "gemini-model",
+        "operation": "generate_text",
+        "role": "model",
+    }
+    assert "test-key" not in str(logged)
 
 
 @pytest.mark.asyncio

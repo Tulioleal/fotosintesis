@@ -103,10 +103,11 @@ def get_pgvector_config(settings: Settings | None = None) -> LlamaIndexPgVectorC
 
 def build_metadata_filter_specs(filters: KnowledgeRetrievalFilters) -> list[MetadataFilterSpec]:
     filter_specs: list[MetadataFilterSpec] = []
-    for key in ("species_id", "scientific_name", "topic", "source_domain", "source_url"):
+    for key in ("species_id", "scientific_name", "topic", "source_domain", "source_url", "covered_aspect", "evidence_type"):
         value = getattr(filters, key)
         if value is not None:
-            filter_specs.append(MetadataFilterSpec(key=key, value=str(value)))
+            filter_key = "covered_aspects" if key == "covered_aspect" else key
+            filter_specs.append(MetadataFilterSpec(key=filter_key, value=str(value)))
     if filters.min_confidence is not None:
         filter_specs.append(
             MetadataFilterSpec(key="confidence", value=filters.min_confidence, operator=">=")

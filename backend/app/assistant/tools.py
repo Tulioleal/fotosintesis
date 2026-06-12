@@ -19,6 +19,11 @@ from app.providers.factory import ProviderRegistry, get_provider_registry
 from app.providers.types import SearchResult
 
 
+TRUSTED_WEB_EVIDENCE_CONFIDENCE = 0.55
+EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE = 0.35
+EXTERNAL_FALLBACK_VALIDATION_STATUS = "external_fallback"
+
+
 @dataclass(frozen=True)
 class ToolResult:
     ok: bool
@@ -69,7 +74,19 @@ class AssistantTools:
                 query,
                 allowed_domains=sorted(self.trusted_sources.approved_domains),
             )
-            return ToolResult(ok=True, data=await self.page_evidence_fetcher.fetch_all(results))
+            selected = _trusted_first_results(results, self.trusted_sources)
+            if _is_external_fallback_selection(selected, self.trusted_sources):
+                return ToolResult(
+                    ok=True,
+                    data=[
+                        TrustedPageEvidence(
+                            result=selected[0],
+                            error="external fallback source",
+                            validation_status=EXTERNAL_FALLBACK_VALIDATION_STATUS,
+                        )
+                    ],
+                )
+            return ToolResult(ok=True, data=await self.page_evidence_fetcher.fetch_all(selected))
         except Exception as exc:
             return ToolResult(ok=False, error=f"trusted_web_search failed: {exc}")
 
@@ -79,6 +96,13 @@ class AssistantTools:
         except Exception as exc:
             return ToolResult(ok=False, error=f"model_generate_text failed: {exc}")
         return ToolResult(ok=True, data=result.text)
+
+    async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+        try:
+            result = await self.providers.model.generate_json(prompt, schema, **kwargs)
+        except Exception as exc:
+            return ToolResult(ok=False, error=f"model_generate_json failed: {exc}")
+        return ToolResult(ok=True, data=result.data)
 
     async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:
         try:
@@ -115,42 +139,59 @@ class AssistantTools:
         scientific_name: str,
         topic: str,
         results: list[SearchResult | TrustedPageEvidence],
+        metadata: dict[str, object] | None = None,
     ) -> ToolResult:
         try:
             if not results:
                 return ToolResult(ok=False, error="ingest_web_evidence failed: no results")
-            trusted_evidence = _trusted_page_evidence(results, self.trusted_sources)
-            if not trusted_evidence:
+            evidence_items = _persistable_page_evidence(results, self.trusted_sources)
+            if not evidence_items:
                 return ToolResult(
                     ok=False,
                     error="ingest_web_evidence failed: no trusted results",
                 )
-            now = datetime.now(timezone.utc)
-            document = KnowledgeDocumentInput(
-                scientific_name=scientific_name,
-                topic=topic,
-                title=f"{scientific_name}: {topic} web fallback evidence",
-                content=_web_evidence_content(scientific_name, topic, trusted_evidence),
-                confidence=0.55,
-                review_status=ReviewStatus.auto_ingested,
-                sources=[
-                    KnowledgeSourceInput(
-                        title=evidence.result.title,
-                        url=evidence.result.url,
-                        source_domain=evidence.result.source_domain,
-                        retrieved_at=now,
-                    )
-                    for evidence in trusted_evidence
-                ],
-            )
-            persisted = await KnowledgeVectorIndex(self.knowledge_repository).ingest_document(
-                document,
-                embedding_provider=self.providers.embeddings,
-            )
+            metadata = metadata or {}
+            if not metadata.get("covered_aspects"):
+                return ToolResult(
+                    ok=False,
+                    error="ingest_web_evidence failed: no validated covered aspects",
+                )
+            if len(evidence_items) > 1 and not metadata.get("source_validations"):
+                return ToolResult(
+                    ok=False,
+                    error="ingest_web_evidence failed: source validations required for multiple results",
+                )
+            index = KnowledgeVectorIndex(self.knowledge_repository)
+            persisted_ids: list[str] = []
+            for item in evidence_items:
+                now = datetime.now(timezone.utc)
+                document = KnowledgeDocumentInput(
+                    scientific_name=scientific_name,
+                    topic=topic,
+                    title=f"{scientific_name}: {topic} web fallback evidence",
+                    content=_web_evidence_content(scientific_name, topic, [item]),
+                    confidence=_web_evidence_confidence([item]),
+                    review_status=ReviewStatus.auto_ingested,
+                    metadata=_metadata_for_source(metadata, item),
+                    sources=[
+                        KnowledgeSourceInput(
+                            title=item.result.title,
+                            url=item.result.url,
+                            source_domain=item.result.source_domain,
+                            retrieved_at=now,
+                            validation_status=item.validation_status,
+                        )
+                    ],
+                )
+                persisted = await index.ingest_document(
+                    document,
+                    embedding_provider=self.providers.embeddings,
+                )
+                persisted_ids.append(str(persisted.id))
         except Exception as exc:
             await self.knowledge_repository.rollback()
             return ToolResult(ok=False, error=f"ingest_web_evidence failed: {exc}")
-        return ToolResult(ok=True, data={"document_id": str(persisted.id)})
+        return ToolResult(ok=True, data={"document_id": persisted_ids[0], "document_ids": persisted_ids})
 
     async def taxonomy_validate(self, scientific_name: str) -> ToolResult:
         try:
@@ -222,12 +263,54 @@ def _web_evidence_content(
     return f"Live web fallback evidence for {scientific_name} about {topic}. {evidence}"
 
 
-def _trusted_page_evidence(
+def _metadata_for_source(metadata: dict[str, object], item: TrustedPageEvidence) -> dict[str, object]:
+    source_metadata = dict(metadata)
+    validations = metadata.get("source_validations")
+    if isinstance(validations, list):
+        for validation in validations:
+            if not isinstance(validation, dict) or validation.get("url") != item.result.url:
+                continue
+            source_metadata["covered_aspects"] = list(validation.get("covered_aspects", []))
+            source_metadata["validation_confidence"] = validation.get("validation_confidence", 0.0)
+            break
+    source_metadata.pop("source_validations", None)
+    source_metadata["source_domain"] = item.result.source_domain
+    return source_metadata
+
+
+def _trusted_first_results(
+    results: list[SearchResult], trusted_sources: TrustedSourceValidator
+) -> list[SearchResult]:
+    trusted = trusted_sources.filter(results)
+    if trusted:
+        return trusted
+    return results[:1]
+
+
+def _is_external_fallback_selection(
+    results: list[SearchResult], trusted_sources: TrustedSourceValidator
+) -> bool:
+    return bool(results) and not trusted_sources.is_trusted(results[0])
+
+
+def _persistable_page_evidence(
     results: list[SearchResult | TrustedPageEvidence], trusted_sources: TrustedSourceValidator
 ) -> list[TrustedPageEvidence]:
-    evidence_items: list[TrustedPageEvidence] = []
+    trusted_items: list[TrustedPageEvidence] = []
+    external_fallback_items: list[TrustedPageEvidence] = []
     for item in results:
         evidence = item if isinstance(item, TrustedPageEvidence) else TrustedPageEvidence(result=item)
         if trusted_sources.is_trusted(evidence.result):
-            evidence_items.append(evidence)
-    return evidence_items
+            trusted_items.append(evidence)
+        elif evidence.validation_status == EXTERNAL_FALLBACK_VALIDATION_STATUS:
+            external_fallback_items.append(evidence)
+    return trusted_items or external_fallback_items[:1]
+
+
+def _web_evidence_confidence(evidence_items: list[TrustedPageEvidence]) -> float:
+    if all(
+        evidence.validation_status == EXTERNAL_FALLBACK_VALIDATION_STATUS
+        for evidence in evidence_items
+    ):
+        return EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
+    return TRUSTED_WEB_EVIDENCE_CONFIDENCE

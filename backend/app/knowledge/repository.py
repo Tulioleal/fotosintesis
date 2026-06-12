@@ -197,6 +197,10 @@ def _build_filter_conditions(filters: KnowledgeRetrievalFilters) -> list:
         conditions.append(knowledge_chunks.c.confidence >= filters.min_confidence)
     if filters.review_status:
         conditions.append(knowledge_chunks.c.review_status == filters.review_status.value)
+    if filters.covered_aspect:
+        conditions.append(knowledge_chunks.c.metadata["covered_aspects"].contains(filters.covered_aspect))
+    if filters.evidence_type:
+        conditions.append(knowledge_chunks.c.metadata["evidence_type"].as_string() == filters.evidence_type)
     if filters.retrieved_after:
         conditions.append(knowledge_chunks.c.retrieved_at >= filters.retrieved_after)
     if filters.retrieved_before:

@@ -50,8 +50,9 @@ def build_chunk_metadata(
     review_status: str,
     retrieved_at: datetime,
     created_at: datetime | None = None,
+    extra_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    metadata = {
         "species_id": str(species_id) if species_id else None,
         "scientific_name": scientific_name,
         "topic": topic,
@@ -62,6 +63,8 @@ def build_chunk_metadata(
         "retrieved_at": retrieved_at.isoformat(),
         "created_at": created_at.isoformat() if created_at else None,
     }
+    metadata.update(extra_metadata or {})
+    return metadata
 
 
 def _build_chunk(
@@ -85,6 +88,7 @@ def _build_chunk(
             confidence=document.confidence,
             review_status=document.review_status.value,
             retrieved_at=retrieved_at,
+            extra_metadata=document.metadata,
         ),
         species_id=document.species_id,
         scientific_name=document.scientific_name,

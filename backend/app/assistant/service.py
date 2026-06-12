@@ -3,12 +3,13 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.assistant.graph import AssistantGraph, display_plant_name, operational_plant_name
+from app.assistant.graph import AssistantGraph, _diagnostics, display_plant_name, operational_plant_name
 from app.assistant.repository import AssistantRepository
 from app.assistant.schemas import (
     DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
     AssistantChatRequest,
     AssistantChatResponse,
+    AssistantCareDiagnostics,
     AssistantMessage,
     AssistantSource,
 )
@@ -65,6 +66,7 @@ class AssistantService:
             plant_scientific_name=payload.plant_scientific_name,
         )
         answer = state.get("answer") or "No pude generar una respuesta segura. Intenta con mas detalles."
+        diagnostics = state.get("diagnostics") or _diagnostics(state)
         if state.get("tool_failures"):
             logger.warning(
                 "assistant_tool_failure",
@@ -78,6 +80,8 @@ class AssistantService:
                 "content_format": DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
                 "sources": state.get("sources", []),
                 "tool_failures": state.get("tool_failures", []),
+                "fallback_reasons": state.get("fallback_reasons", []),
+                "diagnostics": diagnostics,
             },
         )
         return AssistantChatResponse(
@@ -91,4 +95,5 @@ class AssistantService:
             requires_confirmation=bool(state.get("requires_confirmation")),
             reminder_suggestion=state.get("reminder_suggestion"),
             tool_failures=state.get("tool_failures", []),
+            diagnostics=AssistantCareDiagnostics.model_validate(diagnostics) if diagnostics else None,
         )

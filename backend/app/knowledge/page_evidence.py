@@ -32,6 +32,7 @@ class TrustedPageEvidence:
     result: SearchResult
     content: str | None = None
     error: str | None = None
+    validation_status: str = "trusted"
 
     @property
     def evidence_text(self) -> str:

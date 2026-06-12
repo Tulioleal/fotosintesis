@@ -43,6 +43,10 @@ for source_file in "$base_dir"/*.yaml; do
     -e "s#__OPENAI_JUDGE_MODEL__#${OPENAI_JUDGE_MODEL}#g" \
     -e "s#__OPENAI_SEARCH_MODEL__#${OPENAI_SEARCH_MODEL}#g" \
     -e "s#__OPENAI_EMBEDDING_MODEL__#${OPENAI_EMBEDDING_MODEL}#g" \
+    -e "s#__GEMINI_TEXT_MODEL__#${GEMINI_TEXT_MODEL}#g" \
+    -e "s#__GEMINI_VISION_MODEL__#${GEMINI_VISION_MODEL}#g" \
+    -e "s#__GEMINI_JUDGE_MODEL__#${GEMINI_JUDGE_MODEL}#g" \
+    -e "s#__GEMINI_SEARCH_MODEL__#${GEMINI_SEARCH_MODEL}#g" \
     -e "s#__EMBEDDING_DIMENSION__#${EMBEDDING_DIMENSION}#g" \
     -e "s#__RUNTIME_SECRET_NAME__#${RUNTIME_SECRET_NAME}#g" \
     "$source_file" > "$target_file"

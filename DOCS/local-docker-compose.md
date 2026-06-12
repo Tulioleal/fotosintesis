@@ -30,6 +30,7 @@ cp backend/.env.example backend/.env
 Important local variables:
 
 - `MODEL_PROVIDER=mock`, `VISION_PROVIDER=mock`, `JUDGE_PROVIDER=mock`, `SEARCH_PROVIDER=mock` and `EMBEDDING_PROVIDER=mock` keep providers deterministic.
+- To test Gemini for all non-embedding roles locally, set `MODEL_PROVIDER=gemini`, `VISION_PROVIDER=gemini`, `JUDGE_PROVIDER=gemini`, `SEARCH_PROVIDER=gemini`, `GEMINI_API_KEY`, and `GEMINI_SEARCH_MODEL`; keep `EMBEDDING_PROVIDER=openai` with `OPENAI_API_KEY` for production-like vector ingestion or `EMBEDDING_PROVIDER=mock` for deterministic local runs.
 - `DATABASE_URL` points to local Postgres in Compose or localhost when running directly.
 - `OBJECT_STORAGE_*` points to MinIO only when the storage profile is used.
 - `AUTH_SECRET` is required by Auth.js locally.

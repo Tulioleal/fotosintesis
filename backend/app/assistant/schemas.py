@@ -24,6 +24,16 @@ class AssistantMessage(ApiSchema):
     created_at: datetime | None = None
 
 
+class AssistantCareDiagnostics(ApiSchema):
+    intent: str | None = None
+    topic: str | None = None
+    required_aspects: list[str] = []
+    covered_aspects: list[str] = []
+    missing_aspects: list[str] = []
+    evidence_path: list[str] = []
+    answer_language: str | None = None
+
+
 class AssistantReminderSuggestion(ApiSchema):
     garden_plant_id: UUID
     plant_name: str
@@ -48,3 +58,4 @@ class AssistantChatResponse(ApiSchema):
     requires_confirmation: bool = False
     reminder_suggestion: AssistantReminderSuggestion | None = None
     tool_failures: list[str] = []
+    diagnostics: AssistantCareDiagnostics | None = None
