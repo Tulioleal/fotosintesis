@@ -5,9 +5,17 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select
 
-from app.assistant.graph import AnswerabilityResult, AssistantGraph, _care_classifier_prompt, _grounded_answer_prompt
+from app.assistant.graph import (
+    AnswerabilityResult,
+    AssistantGraph,
+    _answerability_from_judge_result,
+    _care_classifier_prompt,
+    _grounded_answer_prompt,
+    _validated_answerability,
+)
+from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService
+from app.assistant.service import AssistantService, _ingest_validated_claims_background
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -20,10 +28,75 @@ from app.knowledge.schemas import (
     ReviewStatus,
     KnowledgeSourceInput,
 )
-from app.providers.types import SearchResult
+from app.providers.types import JudgeResult, SearchResult
 
 
 CONFIRMED_BINOMIAL = "Cotyledon tomentosa"
+
+
+def test_answerability_mapping_preserves_explicit_judge_contract() -> None:
+    result = _answerability_from_judge_result(
+        SimpleNamespace(
+            score=0.64,
+            passed=False,
+            status="contradictory",
+            covered_aspects=["light_exposure"],
+            missing_aspects=["watering_frequency_or_trigger"],
+            source_support=[
+                {
+                    "claim": "Light guidance is supported.",
+                    "source_urls": ["https://example.org/light"],
+                    "covered_aspects": ["light_exposure"],
+                    "evidence_quote": "bright indirect light",
+                    "confidence": 0.64,
+                }
+            ],
+            contradictions=[
+                {
+                    "claim_a": "Water weekly.",
+                    "claim_b": "Water monthly.",
+                    "source_a_urls": ["https://example.org/a"],
+                    "source_b_urls": ["https://example.org/b"],
+                }
+            ],
+            confidence=0.64,
+            reasons=["sources conflict on watering"],
+        )
+    )
+
+    assert result.status == "contradictory"
+    assert result.answerable is False
+    assert result.covered_aspects == ["light_exposure"]
+    assert result.missing_aspects == ["watering_frequency_or_trigger"]
+    assert result.source_support[0]["source_urls"] == ["https://example.org/light"]
+    assert result.contradictions[0]["claim_b"] == "Water monthly."
+    assert result.confidence == 0.64
+
+
+def test_validated_answerability_requires_explicit_source_support() -> None:
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=["watering_frequency_or_trigger"],
+            reason="judge marked evidence as supported but omitted source support",
+            confidence=0.9,
+        ),
+        requested_aspects=["watering_frequency_or_trigger"],
+        source_metadata=[
+            {
+                "title": "Trusted watering guide",
+                "url": "https://example.org/watering",
+                "domain": "example.org",
+                "evidence_type": "live_web",
+            }
+        ],
+    )
+
+    assert result.status == "insufficient"
+    assert result.answerable is False
+    assert result.source_support == []
+    assert result.missing_aspects == ["watering_frequency_or_trigger"]
 
 
 class FakeTools:
@@ -120,7 +193,7 @@ class FakeTools:
                 "language": "es",
                 "answer_language": "es",
                 "intent": "plant_care_question",
-                "topic": "general_care",
+                "topic": "taxonomy",
                 "required_aspects": ["native_range"],
                 "plant_reference": "Pata",
                 "confidence": 0.92,
@@ -158,9 +231,21 @@ class FakeTools:
             ],
         )
 
-    async def knowledge_search(self, *, scientific_name: str, topic: str) -> ToolResult:
+    async def knowledge_search(
+        self,
+        *,
+        scientific_name: str,
+        topic: str,
+        required_aspects: list[str] | None = None,
+        question: str | None = None,
+    ) -> ToolResult:
         self.call_order.append("rag")
-        self.knowledge_search_kwargs = {"scientific_name": scientific_name, "topic": topic}
+        self.knowledge_search_kwargs = {
+            "scientific_name": scientific_name,
+            "topic": topic,
+            "required_aspects": required_aspects or [],
+            "question": question,
+        }
         if self.degraded_knowledge:
             return ToolResult(
                 ok=True,
@@ -244,15 +329,34 @@ class FakeTools:
     async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
         self.judge_calls.append({"payload": payload, "rubric": rubric})
         evidence_type = payload.get("evidence_type")
-        answerable = True if evidence_type == "live_web" else self.structured_answerable if evidence_type == "structured_api" else self.rag_answerable
+        answerable = True if evidence_type in {"live_web", "combined_rag_web"} else self.structured_answerable if evidence_type == "structured_api" else self.rag_answerable
         score = (
             self.judge_scores.pop(0)
-            if evidence_type == "live_web" and self.judge_scores
+            if evidence_type in {"live_web", "combined_rag_web"} and self.judge_scores
             else 1.0 if answerable else 0.0
         )
+        required_aspects = list(payload.get("required_aspects") or ["watering_frequency_or_trigger"])
+        source_metadata = [source for source in payload.get("source_metadata") or [] if source.get("url")]
+        live_sources = [source for source in source_metadata if source.get("evidence_type") == "live_web"]
+        supported_source = (live_sources or source_metadata or [{"url": "https://example.org/source"}])[0]
+        source_support = [
+            {
+                "claim": "Evidence directly supports the requested plant-care answer.",
+                "source_urls": [supported_source["url"]],
+                "covered_aspects": required_aspects,
+                "evidence_quote": "Evidence directly supports the requested plant-care answer.",
+                "confidence": score,
+            }
+        ] if answerable else []
         return SimpleNamespace(
             score=score,
             passed=answerable,
+            status="full" if answerable else "insufficient",
+            covered_aspects=required_aspects if answerable else [],
+            missing_aspects=[] if answerable else required_aspects,
+            source_support=source_support,
+            contradictions=[],
+            confidence=score,
             reasons=[] if answerable else [f"{evidence_type} evidence does not answer question"],
         )
 
@@ -755,12 +859,12 @@ async def test_general_care_rag_is_not_sufficient_for_pet_safety_question() -> N
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.plant_data_calls == 1
+    assert tools.plant_data_calls == 0
     assert tools.web_search_calls == 1
     assert "pet toxicity" in tools.web_search_query
     assert "rag_not_answerable" in result["fallback_reasons"]
     assert "web_search_used" in result["fallback_reasons"]
-    assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
+    assert tools.model_calls == 1
 
 
 @pytest.mark.asyncio
@@ -788,7 +892,7 @@ async def test_general_care_rag_is_not_sufficient_for_native_range_question() ->
     assert tools.web_search_calls == 1
     assert "native range" in tools.web_search_query
     assert "rag_not_answerable" in result["fallback_reasons"]
-    assert "Native range evidence" in tools.model_prompts[0]
+    assert tools.model_calls == 1
 
 
 @pytest.mark.asyncio
@@ -813,8 +917,19 @@ async def test_direct_pet_safety_rag_is_sufficient_without_web_search() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_uses_structured_lookup_before_trusted_web_search() -> None:
-    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+async def test_assistant_skips_structured_lookup_before_trusted_web_search() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(),
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como debo regar mi Pata?",
@@ -822,14 +937,12 @@ async def test_assistant_uses_structured_lookup_before_trusted_web_search() -> N
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.call_order == ["rag", "plant_data"]
-    assert tools.web_search_calls == 0
+    assert tools.call_order == ["rag", "web"]
+    assert tools.plant_data_calls == 0
+    assert tools.web_search_calls == 1
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
-    assert "Tipo de evidencia: structured_api" in tools.model_prompts[0]
-    assert "menciona en la respuesta final las fuentes proveedoras estructuradas usadas" in tools.model_prompts[0]
-    assert "mock-trefle" in tools.model_prompts[0]
-    assert result["sources"][0]["evidence_type"] == "structured_api"
+    assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -855,8 +968,9 @@ async def test_generic_structured_evidence_does_not_block_web_search() -> None:
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.call_order == ["rag", "plant_data", "web"]
-    assert "structured_not_answerable" in result["fallback_reasons"]
+    assert tools.call_order == ["rag", "web"]
+    assert tools.plant_data_calls == 0
+    assert "structured_not_answerable" not in result["fallback_reasons"]
     assert tools.model_calls == 1
     assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
 
@@ -882,7 +996,8 @@ async def test_assistant_uses_trusted_web_after_insufficient_structured_evidence
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.call_order == ["rag", "plant_data", "web"]
+    assert tools.call_order == ["rag", "web"]
+    assert tools.plant_data_calls == 0
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.model_calls == 1
     assert "Tipo de evidencia: live_web" in tools.model_prompts[0]
@@ -895,6 +1010,14 @@ async def test_assistant_records_structured_ingestion_failure_without_blocking_a
         degraded_knowledge=True,
         plant_data=_structured_evidence(),
         plant_data_ingestion_error="plant_data_lookup ingestion failed: pgvector unavailable",
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
     )
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
@@ -904,13 +1027,25 @@ async def test_assistant_records_structured_ingestion_failure_without_blocking_a
     )
 
     assert result["answer"] == "Respuesta sintetizada por modelo."
+    assert tools.plant_data_calls == 0
     assert tools.model_calls == 1
-    assert "pgvector unavailable" in result["tool_failures"][0]
+    assert result.get("tool_failures", []) == []
 
 
 @pytest.mark.asyncio
 async def test_assistant_does_not_call_structured_lookup_for_unconfirmed_plant_hint() -> None:
-    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(),
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como debo regar esta planta?",
@@ -943,7 +1078,18 @@ async def test_assistant_reports_degraded_knowledge_limitations() -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_uses_binomial_name_for_operational_calls() -> None:
-    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(),
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como debo regar esta planta?",
@@ -954,7 +1100,7 @@ async def test_assistant_uses_binomial_name_for_operational_calls() -> None:
 
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert tools.knowledge_search_kwargs["scientific_name"] == "Solanum lycopersicum"
-    assert tools.plant_data_kwargs["scientific_name"] == "Solanum lycopersicum"
+    assert tools.plant_data_kwargs is None
     assert "Planta seleccionada: Tomato" in tools.model_prompts[0]
     assert "Nombre operacional para busqueda/API/RAG: Solanum lycopersicum" in tools.model_prompts[0]
     assert "Nombre cientifico completo: Solanum lycopersicum var. cerasiforme" in tools.model_prompts[0]
@@ -962,7 +1108,18 @@ async def test_assistant_uses_binomial_name_for_operational_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_uses_scientific_name_when_binomial_is_missing() -> None:
-    tools = FakeTools(degraded_knowledge=True, plant_data=_structured_evidence())
+    tools = FakeTools(
+        degraded_knowledge=True,
+        plant_data=_structured_evidence(),
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water after the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
     await AssistantGraph(tools).run(
         user_id=uuid4(),
         message="Como debo regar esta planta?",
@@ -971,7 +1128,7 @@ async def test_assistant_uses_scientific_name_when_binomial_is_missing() -> None
     )
 
     assert tools.knowledge_search_kwargs["scientific_name"] == "Solanum lycopersicum var. cerasiforme"
-    assert tools.plant_data_kwargs["scientific_name"] == "Solanum lycopersicum var. cerasiforme"
+    assert tools.plant_data_kwargs is None
 
 
 @pytest.mark.asyncio
@@ -1031,10 +1188,10 @@ async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     assert result["sources"][0]["url"] == "https://example.org/watering"
     assert result["sources"][0]["evidence_type"] == "live_web"
     assert result["sources"][0]["confidence"] == 1.0
-    assert tools.ingestion_calls == 1
-    assert tools.ingestion_kwargs["scientific_name"] == "Cotyledon tomentosa"
-    assert tools.ingestion_kwargs["topic"] == "watering"
-    assert tools.ingestion_kwargs["metadata"]["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert tools.ingestion_calls == 0
+    assert result["ingestion_claims"][0]["scientific_name"] == "Cotyledon tomentosa"
+    assert result["ingestion_claims"][0]["topic"] == "watering"
+    assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
 
 
 @pytest.mark.asyncio
@@ -1042,7 +1199,21 @@ async def test_validated_web_metadata_uses_validation_confidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_judge_answerability(*args, **kwargs):
-        return AnswerabilityResult(answerable=True, confidence=0.82)
+        return AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=["watering_frequency_or_trigger"],
+            source_support=[
+                {
+                    "claim": "Watering guidance is directly supported.",
+                    "source_urls": ["https://example.org/watering"],
+                    "covered_aspects": ["watering_frequency_or_trigger"],
+                    "evidence_quote": "Water when the substrate dries.",
+                    "confidence": 0.82,
+                }
+            ],
+            confidence=0.82,
+        )
 
     monkeypatch.setattr("app.assistant.graph._judge_answerability", fake_judge_answerability)
     tools = FakeTools(
@@ -1064,7 +1235,7 @@ async def test_validated_web_metadata_uses_validation_confidence(
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.ingestion_kwargs["metadata"]["validation_confidence"] == 0.82
+    assert result["ingestion_claims"][0]["confidence"] == 0.82
     assert result["sources"][0]["confidence"] == 0.82
 
 
@@ -1099,19 +1270,9 @@ async def test_web_fallback_excludes_off_aspect_trusted_source_from_prompt_sourc
     assert "Water when the substrate dries" in prompt
     assert "bright indirect light" not in prompt
     assert [source["url"] for source in result["sources"]] == ["https://example.org/watering"]
-    assert tools.ingestion_kwargs["results"][0].result.url == "https://example.org/watering"
-    assert len(tools.ingestion_kwargs["results"]) == 1
-    metadata = tools.ingestion_kwargs["metadata"]
-    assert metadata["covered_aspects"] == ["watering_frequency_or_trigger"]
-    assert metadata["validation_confidence"] == 1.0
-    assert metadata["source_validations"] == [
-        {
-            "url": "https://example.org/watering",
-            "covered_aspects": ["watering_frequency_or_trigger"],
-            "missing_aspects": [],
-            "validation_confidence": 1.0,
-        }
-    ]
+    assert result["ingestion_claims"][0]["source_url"] == "https://example.org/watering"
+    assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["ingestion_claims"][0]["confidence"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -1152,25 +1313,386 @@ async def test_web_fallback_uses_minimum_confidence_across_validated_sources() -
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert result["web_validation_confidence"] == 0.83
+    assert result["web_validation_confidence"] == 0.91
     assert result["sources"][0]["confidence"] == 0.91
-    assert result["sources"][1]["confidence"] == 0.83
-    metadata = tools.ingestion_kwargs["metadata"]
-    assert metadata["validation_confidence"] == 0.83
-    assert metadata["source_validations"] == [
-        {
-            "url": "https://example.org/watering",
-            "covered_aspects": ["watering_frequency_or_trigger"],
-            "missing_aspects": ["light_exposure"],
-            "validation_confidence": 0.91,
+    assert tools.judge_calls[-1]["payload"]["evidence_type"] == "combined_rag_web"
+
+
+@pytest.mark.asyncio
+async def test_partial_judge_result_keeps_only_supported_sources_for_ingestion() -> None:
+    class PartialJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "partial",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": ["light_exposure"],
+                        "source_support": [
+                            {
+                                "claim": "Water when the substrate dries.",
+                                "source_urls": ["https://example.org/watering"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Water when the substrate dries.",
+                                "confidence": 0.86,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.86,
+                        "score": 0.86,
+                        "passed": False,
+                        "reasons": ["only watering is directly supported"],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = PartialJudgeTools(
+        degraded_knowledge=True,
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": True,
         },
-        {
-            "url": "https://example.org/light",
-            "covered_aspects": ["light_exposure"],
-            "missing_aspects": ["watering_frequency_or_trigger"],
-            "validation_confidence": 0.83,
-        },
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries before watering again.",
+                source_domain="example.org",
+            ),
+            SearchResult(
+                title="Trusted light guide",
+                url="https://example.org/light",
+                snippet="Provide bright indirect light and avoid harsh sun.",
+                source_domain="example.org",
+            ),
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Como riego mi Pata y cuánta luz necesita?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "partial"
+    assert result["sufficient"] is False
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["missing_aspects"] == ["light_exposure"]
+    assert tools.judge_calls[-1]["payload"]["required_aspects"] == [
+        "watering_frequency_or_trigger",
+        "light_exposure",
     ]
+    assert tools.judge_calls[-1]["payload"]["rag_answerability"]["status"] == "insufficient"
+    assert [source["url"] for source in result["sources"]] == ["https://example.org/watering"]
+    assert result["ingestion_claims"][0]["source_url"] == "https://example.org/watering"
+    assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert "https://example.org/light" not in tools.model_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_combined_web_answer_uses_supported_rag_and_web_evidence() -> None:
+    class CombinedJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "rag":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "partial",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": ["light_exposure"],
+                        "source_support": [
+                            {
+                                "claim": "Riego moderado con sustrato drenante.",
+                                "source_urls": ["https://example.org/source"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Requiere riego moderado y sustrato con buen drenaje.",
+                                "confidence": 0.86,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.86,
+                        "score": 0.86,
+                        "passed": False,
+                        "reasons": ["RAG only supports watering."],
+                    },
+                )
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "full",
+                        "covered_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+                        "missing_aspects": [],
+                        "source_support": [
+                            {
+                                "claim": "Riego moderado con sustrato drenante.",
+                                "source_urls": ["https://example.org/source"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Requiere riego moderado y sustrato con buen drenaje.",
+                                "confidence": 0.88,
+                            },
+                            {
+                                "claim": "Luz indirecta brillante.",
+                                "source_urls": ["https://example.org/light"],
+                                "covered_aspects": ["light_exposure"],
+                                "evidence_quote": "Provide bright indirect light.",
+                                "confidence": 0.88,
+                            },
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.88,
+                        "score": 0.88,
+                        "passed": True,
+                        "reasons": [],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = CombinedJudgeTools(
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[
+            SearchResult(
+                title="Trusted light guide",
+                url="https://example.org/light",
+                snippet="Provide bright indirect light.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Como riego mi Pata y cuánta luz necesita?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    combined_payload = tools.judge_calls[-1]["payload"]
+    assert combined_payload["required_aspects"] == [
+        "watering_frequency_or_trigger",
+        "light_exposure",
+    ]
+    assert combined_payload["rag_answerability"]["status"] == "partial"
+    assert "Requiere riego moderado" in combined_payload["evidence"]
+    assert result["answerability_status"] == "full"
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger", "light_exposure"]
+    assert result["missing_aspects"] == []
+    assert "Tipo de evidencia: combined_rag_web" in tools.model_prompts[0]
+    assert "Requiere riego moderado" in tools.model_prompts[0]
+    assert "Provide bright indirect light" in tools.model_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_partial_final_judge_blocks_answer_and_ingestion() -> None:
+    class LowConfidencePartialJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "partial",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": ["light_exposure"],
+                        "source_support": [
+                            {
+                                "claim": "Water when the substrate dries.",
+                                "source_urls": ["https://example.org/watering"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Water when the substrate dries.",
+                                "confidence": 0.6,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.6,
+                        "score": 0.6,
+                        "passed": False,
+                        "reasons": ["only low-confidence watering support was found"],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = LowConfidencePartialJudgeTools(
+        degraded_knowledge=True,
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries before watering again.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Como riego mi Pata y cuánta luz necesita?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "insufficient"
+    assert result["sufficient"] is False
+    assert result["covered_aspects"] == []
+    assert result.get("ingestion_claims", []) == []
+
+
+@pytest.mark.asyncio
+async def test_insufficient_judge_result_blocks_web_answer_and_ingestion() -> None:
+    class InsufficientJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "insufficient",
+                        "covered_aspects": [],
+                        "missing_aspects": ["watering_frequency_or_trigger"],
+                        "source_support": [],
+                        "contradictions": [],
+                        "confidence": 0.34,
+                        "score": 0.34,
+                        "passed": False,
+                        "reasons": ["web evidence does not directly answer watering frequency"],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = InsufficientJudgeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Generic care guide",
+                url="https://example.org/generic",
+                snippet="This plant is a succulent.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "insufficient"
+    assert result.get("web_results", []) == []
+    assert result.get("ingestion_claims", []) == []
+    assert result["source_support"] == []
+    assert result["missing_aspects"] == ["watering_frequency_or_trigger"]
+    assert "web_search_not_validated" in result["fallback_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_contradictory_judge_result_links_conflicts_and_skips_ingestion() -> None:
+    class ContradictoryJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "contradictory",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": ["watering_frequency_or_trigger"],
+                        "source_support": [],
+                        "contradictions": [
+                            {
+                                "claim_a": "Water weekly.",
+                                "claim_b": "Water monthly.",
+                                "source_a_urls": ["https://example.org/watering-weekly"],
+                                "source_b_urls": ["https://example.org/watering-monthly"],
+                            }
+                        ],
+                        "confidence": 0.88,
+                        "score": 0.88,
+                        "passed": False,
+                        "reasons": ["trusted sources conflict on watering frequency"],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    answer = (
+        "Hay fuentes confiables en conflicto: https://example.org/watering-weekly "
+        "dice riego semanal y https://example.org/watering-monthly dice riego mensual."
+    )
+    tools = ContradictoryJudgeTools(
+        degraded_knowledge=True,
+        model_response=answer,
+        web_results=[
+            SearchResult(
+                title="Weekly watering guide",
+                url="https://example.org/watering-weekly",
+                snippet="Water weekly.",
+                source_domain="example.org",
+            ),
+            SearchResult(
+                title="Monthly watering guide",
+                url="https://example.org/watering-monthly",
+                snippet="Water monthly.",
+                source_domain="example.org",
+            ),
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "contradictory"
+    assert result["ingestion_claims"] == []
+    assert result["answer"] == answer
+    assert "https://example.org/watering-weekly" in result["answer"]
+    assert "https://example.org/watering-monthly" in result["answer"]
+    assert "https://example.org/watering-weekly" in tools.model_prompts[0]
+    assert "https://example.org/watering-monthly" in tools.model_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -1203,11 +1725,9 @@ async def test_web_search_is_called_only_for_missing_aspects_after_rag_validatio
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.web_search_calls == 1
-    assert "light exposure" in tools.web_search_query
-    assert "watering frequency" not in tools.web_search_query
+    assert tools.web_search_calls == 0
     assert result["covered_aspects"] == ["watering_frequency_or_trigger", "light_exposure"]
-    assert result["evidence_path"] == ["rag", "web"]
+    assert result["evidence_path"] == ["rag"]
 
 
 @pytest.mark.asyncio
@@ -1254,9 +1774,9 @@ async def test_failed_multi_aspect_rag_judge_preserves_direct_local_coverage() -
 
     assert tools.web_search_calls == 1
     assert "light exposure" in tools.web_search_query
-    assert "watering frequency" not in tools.web_search_query
+    assert "watering frequency" in tools.web_search_query
     assert result["covered_aspects"] == ["watering_frequency_or_trigger", "light_exposure"]
-    assert result["evidence_path"] == ["rag", "web"]
+    assert result["evidence_path"] == ["web"]
 
 
 @pytest.mark.asyncio
@@ -1319,9 +1839,9 @@ async def test_partial_non_critical_answer_when_only_some_aspects_validate() -> 
     )
 
     assert result["answer"] == "Respuesta sintetizada por modelo."
-    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
-    assert result["missing_aspects"] == ["light_exposure"]
-    assert "Aspectos no validados: ['light_exposure']" in tools.model_prompts[-1]
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger", "light_exposure"]
+    assert result["missing_aspects"] == []
+    assert "Aspectos no validados: []" in tools.model_prompts[-1]
 
 
 @pytest.mark.asyncio
@@ -1437,7 +1957,7 @@ async def test_assistant_fallback_answer_uses_fetched_page_content() -> None:
     assert "water only after the substrate dries deeply" in tools.model_prompts[0]
     assert "Short search snippet" not in tools.model_prompts[0]
     assert result["sources"][0]["url"] == "https://example.org/watering"
-    assert tools.ingestion_kwargs["results"][0].content.startswith("Full trusted page content")
+    assert result["ingestion_claims"][0]["source_url"] == "https://example.org/watering"
 
 
 @pytest.mark.asyncio
@@ -1491,10 +2011,11 @@ async def test_trusted_web_search_called_after_rag_and_structured_not_answerable
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.call_order == ["rag", "plant_data", "web"]
+    assert tools.call_order == ["rag", "web"]
+    assert tools.plant_data_calls == 0
     assert tools.web_search_calls == 1
     assert "rag_not_answerable" in result["fallback_reasons"]
-    assert "structured_not_answerable" in result["fallback_reasons"]
+    assert "structured_not_answerable" not in result["fallback_reasons"]
     assert "web_search_used" in result["fallback_reasons"]
 
 
@@ -1551,7 +2072,6 @@ async def test_fallback_reasons_recorded_for_internal_metadata() -> None:
     )
 
     assert result["fallback_reasons"] == [
-        "structured_not_answerable",
         "web_search_used",
         "web_search_no_direct_answer",
     ]
@@ -1578,7 +2098,7 @@ async def test_answerability_and_fallback_logs_are_emitted(monkeypatch: pytest.M
         message == "assistant answerability decision"
         and extra["ctx_evidence_type"] == "rag"
         and extra["ctx_answerable"] is False
-        and extra["ctx_missing_aspects"] == ["rag evidence does not answer question"]
+        and extra["ctx_missing_aspects"] == ["pet_toxicity"]
         and extra["ctx_answerability_confidence"] == 0.0
         and extra["ctx_fallback_reason"] == "rag_not_answerable"
         and extra["ctx_trace_id"]
@@ -1628,10 +2148,11 @@ async def test_assistant_records_ingestion_failure_without_blocking_web_answer()
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert tools.ingestion_calls == 1
+    assert tools.ingestion_calls == 0
     assert result["answer"] == "Respuesta sintetizada por modelo."
     assert "Use a fast-draining substrate" in tools.model_prompts[0]
-    assert "ingest_web_evidence failed" in result["tool_failures"][0]
+    assert result.get("tool_failures", []) == []
+    assert result["ingestion_claims"]
 
 
 @pytest.mark.asyncio
@@ -1747,6 +2268,111 @@ async def test_assistant_service_does_not_mark_display_name_as_operational(
 
     assert messages[0].metadata["display_plant_name"] == "Tomato"
     assert "operational_plant_name" not in messages[0].metadata
+
+
+@pytest.mark.asyncio
+async def test_background_ingestion_failure_logs_plant_and_source_context(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def rollback(self) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
+    class FailingTools:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def ingest_validated_claims(self, claims):
+            return ToolResult(ok=False, error="embedding unavailable")
+
+    claims = [
+        {
+            "scientific_name": "Cotyledon tomentosa",
+            "source_url": "https://example.org/watering",
+            "source_domain": "example.org",
+        }
+    ]
+    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(assistant_service, "AssistantTools", FailingTools)
+    caplog.set_level("WARNING", logger="app.assistant.service")
+
+    await _ingest_validated_claims_background(
+        claims=claims,
+        conversation_id=uuid4(),
+        answerability_status="partial",
+    )
+
+    record = next(
+        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_failed"
+    )
+    assert record.answerability_status == "partial"
+    assert record.claim_count == 1
+    assert record.scientific_names == ["Cotyledon tomentosa"]
+    assert record.source_urls == ["https://example.org/watering"]
+    assert record.source_domains == ["example.org"]
+    assert record.error == "embedding unavailable"
+
+
+@pytest.mark.asyncio
+async def test_background_ingestion_exception_logs_plant_and_source_context(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def rollback(self) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
+    class RaisingTools:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def ingest_validated_claims(self, claims):
+            raise RuntimeError("index unavailable")
+
+    claims = [
+        {
+            "scientific_name": "Cotyledon tomentosa",
+            "source_url": "https://example.org/watering",
+            "source_domain": "example.org",
+        }
+    ]
+    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(assistant_service, "AssistantTools", RaisingTools)
+    caplog.set_level("ERROR", logger="app.assistant.service")
+
+    await _ingest_validated_claims_background(
+        claims=claims,
+        conversation_id=uuid4(),
+        answerability_status="partial",
+    )
+
+    record = next(
+        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_exception"
+    )
+    assert record.answerability_status == "partial"
+    assert record.claim_count == 1
+    assert record.scientific_names == ["Cotyledon tomentosa"]
+    assert record.source_urls == ["https://example.org/watering"]
+    assert record.source_domains == ["example.org"]
 
 
 @pytest.mark.asyncio

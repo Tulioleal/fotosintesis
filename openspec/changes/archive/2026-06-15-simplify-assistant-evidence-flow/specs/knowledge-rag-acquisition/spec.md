@@ -1,17 +1,4 @@
-## Purpose
-
-Define how runtime botanical evidence retrieval and trusted knowledge acquisition use LlamaIndex pgvector retrieval, re-embedding and degraded fallback behavior.
-
-## Requirements
-
-### Requirement: Knowledge persistence
-
-The system SHALL persist knowledge documents, sources, chunks and embeddings with required botanical and provenance metadata.
-
-#### Scenario: Knowledge document saved
-
-- **WHEN** new trusted knowledge is ingested
-- **THEN** the system stores document content, sources, chunks, embeddings, confidence, review status and timestamps
+## MODIFIED Requirements
 
 ### Requirement: LlamaIndex pgvector retrieval
 
@@ -38,40 +25,6 @@ The system SHALL use LlamaIndex `PGVectorStore` and `VectorStoreIndex` backed by
 - **WHEN** a user asks a specific plant-care question whose wording is more specific than the classified topic
 - **THEN** retrieval includes the original question and required aspects in the query text
 - **AND** topic alone is not the only semantic retrieval term
-
-### Requirement: Trusted source acquisition
-
-The system MUST restrict incremental acquisition and assistant fallback evidence persistence to approved, explicitly validated trusted sources, or one explicitly marked external fallback source selected by the assistant trusted-first web search policy. External fallback evidence MUST be distinguishable from trusted-domain evidence and MUST NOT be treated as trusted-source evidence.
-
-#### Scenario: Untrusted source is sole result outside fallback policy
-
-- **WHEN** only blogs, stores, unmoderated forums or non-persistent URLs are available outside the assistant external fallback policy
-- **THEN** the system does not use them as the sole basis for persistent trusted knowledge
-
-#### Scenario: OpenAI search returns mixed trust results
-
-- **WHEN** OpenAI-backed search returns both trusted and untrusted source URLs
-- **THEN** the acquisition flow uses the existing trusted-source validation rules before persisting or using acquired trusted knowledge
-
-#### Scenario: Gemini search returns mixed trust results
-
-- **WHEN** Gemini-backed search returns both allowed-domain and external source URLs
-- **THEN** the assistant trusted-first search policy uses allowed-domain results before considering any external fallback result
-
-#### Scenario: Assistant fallback persistence receives untrusted web results outside fallback policy
-
-- **WHEN** assistant fallback web search returns usable results that fail trusted-source validation and are not the selected external fallback result
-- **THEN** the system does not persist, chunk, embed or index those results as knowledge
-
-#### Scenario: Assistant fallback persistence receives mixed trust results
-
-- **WHEN** assistant fallback web evidence includes both trusted and untrusted source URLs
-- **THEN** the system persists, chunks, embeds and indexes only the trusted fallback results through the existing knowledge ingestion path unless the assistant trusted-first policy selected exactly one external fallback result because no allowed-domain results were available
-
-#### Scenario: Assistant fallback search requests trusted domains
-
-- **WHEN** the assistant runs fallback web search after insufficient RAG evidence
-- **THEN** the system passes the configured trusted source domains to the search provider when the provider supports domain filtering or domain guidance
 
 ### Requirement: Aspect-aware evidence validation
 
@@ -146,7 +99,7 @@ Trusted web fallback for assistant plant-care answers SHALL run after local evid
 - **WHEN** the display plant name differs from confirmed taxonomy
 - **THEN** trusted web fallback query construction uses `plant_binomial_name` or `plant_scientific_name` and does not use the display name, nickname, apodo, or classifier plant reference
 
-#### Scenario: Web fallback skipped when local evidence complete
+#### Scenario: Web fallback skipped when local evidence full
 
 - **WHEN** local evidence validation covers all requested required aspects above threshold with `status: "full"`
 - **THEN** trusted web fallback is not called for that answer
@@ -192,47 +145,10 @@ The system SHALL persist assistant web fallback evidence only as small validated
 - **WHEN** the assistant returns a final answer to the user
 - **THEN** the knowledge acquisition path does not persist the final assistant response text as a knowledge document
 
-#### Scenario: Validated web evidence remains filterable
+#### Scenario: Validated web claim remains filterable
 
 - **WHEN** validated web claim evidence is persisted
 - **THEN** future retrieval can filter or constrain results by confirmed taxonomy, topic, covered aspects, review status, evidence type, final answerability status, and source domain when available
-
-### Requirement: Re-embedding and re-retrieval
-
-The system SHALL create embeddings after successful ingestion, persist them into the LlamaIndex pgvector index with required metadata and allow the caller to re-run retrieval using the new evidence.
-
-#### Scenario: Acquisition succeeds
-
-- **WHEN** a structured knowledge document is generated and persisted
-- **THEN** the system chunks, embeds, indexes the chunks through LlamaIndex pgvector and makes them retrievable for the current flow and future flows
-
-#### Scenario: Retrieved evidence maps back to provenance records
-
-- **WHEN** LlamaIndex returns matching vector nodes
-- **THEN** the system maps retrieved nodes back to structured knowledge chunks with document, source, confidence, review status and date metadata
-
-### Requirement: Pgvector embedding persistence contract
-
-The system SHALL persist knowledge embedding vectors using a database binding compatible with the PostgreSQL pgvector column type and the configured embedding dimension.
-
-#### Scenario: Embedding vector insert uses pgvector-compatible binding
-
-- **WHEN** a knowledge chunk embedding is persisted to `knowledge_embeddings.embedding_vector`
-- **THEN** the insert value is bound or cast as a pgvector-compatible vector value rather than as `VARCHAR`
-
-#### Scenario: Embedding dimension remains validated
-
-- **WHEN** an embedding dimension does not match the configured embedding dimension
-- **THEN** the system rejects the embedding before persisting it
-
-### Requirement: JSON formatted acquisition prompt
-
-The system SHALL make structured knowledge acquisition prompts compatible with provider JSON object response formatting.
-
-#### Scenario: OpenAI JSON object formatting is requested
-
-- **WHEN** the acquisition flow calls the configured model provider with JSON object response formatting
-- **THEN** the input prompt explicitly instructs the provider to return JSON
 
 ### Requirement: Structured API fallback before trusted web acquisition
 
@@ -254,59 +170,6 @@ The system SHALL NOT attempt structured plant-data API evidence in the normal as
 - **WHEN** a non-chat-time backend flow or future offline ingestion flow explicitly uses structured plant-data providers
 - **THEN** Trefle and Perenual services may still be called according to their provider contracts
 
-### Requirement: Trusted page fetch safety
-
-The system MUST fetch trusted page evidence only from HTTPS URLs that remain trusted after redirects, and MUST fall back to the trusted search snippet when fetched content is unavailable or unsafe.
-
-#### Scenario: Non-HTTPS URL rejected before fetch
-
-- **WHEN** trusted page evidence is requested for a non-HTTPS URL
-- **THEN** the system rejects the page fetch before opening a network request and keeps the trusted snippet available as fallback evidence
-
-#### Scenario: Untrusted URL not fetched
-
-- **WHEN** trusted page evidence is requested for a URL that is not approved or explicitly validated as trusted
-- **THEN** the system does not fetch the URL and reports degraded evidence for that result
-
-#### Scenario: Unsupported content type
-
-- **WHEN** a trusted HTTPS page returns a content type outside the supported evidence formats
-- **THEN** the system rejects fetched content and keeps the trusted snippet available as fallback evidence
-
-#### Scenario: Oversized response
-
-- **WHEN** a trusted HTTPS page response exceeds the configured maximum response size
-- **THEN** the system rejects fetched content and keeps the trusted snippet available as fallback evidence
-
-#### Scenario: Trust-crossing redirect
-
-- **WHEN** a trusted HTTPS page redirects to a URL that is not trusted
-- **THEN** the system rejects fetched content and keeps the trusted snippet available as fallback evidence
-
-### Requirement: Trusted fallback page-content acquisition
-
-The system SHALL fetch and extract source page content for fallback web evidence only after each search result passes existing trusted-source validation.
-
-#### Scenario: Trusted page content is fetched for fallback evidence
-
-- **WHEN** fallback web search returns a usable HTTPS result from an approved trusted domain
-- **THEN** the system validates the result with the existing trusted-source validator before fetching the page
-- **AND** fetches the page using bounded timeouts, response-size limits and content-type checks
-- **AND** extracts readable text for use as fallback evidence when extraction succeeds
-
-#### Scenario: Untrusted page is not fetched or persisted
-
-- **WHEN** fallback web search returns a result that does not pass existing trusted-source validation
-- **THEN** the system does not fetch the result URL
-- **AND** does not include the page content in answer evidence
-- **AND** does not persist that result as acquired knowledge
-
-#### Scenario: Unsafe fetch response is rejected
-
-- **WHEN** a trusted result fetch redirects to an untrusted or non-HTTPS URL, exceeds the configured response-size limit, times out, or returns an unsupported content type
-- **THEN** the system rejects the fetched page body
-- **AND** falls back to the trusted search result snippet for that source without blocking the assistant response
-
 ### Requirement: Fetched trusted content ingestion
 
 The system SHALL NOT persist fetched trusted page content in full by default from the assistant chat-time fallback path. When final combined judging validates source-supported claims from fetched content, the system SHALL persist small contextualized claim documents derived from those claims instead of the full page body.
@@ -325,8 +188,8 @@ The system SHALL NOT persist fetched trusted page content in full by default fro
 
 #### Scenario: Persistence failure does not block fallback answer
 
-- **WHEN** fetched trusted page content is available but knowledge persistence or embedding fails
-- **THEN** the system still returns the fallback assistant answer using available evidence
+- **WHEN** validated claim content is available but knowledge persistence or embedding fails
+- **THEN** the system still returns the assistant answer using available evidence
 - **AND** logs or reports the persistence failure as a non-blocking limitation
 
 ### Requirement: Assistant fallback web evidence persistence
@@ -349,7 +212,7 @@ The system SHALL persist assistant fallback web evidence through the existing kn
 - **AND** each document confidence is lower than trusted-domain web evidence confidence
 - **AND** the source validation status is `external_fallback`
 
-#### Scenario: Fallback evidence is embedded and indexed
+#### Scenario: Fallback claim is embedded and indexed
 
 - **WHEN** fallback web claim ingestion succeeds for final-judge-supported source claims
 - **THEN** the system chunks, embeds, persists and indexes those claims using the configured embedding provider so future retrieval can find them
@@ -357,7 +220,7 @@ The system SHALL persist assistant fallback web evidence through the existing kn
 #### Scenario: Fallback evidence persistence is best effort
 
 - **WHEN** fallback evidence ingestion, embedding or indexing fails after usable web evidence was found
-- **THEN** the system does not block the assistant answer and records the persistence limitation for observability or response metadata
+- **THEN** the system does not block the assistant answer and records or logs the persistence limitation for observability
 
 #### Scenario: Off-aspect fallback evidence is not persisted
 
@@ -374,16 +237,6 @@ The system SHALL persist assistant fallback web evidence through the existing kn
 
 - **WHEN** multiple source-supported claims are used for one fallback answer
 - **THEN** the answer's overall web validation confidence does not exceed the minimum validation confidence among the included source-supported claims unless a stricter aggregation policy is implemented
-
-### Requirement: Snippet degradation remains available
-
-The system SHALL preserve snippet-only fallback behavior when trusted page fetching or extraction fails.
-
-#### Scenario: Extraction fails for trusted result
-
-- **WHEN** a trusted result cannot be fetched or readable text cannot be extracted
-- **THEN** the system uses the trusted result title, snippet and URL as degraded fallback evidence
-- **AND** does not persist failed or empty fetched page content as knowledge
 
 ### Requirement: Acquisition degradation
 
@@ -415,6 +268,8 @@ The system MUST NOT block the user experience completely when trusted acquisitio
 - **THEN** the background task rolls back its own transaction and logs the failure
 - **AND** the user-facing assistant answer remains returned
 
+## ADDED Requirements
+
 ### Requirement: Combined final evidence judging
 
 The system SHALL run one final combined judge over available RAG evidence and selected web evidence before synthesizing a final answer when RAG evidence is not full.
@@ -438,52 +293,3 @@ The system SHALL run one final combined judge over available RAG evidence and se
 
 - **WHEN** final combined judging detects conflicting source-supported claims
 - **THEN** it returns contradiction entries with aspect, conflicting claims, source URLs, explanation and severity
-
-### Requirement: Failed acquisition rolls back poisoned transactions
-
-The system SHALL roll back failed database work before returning degraded acquisition or fallback results when best-effort knowledge ingestion, embedding persistence or vector indexing fails.
-
-#### Scenario: Trusted acquisition persistence fails after database work starts
-
-- **WHEN** trusted acquisition attempts to persist or index generated knowledge and the operation fails after database work has started
-- **THEN** the system rolls back the failed transaction before returning a degraded acquisition result
-- **AND** the same request can continue using the database session for later assistant persistence
-
-#### Scenario: Fallback evidence persistence failure is isolated
-
-- **WHEN** fallback web evidence ingestion fails after usable web evidence exists
-- **THEN** the system reports the persistence failure as non-blocking tool failure metadata
-- **AND** the failed transaction is rolled back before the assistant response is generated or saved
-
-### Requirement: Acquisition failure transaction recovery
-
-The system MUST recover the active database transaction after best-effort knowledge acquisition persistence or embedding failure before continuing with later database writes.
-
-#### Scenario: Best-effort acquisition persistence fails
-
-- **WHEN** trusted knowledge acquisition, embedding persistence or vector indexing fails in a path that continues execution
-- **THEN** the system rolls back the failed transaction before performing subsequent database writes
-
-### Requirement: RAG acquisition plant name priority
-
-Runtime botanical retrieval, trusted web fallback, and fallback evidence acquisition SHALL use the assistant operational plant name derived from `plant_binomial_name`, then `plant_scientific_name`, then `plant`.
-
-#### Scenario: RAG retrieval uses binomial name
-
-- **WHEN** an assistant chat request includes `plant_binomial_name` and RAG retrieval is needed
-- **THEN** the retrieval query and species/topic context use `plant_binomial_name` as the plant name
-
-#### Scenario: RAG retrieval falls back to scientific name
-
-- **WHEN** RAG retrieval is needed and `plant_binomial_name` is missing but `plant_scientific_name` is present
-- **THEN** the retrieval query and species/topic context use `plant_scientific_name` as the plant name
-
-#### Scenario: Trusted web fallback uses operational name
-
-- **WHEN** persisted RAG evidence is insufficient and trusted web fallback runs for a botanical question
-- **THEN** the trusted web search query and any fallback evidence ingestion metadata use the assistant operational plant name
-
-#### Scenario: Legacy plant-only acquisition still works
-
-- **WHEN** an assistant chat request includes only `plant` and retrieval or acquisition is needed
-- **THEN** RAG retrieval, trusted web fallback, and fallback evidence acquisition use `plant` as the plant name

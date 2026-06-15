@@ -48,6 +48,8 @@ class MockModelProvider(ModelProvider):
             score=1.0,
             passed=True,
             reasons=["Mock judge accepts deterministic local output."],
+            status="full",
+            confidence=1.0,
         )
 
 

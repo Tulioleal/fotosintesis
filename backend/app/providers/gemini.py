@@ -200,15 +200,11 @@ class GeminiJudgeProvider(JudgeEvaluationProvider):
             ),
         )
         data = _json_from_response(response)
-        score = float(data.get("score", 0))
-        passed = bool(data.get("passed", score >= float(rubric.get("passing_score", 1))))
-        reasons = data.get("reasons") or []
-        return JudgeResult(
+        return JudgeResult.from_provider_data(
             provider=self.provider_name,
             model=model,
-            score=score,
-            passed=passed,
-            reasons=[str(reason) for reason in reasons],
+            data=data,
+            passing_score=float(rubric.get("passing_score", 1)),
         )
 
 
@@ -332,7 +328,7 @@ def _confidence_label(value: Any) -> ConfidenceLabel:
 def _judge_prompt(payload: dict[str, Any], rubric: dict[str, Any]) -> str:
     return (
         "Evaluate the assistant output against the rubric. "
-        "Return JSON with score, passed, and reasons.\n"
+        "Return only valid JSON matching the rubric's expected_output.\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=True, sort_keys=True)}\n"
         f"Rubric:\n{json.dumps(rubric, ensure_ascii=True, sort_keys=True)}"
     )
@@ -489,9 +485,50 @@ _VISION_SCHEMA: dict[str, Any] = {
 _JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "status": {"type": "string", "enum": ["full", "partial", "insufficient", "contradictory"]},
+        "covered_aspects": {"type": "array", "items": {"type": "string"}},
+        "missing_aspects": {"type": "array", "items": {"type": "string"}},
+        "source_support": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_urls": {"type": "array", "items": {"type": "string"}},
+                    "covered_aspects": {"type": "array", "items": {"type": "string"}},
+                    "evidence_quote": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["claim", "source_urls", "covered_aspects", "evidence_quote", "confidence"],
+            },
+        },
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_a": {"type": "string"},
+                    "claim_b": {"type": "string"},
+                    "source_a_urls": {"type": "array", "items": {"type": "string"}},
+                    "source_b_urls": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["claim_a", "claim_b", "source_a_urls", "source_b_urls"],
+            },
+        },
+        "confidence": {"type": "number"},
         "score": {"type": "number"},
         "passed": {"type": "boolean"},
         "reasons": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["score", "passed", "reasons"],
+    "required": [
+        "status",
+        "covered_aspects",
+        "missing_aspects",
+        "source_support",
+        "contradictions",
+        "confidence",
+        "score",
+        "passed",
+        "reasons",
+    ],
 }

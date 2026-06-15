@@ -121,6 +121,11 @@ class AssistantState(TypedDict, total=False):
     web_validation_confidence: float
     plant_data: StructuredPlantEvidence | None
     sufficient: bool
+    answerability_status: str
+    answerability: dict[str, object]
+    source_support: list[dict[str, object]]
+    contradictions: list[dict[str, object]]
+    ingestion_claims: list[dict[str, object]]
     sources: list[dict]
     fallback_reasons: list[str]
     answer: str
@@ -226,6 +231,8 @@ class AssistantGraph:
         result = await self.tools.knowledge_search(
             scientific_name=scientific_name,
             topic=state.get("topic") or "care",
+            required_aspects=state.get("required_aspects", []),
+            question=state["message"],
         )
         if not result.ok:
             return {
@@ -239,17 +246,36 @@ class AssistantGraph:
         retrieval = state.get("retrieval")
         chunks = getattr(retrieval, "chunks", []) if retrieval else []
         if not chunks:
-            return {"sufficient": False}
+            requested = state.get("required_aspects", [])
+            result = AnswerabilityResult(
+                status="insufficient",
+                answerable=False,
+                missing_aspects=requested,
+                reason="retrieval returned no chunks",
+            )
+            return {
+                "sufficient": False,
+                "answerability_status": result.status,
+                "answerability": result.as_metadata(),
+                "missing_aspects": requested,
+            }
         result = await _judge_answerability(
             self.tools,
             evidence_type="rag",
             question=state["message"],
             plant_name=_display_name_for_answer(state),
             topic=state.get("topic") or "care",
+            required_aspects=state.get("required_aspects", []),
             evidence=_evidence_from_chunks(chunks),
             source_metadata=state.get("sources", []),
         )
-        _log_answerability_decision("rag", result, None if result.answerable else "rag_not_answerable")
+        requested = state.get("required_aspects", [])
+        result = _validated_answerability(
+            result,
+            requested_aspects=requested,
+            source_metadata=state.get("sources", []),
+        )
+        _log_answerability_decision("rag", result, None if result.status == "full" else "rag_not_answerable")
         validation = _validate_evidence_against_required_aspects(
             state,
             evidence=_evidence_from_chunks(chunks),
@@ -259,13 +285,21 @@ class AssistantGraph:
         )
         if validation.covered_aspects:
             return {
-                "sufficient": validation.answerable,
+                "sufficient": result.status == "full" and validation.answerable,
+                "answerability_status": result.status,
+                "answerability": result.as_metadata(),
+                "source_support": result.source_support,
+                "contradictions": result.contradictions,
                 "covered_aspects": [aspect.value for aspect in validation.covered_aspects],
                 "missing_aspects": [aspect.value for aspect in validation.missing_aspects],
                 "evidence_path": _append_evidence_path(state, "rag"),
             }
         return {
             "sufficient": False,
+            "answerability_status": result.status,
+            "answerability": result.as_metadata(),
+            "source_support": result.source_support,
+            "contradictions": result.contradictions,
             "covered_aspects": [],
             "missing_aspects": state.get("required_aspects", []),
             "fallback_reasons": _append_reason(state, "rag_not_answerable"),
@@ -293,28 +327,49 @@ class AssistantGraph:
             }
         web_results = _usable_web_results(result.data)
         if not web_results:
-            return {"fallback_reasons": _append_reason({**state, "fallback_reasons": fallback_reasons}, "web_search_no_direct_answer")}
-        requested_web_aspects = _requested_web_aspects(state)
-        validated_web_sources = await _validate_web_evidence(self.tools, self.settings, state, web_results)
-        validated_web_results = [source.evidence for source in validated_web_sources]
-        web_source_validations = _web_source_validation_metadata(validated_web_sources)
-        web_covered_aspects = _merge_aspect_values([], [aspect for source in validated_web_sources for aspect in source.covered_aspects])
-        if not web_covered_aspects or not validated_web_results:
+            result = AnswerabilityResult(
+                status="insufficient",
+                answerable=False,
+                missing_aspects=state.get("missing_aspects") or state.get("required_aspects", []),
+                reason="trusted web search returned no usable evidence",
+            )
             return {
-                "missing_aspects": [aspect.value for aspect in requested_web_aspects],
+                "answerability_status": result.status,
+                "answerability": result.as_metadata(),
+                "fallback_reasons": _append_reason({**state, "fallback_reasons": fallback_reasons}, "web_search_no_direct_answer"),
+            }
+        requested_web_aspects = _requested_web_aspects(state)
+        final_result = await _judge_combined_evidence(self.tools, self.settings, state, web_results)
+        web_covered_aspects = final_result.covered_aspects
+        supported_urls = _source_support_urls(final_result.source_support)
+        validated_web_results = [
+            result for result in web_results if not supported_urls or result.result.url in supported_urls
+        ]
+        web_source_validations = _web_source_validation_metadata_from_result(final_result)
+        if final_result.status not in {"full", "partial", "contradictory"} or not validated_web_results:
+            return {
+                "answerability_status": final_result.status,
+                "answerability": final_result.as_metadata(),
+                "source_support": final_result.source_support,
+                "contradictions": final_result.contradictions,
+                "missing_aspects": final_result.missing_aspects or [aspect.value for aspect in requested_web_aspects],
                 "fallback_reasons": _append_reason({**state, "fallback_reasons": fallback_reasons}, "web_search_not_validated"),
             }
-        covered = _merge_aspect_values(state.get("covered_aspects", []), web_covered_aspects)
-        missing = [aspect.value for aspect in requested_web_aspects if aspect.value not in web_covered_aspects]
+        covered = web_covered_aspects
+        missing = final_result.missing_aspects
         return {
             "web_results": validated_web_results,
             "web_source_validations": web_source_validations,
             "sources": state.get("sources", []) + _sources_from_web_results(validated_web_results, web_source_validations),
             "fallback_reasons": fallback_reasons,
+            "answerability_status": final_result.status,
+            "answerability": final_result.as_metadata(),
+            "source_support": final_result.source_support,
+            "contradictions": final_result.contradictions,
             "covered_aspects": covered,
             "missing_aspects": missing,
             "evidence_path": _append_evidence_path(state, "web"),
-            "web_validation_confidence": min(source.validation.confidence for source in validated_web_sources),
+            "web_validation_confidence": final_result.confidence,
         }
 
     async def fallback_plant_data(self, state: AssistantState) -> dict:
@@ -350,6 +405,7 @@ class AssistantGraph:
             question=state["message"],
             plant_name=_display_name_for_answer(state) or evidence.scientific_name,
             topic=state.get("topic") or "care",
+            required_aspects=state.get("required_aspects", []),
             evidence=evidence.content,
             source_metadata=_sources_from_structured_evidence(evidence),
         )
@@ -524,9 +580,6 @@ class AssistantGraph:
         chunks = getattr(retrieval, "chunks", []) if retrieval else []
         limitations = list(getattr(retrieval, "limitations", []) if retrieval else [])
         if not state.get("sufficient"):
-            plant_data = state.get("plant_data")
-            if plant_data and plant_data.sufficient:
-                return await self._generate_structured_answer(state, plant_data)
             web_results = state.get("web_results", [])
             if web_results:
                 safety_answer = _conservative_safety_answer(state) if _has_missing_safety_aspect(state) else None
@@ -590,13 +643,13 @@ class AssistantGraph:
     ) -> dict:
         plant_name = _display_name_for_answer(state)
         topic = state.get("topic") or "care"
-        evidence = " ".join(_shorten(result.evidence_text, 500) for result in web_results[:3])
+        evidence = _combined_answer_evidence(state, web_results)
         citations = ", ".join(result.result.url for result in web_results[:3])
         fallback = _web_fallback_answer(plant_name, topic, evidence, citations)
         synthesized = await self._generate_grounded_answer(
             state,
             plant_name=plant_name,
-            evidence_type="live_web",
+            evidence_type="combined_rag_web" if _supported_rag_evidence(state) else "live_web",
             evidence=evidence,
             limitations=[
                 "Esta guia usa fuentes web recientes aun no incorporadas al conocimiento persistido."
@@ -604,19 +657,14 @@ class AssistantGraph:
             source_metadata=state.get("sources", []),
             fallback=fallback,
         )
-        ingestion = await self.tools.ingest_web_evidence(
-            scientific_name=str(_operational_name_for_tools(state) or plant_name),
-            topic=topic,
-            results=web_results,
-            metadata=_validated_web_metadata(state, web_results),
-        )
-        if not ingestion.ok:
-            return {
-                "answer": synthesized["answer"],
-                "tool_failures": synthesized.get("tool_failures", state.get("tool_failures", []))
-                + [ingestion.error or "ingest_web_evidence failed"],
-            }
-        return synthesized
+        return {
+            **synthesized,
+            "ingestion_claims": _validated_claim_payloads(
+                state,
+                scientific_name=str(_operational_name_for_tools(state) or plant_name or ""),
+                topic=topic,
+            ),
+        }
 
     async def _generate_grounded_answer(
         self,
@@ -643,6 +691,9 @@ class AssistantGraph:
             required_aspects=state.get("required_aspects", []),
             covered_aspects=state.get("covered_aspects", []),
             missing_aspects=state.get("missing_aspects", []),
+            answerability_status=state.get("answerability_status") or ("full" if state.get("sufficient") else "insufficient"),
+            source_support=state.get("source_support", []),
+            contradictions=state.get("contradictions", []),
         )
         result = await self.tools.generate_text(prompt)
         if not result.ok:
@@ -698,25 +749,26 @@ class AssistantGraph:
 
 @dataclass(frozen=True)
 class AnswerabilityResult:
+    status: Literal["full", "partial", "insufficient", "contradictory"] = "insufficient"
     answerable: bool = False
+    covered_aspects: list[str] = field(default_factory=list)
     missing_aspects: list[str] = field(default_factory=list)
+    source_support: list[dict[str, object]] = field(default_factory=list)
+    contradictions: list[dict[str, object]] = field(default_factory=list)
     reason: str = "answerability judge did not confirm direct support"
     confidence: float = 0.0
 
-
-@dataclass(frozen=True)
-class ValidatedWebSource:
-    evidence: TrustedPageEvidence
-    validation: EvidenceValidationResult
-
-    @property
-    def covered_aspects(self) -> list[str]:
-        return [aspect.value for aspect in self.validation.covered_aspects]
-
-    @property
-    def missing_aspects(self) -> list[str]:
-        return [aspect.value for aspect in self.validation.missing_aspects]
-
+    def as_metadata(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "answerable": self.answerable,
+            "covered_aspects": self.covered_aspects,
+            "missing_aspects": self.missing_aspects,
+            "source_support": self.source_support,
+            "contradictions": self.contradictions,
+            "reason": self.reason,
+            "confidence": self.confidence,
+        }
 
 CARE_CLASSIFIER_SCHEMA = {
     "type": "object",
@@ -877,6 +929,8 @@ def _care_topic_for_aspects(aspects: list[RequiredAspect], message: str) -> Care
         return CareTopic.pests
     if any(aspect in aspects for aspect in (RequiredAspect.pet_toxicity, RequiredAspect.human_edibility)):
         return CareTopic.toxicity
+    if RequiredAspect.native_range in aspects:
+        return CareTopic.taxonomy
     if RequiredAspect.temperature_range in aspects:
         return CareTopic.temperature
     if RequiredAspect.humidity_preference in aspects:
@@ -895,6 +949,8 @@ async def _judge_answerability(
     topic: str,
     evidence: str,
     source_metadata: list[dict],
+    required_aspects: list[str] | None = None,
+    extra_payload: dict[str, object] | None = None,
 ) -> AnswerabilityResult:
     judge = getattr(getattr(tools, "providers", None), "judge", None)
     if judge is None or not hasattr(judge, "judge_response"):
@@ -903,23 +959,33 @@ async def _judge_answerability(
         "question": question,
         "plant_name": plant_name,
         "topic": topic,
+        "required_aspects": required_aspects or [],
         "evidence_type": evidence_type,
         "evidence": _shorten(evidence, 1800),
         "source_metadata": source_metadata[:5],
     }
+    if extra_payload:
+        payload.update(extra_payload)
     rubric = {
         "passing_score": 1.0,
         "criteria": [
-            "Pass only when the evidence directly answers the user's exact question.",
-            "Fail when evidence is merely about the same plant or general care but misses the asked aspect.",
-            "Fail when safety, edibility, toxicity, native range, morphology or water-temperature details are absent for questions about those aspects.",
+            "Return full only when the evidence directly answers every required aspect in the user's exact question.",
+            "Return partial when the evidence directly supports some required aspects but leaves others missing.",
+            "Return insufficient when evidence is merely about the same plant or general care but misses the asked aspect.",
+            "Return contradictory when supplied sources make conflicting claims that prevent a reliable answer.",
+            "For safety, edibility, toxicity, native range, morphology or water-temperature questions, mark those aspects missing unless directly supported by supplied evidence.",
             "Do not use general model knowledge outside the supplied evidence.",
         ],
         "expected_output": {
-            "answerable": "boolean equivalent to passed",
-            "missing_aspects": "reasons should name missing aspects when failed",
-            "reason": "short explanation",
+            "status": "one of full, partial, insufficient, contradictory",
+            "covered_aspects": "array of required aspect strings directly supported by evidence",
+            "missing_aspects": "array of required aspect strings not directly supported by evidence",
+            "source_support": "array of objects with claim, source_urls, covered_aspects, evidence_quote, confidence",
+            "contradictions": "array of objects with claim_a, claim_b, source_a_urls, source_b_urls",
             "confidence": "0 to 1 score",
+            "score": "same numeric value as confidence for compatibility",
+            "passed": "true only when status is full",
+            "reasons": "short explanations for the status decision",
         },
     }
     try:
@@ -931,13 +997,197 @@ async def _judge_answerability(
 
 def _answerability_from_judge_result(result: Any) -> AnswerabilityResult:
     score = _float_or_zero(getattr(result, "score", 0.0))
-    passed = bool(getattr(result, "passed", False))
+    confidence = max(0.0, min(1.0, _float_or_zero(getattr(result, "confidence", score))))
     reasons = [str(reason) for reason in getattr(result, "reasons", []) if str(reason).strip()]
+    status = _answerability_status(getattr(result, "status", None))
+    if status is None:
+        status = "full" if bool(getattr(result, "passed", False)) else "insufficient"
+    covered_aspects = _string_list(getattr(result, "covered_aspects", []))
+    missing_aspects = _string_list(getattr(result, "missing_aspects", []))
+    if status != "full" and not missing_aspects:
+        missing_aspects = reasons
+    answerable = status == "full"
+    if hasattr(result, "answerable"):
+        answerable = bool(getattr(result, "answerable"))
     return AnswerabilityResult(
-        answerable=passed,
-        missing_aspects=[] if passed else reasons,
+        status=status,
+        answerable=answerable,
+        covered_aspects=covered_aspects,
+        missing_aspects=[] if status == "full" else missing_aspects,
+        source_support=_dict_list(getattr(result, "source_support", [])),
+        contradictions=_dict_list(getattr(result, "contradictions", [])),
         reason="; ".join(reasons) if reasons else "answerability judge did not provide a reason",
-        confidence=max(0.0, min(1.0, score)),
+        confidence=confidence,
+    )
+
+
+def _answerability_status(value: Any) -> Literal["full", "partial", "insufficient", "contradictory"] | None:
+    status = str(value or "").strip().lower()
+    if status == "full":
+        return "full"
+    if status == "partial":
+        return "partial"
+    if status == "insufficient":
+        return "insufficient"
+    if status == "contradictory":
+        return "contradictory"
+    return None
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list | tuple | set):
+        return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def _dict_list(value: Any) -> list[dict[str, object]]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _validated_answerability(
+    result: AnswerabilityResult,
+    *,
+    requested_aspects: list[str],
+    source_metadata: list[dict] | None = None,
+) -> AnswerabilityResult:
+    if result.answerable and result.status == "insufficient":
+        result = AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=result.covered_aspects,
+            missing_aspects=result.missing_aspects,
+            source_support=result.source_support,
+            contradictions=result.contradictions,
+            reason=result.reason,
+            confidence=result.confidence,
+        )
+    requested = [aspect for aspect in requested_aspects if aspect]
+    covered = [aspect for aspect in result.covered_aspects if aspect in requested]
+    missing = [aspect for aspect in requested if aspect not in covered]
+    support = [item for item in result.source_support if _valid_source_support(item, requested)]
+    contradictions = [item for item in result.contradictions if _valid_contradiction(item)]
+
+    if result.status == "full":
+        if not requested:
+            requested = [RequiredAspect.general_care_summary.value]
+            covered = requested if result.answerable else covered
+            missing = [] if result.answerable else requested
+        if result.answerable and not covered:
+            covered = list(requested)
+            missing = []
+        if set(covered) >= set(requested) and support:
+            return AnswerabilityResult(
+                status="full",
+                answerable=True,
+                covered_aspects=covered,
+                missing_aspects=[],
+                source_support=support,
+                contradictions=contradictions,
+                reason=result.reason,
+                confidence=result.confidence,
+            )
+        if covered and support:
+            return AnswerabilityResult(
+                status="partial",
+                answerable=False,
+                covered_aspects=covered,
+                missing_aspects=missing,
+                source_support=support,
+                contradictions=contradictions,
+                reason=result.reason,
+                confidence=result.confidence,
+            )
+        return AnswerabilityResult(
+            status="insufficient",
+            answerable=False,
+            covered_aspects=[],
+            missing_aspects=requested,
+            reason=result.reason,
+            confidence=result.confidence,
+        )
+
+    if result.status == "partial":
+        if covered and support:
+            return AnswerabilityResult(
+                status="partial",
+                answerable=False,
+                covered_aspects=covered,
+                missing_aspects=missing,
+                source_support=support,
+                contradictions=contradictions,
+                reason=result.reason,
+                confidence=result.confidence,
+            )
+        return AnswerabilityResult(
+            status="insufficient",
+            answerable=False,
+            covered_aspects=[],
+            missing_aspects=requested,
+            reason=result.reason,
+            confidence=result.confidence,
+        )
+
+    if result.status == "contradictory":
+        if contradictions:
+            return AnswerabilityResult(
+                status="contradictory",
+                answerable=False,
+                covered_aspects=covered,
+                missing_aspects=missing or requested,
+                source_support=support,
+                contradictions=contradictions,
+                reason=result.reason,
+                confidence=result.confidence,
+            )
+        return AnswerabilityResult(
+            status="insufficient",
+            answerable=False,
+            covered_aspects=covered,
+            missing_aspects=missing or requested,
+            source_support=support,
+            reason=result.reason or "contradictory answerability result lacked source URLs",
+            confidence=result.confidence,
+        )
+
+    return AnswerabilityResult(
+        status="insufficient",
+        answerable=False,
+        covered_aspects=covered,
+        missing_aspects=missing or requested,
+        source_support=support,
+        contradictions=contradictions,
+        reason=result.reason,
+        confidence=result.confidence,
+    )
+
+
+def _valid_source_support(item: dict[str, object], requested_aspects: list[str]) -> bool:
+    urls = item.get("source_urls")
+    aspects = item.get("covered_aspects")
+    return (
+        isinstance(item.get("claim"), str)
+        and bool(str(item.get("claim")).strip())
+        and isinstance(urls, list)
+        and any(isinstance(url, str) and url.strip() for url in urls)
+        and isinstance(aspects, list)
+        and any(isinstance(aspect, str) and aspect in requested_aspects for aspect in aspects)
+    )
+
+
+def _valid_contradiction(item: dict[str, object]) -> bool:
+    left = item.get("source_a_urls")
+    right = item.get("source_b_urls")
+    return (
+        isinstance(item.get("claim_a"), str)
+        and isinstance(item.get("claim_b"), str)
+        and isinstance(left, list)
+        and isinstance(right, list)
+        and any(isinstance(url, str) and url.strip() for url in left)
+        and any(isinstance(url, str) and url.strip() for url in right)
     )
 
 
@@ -961,11 +1211,15 @@ def _validate_evidence_against_required_aspects(
     safety_threshold: float,
 ) -> EvidenceValidationResult:
     requested = _required_aspects_from_state(state)
-    direct = [aspect for aspect in requested if _evidence_directly_covers_aspect(evidence, aspect)]
+    if semantic_result.status == "full" and semantic_result.answerable:
+        candidate_values = [aspect.value for aspect in requested]
+    else:
+        candidate_values = semantic_result.covered_aspects
     covered = [
         aspect
-        for aspect in direct
-        if _aspect_meets_threshold(aspect, semantic_result.confidence, threshold, safety_threshold)
+        for aspect in requested
+        if aspect.value in candidate_values
+        and _aspect_meets_threshold(aspect, semantic_result.confidence, threshold, safety_threshold)
     ]
     missing = [aspect for aspect in requested if aspect not in covered]
     return EvidenceValidationResult(
@@ -978,41 +1232,70 @@ def _validate_evidence_against_required_aspects(
     )
 
 
-async def _validate_web_evidence(
+async def _judge_combined_evidence(
     tools: AssistantTools,
     settings: Settings,
     state: AssistantState,
     results: list[TrustedPageEvidence],
-) -> list[ValidatedWebSource]:
-    requested = _requested_web_aspects(state)
-    if not requested:
-        return []
-
-    async def validate_one(result: TrustedPageEvidence) -> ValidatedWebSource | None:
-        evidence = _shorten(result.evidence_text, 500)
-        semantic = await _judge_answerability(
-            tools,
-            evidence_type="live_web",
-            question=state["message"],
-            plant_name=_display_name_for_answer(state),
-            topic=state.get("topic") or "care",
-            evidence=evidence,
-            source_metadata=_sources_from_web_results([result]),
+) -> AnswerabilityResult:
+    requested_values = _final_required_aspect_values(state)
+    rag = state.get("retrieval")
+    rag_chunks = getattr(rag, "chunks", []) if rag else []
+    web_evidence = " ".join(_shorten(result.evidence_text, 700) for result in results[:3])
+    combined = " ".join(
+        part for part in (_evidence_from_chunks(rag_chunks), web_evidence) if part.strip()
+    )
+    source_metadata = state.get("sources", []) + _sources_from_web_results(results[:3])
+    semantic = await _judge_answerability(
+        tools,
+        evidence_type="combined_rag_web",
+        question=state["message"],
+        plant_name=_display_name_for_answer(state),
+        topic=state.get("topic") or "care",
+        required_aspects=requested_values,
+        evidence=combined,
+        source_metadata=source_metadata,
+        extra_payload={"rag_answerability": state.get("answerability", {})},
+    )
+    if semantic.status == "full" and semantic.answerable:
+        covered_values = _safety_constrained_covered_aspects(requested_values, combined)
+        semantic = AnswerabilityResult(
+            status="full" if set(covered_values) >= set(requested_values) else "partial",
+            answerable=set(covered_values) >= set(requested_values),
+            covered_aspects=covered_values,
+            missing_aspects=[aspect for aspect in requested_values if aspect not in covered_values],
+            source_support=semantic.source_support,
+            contradictions=semantic.contradictions,
+            reason=semantic.reason,
+            confidence=semantic.confidence,
         )
-        scoped_state = {**state, "required_aspects": [aspect.value for aspect in requested]}
-        validation = _validate_evidence_against_required_aspects(
-            scoped_state,
-            evidence=evidence,
-            semantic_result=semantic,
-            threshold=settings.assistant_evidence_validation_threshold,
-            safety_threshold=settings.assistant_safety_validation_threshold,
+    validated = _validated_answerability(
+        semantic,
+        requested_aspects=requested_values,
+        source_metadata=source_metadata,
+    )
+    if (
+        validated.status in {"full", "partial"}
+        and validated.confidence < settings.assistant_evidence_validation_threshold
+    ):
+        return AnswerabilityResult(
+            status="insufficient",
+            answerable=False,
+            missing_aspects=requested_values,
+            reason="combined evidence confidence below validation threshold",
+            confidence=validated.confidence,
         )
-        if not validation.covered_aspects:
-            return None
-        return ValidatedWebSource(evidence=result, validation=validation)
+    return validated
 
-    validations = await asyncio.gather(*(validate_one(result) for result in results[:3]))
-    return [validation for validation in validations if validation is not None]
+
+def _safety_constrained_covered_aspects(requested_values: list[str], evidence: str) -> list[str]:
+    covered = list(requested_values)
+    normalized = evidence.casefold()
+    if RequiredAspect.pet_toxicity.value in covered and not _is_pet_safety_question(normalized):
+        covered.remove(RequiredAspect.pet_toxicity.value)
+    if RequiredAspect.human_edibility.value in covered and not _is_edibility_question(normalized):
+        covered.remove(RequiredAspect.human_edibility.value)
+    return covered
 
 
 def _requested_web_aspects(state: AssistantState | dict) -> list[RequiredAspect]:
@@ -1024,16 +1307,60 @@ def _requested_web_aspects(state: AssistantState | dict) -> list[RequiredAspect]
     ]
 
 
-def _web_source_validation_metadata(sources: list[ValidatedWebSource]) -> list[dict[str, object]]:
-    return [
-        {
-            "url": source.evidence.result.url,
-            "covered_aspects": source.covered_aspects,
-            "missing_aspects": source.missing_aspects,
-            "validation_confidence": source.validation.confidence,
-        }
-        for source in sources
-    ]
+def _final_required_aspect_values(state: AssistantState | dict) -> list[str]:
+    values = state.get("required_aspects") or state.get("missing_aspects", [])
+    requested = [str(aspect) for aspect in values if str(aspect) in RequiredAspect._value2member_map_]
+    return requested or [RequiredAspect.general_care_summary.value]
+
+
+def _combined_answer_evidence(
+    state: AssistantState | dict,
+    web_results: list[TrustedPageEvidence],
+) -> str:
+    parts = [_supported_rag_evidence(state)]
+    web_evidence = " ".join(_shorten(result.evidence_text, 500) for result in web_results[:3])
+    parts.append(web_evidence)
+    return " ".join(part for part in parts if part.strip())
+
+
+def _supported_rag_evidence(state: AssistantState | dict) -> str:
+    supported_urls = _source_support_urls(list(state.get("source_support", [])))
+    if not supported_urls:
+        return ""
+    rag = state.get("retrieval")
+    chunks = list(getattr(rag, "chunks", []) or []) if rag else []
+    supported_chunks = [chunk for chunk in chunks if chunk.source_url in supported_urls]
+    return " ".join(_shorten(chunk.content, 500) for chunk in supported_chunks[:3])
+
+
+def _web_source_validation_metadata_from_result(result: AnswerabilityResult) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for support in result.source_support:
+        urls = support.get("source_urls")
+        if not isinstance(urls, list):
+            continue
+        for url in urls:
+            if isinstance(url, str) and url.strip():
+                rows.append(
+                    {
+                        "url": url,
+                        "covered_aspects": list(support.get("covered_aspects", []))
+                        if isinstance(support.get("covered_aspects"), list)
+                        else [],
+                        "missing_aspects": result.missing_aspects,
+                        "validation_confidence": support.get("confidence", result.confidence),
+                    }
+                )
+    return rows
+
+
+def _source_support_urls(source_support: list[dict[str, object]]) -> set[str]:
+    urls: set[str] = set()
+    for support in source_support:
+        raw_urls = support.get("source_urls")
+        if isinstance(raw_urls, list):
+            urls.update(str(url) for url in raw_urls if str(url).strip())
+    return urls
 
 
 def _required_aspects_from_state(state: AssistantState | dict) -> list[RequiredAspect]:
@@ -1045,28 +1372,6 @@ def _required_aspects_from_state(state: AssistantState | dict) -> list[RequiredA
 def _aspect_meets_threshold(aspect: RequiredAspect, confidence: float, threshold: float, safety_threshold: float) -> bool:
     required = safety_threshold if aspect in SAFETY_SENSITIVE_ASPECTS else threshold
     return confidence >= required
-
-
-def _evidence_directly_covers_aspect(evidence: str, aspect: RequiredAspect) -> bool:
-    normalized = evidence.casefold()
-    aspect_terms = {
-        RequiredAspect.watering_frequency_or_trigger: ("dry", "dries", "between water", "water when", "riego", "regar", "sustrato se seca", "substrate dries", "soil dry"),
-        RequiredAspect.watering_amount: ("amount", "cantidad", "deeply", "until water drains", "hasta que drene"),
-        RequiredAspect.light_exposure: ("bright", "indirect light", "sun", "shade", "luz", "sol", "sombra", "luce"),
-        RequiredAspect.soil_drainage: ("drain", "drenaje", "well-draining", "sustrato", "soil"),
-        RequiredAspect.fertilizer_frequency: ("fertiliz", "abono", "feed", "monthly"),
-        RequiredAspect.pruning_timing: ("prune", "poda", "podar", "trim"),
-        RequiredAspect.pest_identification: ("pest", "plaga", "mealybug", "scale", "hongo"),
-        RequiredAspect.treatment_action: ("treat", "tratamiento", "spray", "remove", "isolate"),
-        RequiredAspect.repotting_timing: ("repot", "trasplant", "rootbound"),
-        RequiredAspect.temperature_range: ("temperature", "temperatura", "°", "celsius", "fahrenheit"),
-        RequiredAspect.humidity_preference: ("humidity", "humedad"),
-        RequiredAspect.native_range: ("native", "origin", "origen", "nativa", "nativo", "range", "distribution", "distribución", "distribucion"),
-        RequiredAspect.pet_toxicity: ("toxic", "tox", "pet", "mascota", "cat", "dog", "gato", "perro"),
-        RequiredAspect.human_edibility: ("edible", "comestible", "eat", "consum"),
-        RequiredAspect.general_care_summary: ("care", "cuidado", "plant", "planta"),
-    }
-    return any(term in normalized for term in aspect_terms[aspect])
 
 
 def _merge_aspect_values(left: list[str], right: list[str]) -> list[str]:
@@ -1110,10 +1415,55 @@ def _validated_web_metadata(state: AssistantState, results: list[TrustedPageEvid
     }
 
 
+def _validated_claim_payloads(
+    state: AssistantState,
+    *,
+    scientific_name: str,
+    topic: str,
+) -> list[dict[str, object]]:
+    status = str(state.get("answerability_status") or "")
+    if status not in {"full", "partial"}:
+        return []
+    payloads: list[dict[str, object]] = []
+    sources_by_url = {
+        str(source.get("url")): source
+        for source in state.get("sources", [])
+        if source.get("url")
+    }
+    for support in state.get("source_support", []):
+        urls = support.get("source_urls")
+        aspects = support.get("covered_aspects")
+        claim = str(support.get("claim") or "").strip()
+        if not claim or not isinstance(urls, list) or not isinstance(aspects, list):
+            continue
+        for url in urls:
+            if not isinstance(url, str) or not url.strip():
+                continue
+            source = sources_by_url.get(url, {})
+            payloads.append(
+                {
+                    "scientific_name": scientific_name,
+                    "topic": topic,
+                    "required_aspects": list(state.get("required_aspects", [])),
+                    "covered_aspects": [str(aspect) for aspect in aspects],
+                    "missing_aspects": list(state.get("missing_aspects", [])),
+                    "answerability_status": status,
+                    "claim": claim,
+                    "evidence_quote": str(support.get("evidence_quote") or claim),
+                    "source_url": url,
+                    "source_title": source.get("title"),
+                    "source_domain": source.get("domain"),
+                    "confidence": _float_or_zero(support.get("confidence", state.get("web_validation_confidence", 0.0))),
+                    "language": state.get("answer_language") or "es",
+                }
+            )
+    return payloads
+
+
 def _diagnostics(state: AssistantState | dict) -> dict[str, object]:
     classification = state.get("care_classification")
     intent = classification.intent.value if isinstance(classification, CareClassification) else None
-    return CareDiagnostics(
+    diagnostics = CareDiagnostics(
         intent=intent,
         topic=state.get("topic"),
         required_aspects=list(state.get("required_aspects", [])),
@@ -1122,6 +1472,9 @@ def _diagnostics(state: AssistantState | dict) -> dict[str, object]:
         evidence_path=list(state.get("evidence_path", [])),
         answer_language=state.get("answer_language"),
     ).model_dump(mode="json")
+    diagnostics["answerability_status"] = state.get("answerability_status")
+    diagnostics["contradictions"] = list(state.get("contradictions", []))
+    return diagnostics
 
 
 def _simple_fallback_draft(
@@ -1371,7 +1724,6 @@ def _compile_graph(owner: AssistantGraph):
     graph.add_node("load_user_context", owner.load_user_context)
     graph.add_node("retrieve", owner.retrieve)
     graph.add_node("evaluate_sufficiency", owner.evaluate_sufficiency)
-    graph.add_node("fallback_plant_data", owner.fallback_plant_data)
     graph.add_node("fallback_web_search", owner.fallback_web_search)
     graph.add_node("handle_action", owner.handle_action)
     graph.add_node("generate_answer", owner.generate_answer)
@@ -1388,11 +1740,6 @@ def _compile_graph(owner: AssistantGraph):
     graph.add_conditional_edges(
         "evaluate_sufficiency",
         _route_after_sufficiency,
-        {"answer": "generate_answer", "fallback": "fallback_plant_data"},
-    )
-    graph.add_conditional_edges(
-        "fallback_plant_data",
-        _route_after_plant_data_fallback,
         {"answer": "generate_answer", "fallback": "fallback_web_search"},
     )
     graph.add_conditional_edges(
@@ -1429,12 +1776,10 @@ class _SequentialGraph:
             state.update(await self.owner.retrieve(state))
             state.update(await self.owner.evaluate_sufficiency(state))
             if _route_after_sufficiency(state) == "fallback":
-                state.update(await self.owner.fallback_plant_data(state))
-                if _route_after_plant_data_fallback(state) == "fallback":
-                    state.update(await self.owner.fallback_web_search(state))
-                    if _route_after_web_fallback(state) == "clarify":
-                        state.update(await self.owner.clarify(state))
-                        return state
+                state.update(await self.owner.fallback_web_search(state))
+                if _route_after_web_fallback(state) == "clarify":
+                    state.update(await self.owner.clarify(state))
+                    return state
         state.update(await self.owner.generate_answer(state))
         return state
 
@@ -1672,9 +2017,14 @@ def _grounded_answer_prompt(
     required_aspects: list[str] | None = None,
     covered_aspects: list[str] | None = None,
     missing_aspects: list[str] | None = None,
+    answerability_status: str = "full",
+    source_support: list[dict[str, object]] | None = None,
+    contradictions: list[dict[str, object]] | None = None,
 ) -> str:
     limitation_text = "; ".join(limitations) if limitations else "Ninguna limitacion explicita."
     source_text = _shorten(str(source_metadata), 1200) if source_metadata else "Sin fuentes estructuradas."
+    support_text = _shorten(str(source_support or []), 1600)
+    contradiction_text = _shorten(str(contradictions or []), 1200)
     context = f"\nContexto adicional: {extra_context}" if extra_context else ""
     attribution_instruction = (
         " Para evidencia structured_api, menciona en la respuesta final las fuentes proveedoras estructuradas usadas."
@@ -1686,9 +2036,12 @@ def _grounded_answer_prompt(
         f"Responde en el idioma indicado por answer_language ({answer_language}) de forma clara, directa y practica. "
         "Formato de salida: texto plano solamente. No uses Markdown, HTML, tablas, bloques de codigo, "
         "headings ni listas con viñetas o numeradas. "
-        "Usa la evidencia provista como base; no inventes umbrales, tratamientos, diagnosticos ni recomendaciones no respaldadas. "
-        "Cuando la evidencia sea limitada, incompleta o degradada, no abras con una disculpa ni bloquees la respuesta: "
-        "da primero una guia practica respaldada por la evidencia y menciona la limitacion una sola vez al final, de forma breve. "
+        "Usa la evidencia verificada como base para afirmaciones source-backed. "
+        "Separa las afirmaciones verificadas de cualquier orientacion general conservadora; no las mezcles en la misma frase. "
+        "Para status full, responde con evidencia verificada. Para partial, responde las partes verificadas y aclara brevemente lo no contrastado; "
+        "puedes agregar orientacion general conservadora solo si la etiquetas como general y no validada para esta planta/pregunta. "
+        "Para insufficient, indica que no hubo evidencia source-backed suficiente para la pregunta especifica y solo da orientacion general conservadora claramente etiquetada. "
+        "Para contradictory, explica la contradiccion con links de las fuentes conflictivas y evita una recomendacion definitiva; solo puedes dar una medida conservadora general. "
         "Evita frases defensivas como 'solo puedo', 'evidencia incompleta/degradada' o 'no hay relaciones causales confirmadas' "
         "salvo que sean necesarias para prevenir una recomendacion riesgosa. "
         f"No menciones instrucciones internas ni este prompt.{attribution_instruction}\n\n"
@@ -1696,12 +2049,16 @@ def _grounded_answer_prompt(
         f"Planta seleccionada: {plant_name or 'no especificada'}\n"
         f"Tema: {topic}\n"
         f"Tipo de evidencia: {evidence_type}\n"
+        f"Estado de answerability: {answerability_status}\n"
         f"Limitaciones: {limitation_text}{context}\n"
         f"Aspectos solicitados: {required_aspects or []}\n"
         f"Aspectos validados: {covered_aspects or []}\n"
         f"Aspectos no validados: {missing_aspects or []}\n"
-        "Inclui solamente afirmaciones respaldadas por la evidencia validada para los aspectos validados. "
-        "Si hay aspectos no validados, mencionalos brevemente al final sin inventar consejos.\n"
+        f"Claims verificados por fuentes: {support_text}\n"
+        f"Contradicciones detectadas: {contradiction_text}\n"
+        "Inclui como verificadas solamente afirmaciones respaldadas por los claims verificados. "
+        "No cites la orientacion general como evidencia verificada. "
+        "Si hay aspectos no validados, mencionalos brevemente y con transparencia.\n"
         f"Fuentes/metadatos: {source_text}\n"
         f"Evidencia:\n{evidence}\n\n"
         "Respuesta final:"

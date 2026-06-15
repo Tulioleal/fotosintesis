@@ -254,15 +254,11 @@ class OpenAIJudgeProvider(JudgeEvaluationProvider):
             ),
         )
         data = _json_from_response(response)
-        score = float(data.get("score", 0))
-        passed = bool(data.get("passed", score >= float(rubric.get("passing_score", 1))))
-        reasons = data.get("reasons") or []
-        return JudgeResult(
+        return JudgeResult.from_provider_data(
             provider=self.provider_name,
             model=self.model,
-            score=score,
-            passed=passed,
-            reasons=[str(reason) for reason in reasons],
+            data=data,
+            passing_score=float(rubric.get("passing_score", 1)),
         )
 
 
@@ -276,7 +272,7 @@ def _confidence_label(value: Any) -> ConfidenceLabel:
 def _judge_prompt(payload: dict[str, Any], rubric: dict[str, Any]) -> str:
     return (
         "Evaluate the assistant output against the rubric. "
-        "Return JSON with score, passed, and reasons.\n"
+        "Return only valid JSON matching the rubric's expected_output.\n"
         f"Payload:\n{json.dumps(payload, ensure_ascii=True, sort_keys=True)}\n"
         f"Rubric:\n{json.dumps(rubric, ensure_ascii=True, sort_keys=True)}"
     )

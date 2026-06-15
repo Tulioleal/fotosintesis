@@ -32,6 +32,8 @@ class AssistantCareDiagnostics(ApiSchema):
     missing_aspects: list[str] = []
     evidence_path: list[str] = []
     answer_language: str | None = None
+    answerability_status: str | None = None
+    contradictions: list[dict] = []
 
 
 class AssistantReminderSuggestion(ApiSchema):

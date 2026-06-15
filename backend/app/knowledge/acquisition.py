@@ -58,6 +58,8 @@ class KnowledgeAcquisitionService:
         *,
         scientific_name: str,
         topic: str,
+        required_aspects: list[str] | None = None,
+        question: str | None = None,
         filters: KnowledgeRetrievalFilters | None = None,
         min_existing_chunks: int = 1,
     ) -> KnowledgeAcquisitionResult:
@@ -66,8 +68,13 @@ class KnowledgeAcquisitionService:
             topic=topic,
             review_status=ReviewStatus.auto_ingested,
         )
-        query_text = f"{scientific_name} {topic}"
-        query_embedding = await self._query_embedding(scientific_name, topic)
+        query_text = _retrieval_query_text(
+            scientific_name=scientific_name,
+            topic=topic,
+            required_aspects=required_aspects or [],
+            question=question,
+        )
+        query_embedding = await self._query_embedding(query_text)
         try:
             existing = await self.vector_index.retrieve_chunks(
                 filters,
@@ -123,8 +130,8 @@ class KnowledgeAcquisitionService:
                 "Trusted acquisition failed; returning the best available partial evidence.",
             )
 
-    async def _query_embedding(self, scientific_name: str, topic: str) -> list[float]:
-        result = await self.providers.embeddings.create_embeddings([f"{scientific_name} {topic}"])
+    async def _query_embedding(self, query_text: str) -> list[float]:
+        result = await self.providers.embeddings.create_embeddings([query_text])
         return result.embeddings[0] if result.embeddings else []
 
     async def _generate_document(
@@ -165,6 +172,16 @@ class KnowledgeAcquisitionService:
                 for source in sources
             ],
         )
+
+
+def _retrieval_query_text(
+    *, scientific_name: str, topic: str, required_aspects: list[str], question: str | None
+) -> str:
+    parts = [scientific_name, topic]
+    parts.extend(aspect.replace("_", " ") for aspect in required_aspects if aspect)
+    if question and question.strip():
+        parts.append(question.strip())
+    return " ".join(part for part in parts if part).strip()
 
 
 def _degraded_result(

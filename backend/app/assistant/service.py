@@ -1,4 +1,5 @@
 from uuid import UUID
+import asyncio
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from app.assistant.schemas import (
     AssistantSource,
 )
 from app.assistant.tools import AssistantTools
+from app.db.session import AsyncSessionLocal
 from app.knowledge.repository import KnowledgeRepository
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,11 @@ class AssistantService:
                 "diagnostics": diagnostics,
             },
         )
+        _schedule_validated_claim_ingestion(
+            claims=list(state.get("ingestion_claims", []) or []),
+            conversation_id=conversation_id,
+            answerability_status=str(state.get("answerability_status") or ""),
+        )
         return AssistantChatResponse(
             conversation_id=conversation_id,
             message=AssistantMessage(
@@ -97,3 +104,74 @@ class AssistantService:
             tool_failures=state.get("tool_failures", []),
             diagnostics=AssistantCareDiagnostics.model_validate(diagnostics) if diagnostics else None,
         )
+
+
+def _schedule_validated_claim_ingestion(
+    *, claims: list[dict], conversation_id: UUID, answerability_status: str
+) -> None:
+    if not claims:
+        return
+    # Best-effort in-process background work; a process exit can drop this ingestion.
+    asyncio.create_task(
+        _ingest_validated_claims_background(
+            claims=claims,
+            conversation_id=conversation_id,
+            answerability_status=answerability_status,
+        )
+    )
+
+
+async def _ingest_validated_claims_background(
+    *, claims: list[dict], conversation_id: UUID, answerability_status: str
+) -> None:
+    claim_context = _validated_claim_log_context(claims)
+    async with AsyncSessionLocal() as session:
+        tools = AssistantTools(AssistantRepository(session), KnowledgeRepository(session))
+        try:
+            result = await tools.ingest_validated_claims(claims)
+            if not result.ok:
+                await session.rollback()
+                logger.warning(
+                    "assistant_validated_claim_ingestion_failed",
+                    extra={
+                        "conversation_id": str(conversation_id),
+                        "answerability_status": answerability_status,
+                        **claim_context,
+                        "error": result.error,
+                    },
+                )
+                return
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "assistant_validated_claim_ingestion_exception",
+                extra={
+                    "conversation_id": str(conversation_id),
+                    "answerability_status": answerability_status,
+                    **claim_context,
+                },
+            )
+
+
+def _validated_claim_log_context(claims: list[dict]) -> dict[str, object]:
+    return {
+        "claim_count": len(claims),
+        "scientific_names": _unique_claim_values(claims, "scientific_name"),
+        "source_urls": _unique_claim_values(claims, "source_url"),
+        "source_domains": _unique_claim_values(claims, "source_domain"),
+    }
+
+
+def _unique_claim_values(claims: list[dict], key: str, *, limit: int = 3) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for claim in claims:
+        value = str(claim.get(key) or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+        if len(values) >= limit:
+            break
+    return values

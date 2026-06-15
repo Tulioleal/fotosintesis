@@ -49,7 +49,14 @@ class AssistantTools:
             self.trusted_sources
         )
 
-    async def knowledge_search(self, *, scientific_name: str, topic: str) -> ToolResult:
+    async def knowledge_search(
+        self,
+        *,
+        scientific_name: str,
+        topic: str,
+        required_aspects: list[str] | None = None,
+        question: str | None = None,
+    ) -> ToolResult:
         try:
             result = await KnowledgeAcquisitionService(
                 self.knowledge_repository,
@@ -57,6 +64,8 @@ class AssistantTools:
             ).retrieve_or_acquire(
                 scientific_name=scientific_name,
                 topic=topic,
+                required_aspects=required_aspects or [],
+                question=question,
                 filters=KnowledgeRetrievalFilters(
                     scientific_name=scientific_name,
                     topic=topic,
@@ -193,6 +202,57 @@ class AssistantTools:
             return ToolResult(ok=False, error=f"ingest_web_evidence failed: {exc}")
         return ToolResult(ok=True, data={"document_id": persisted_ids[0], "document_ids": persisted_ids})
 
+    async def ingest_validated_claims(self, claims: list[dict[str, object]]) -> ToolResult:
+        try:
+            if not claims:
+                return ToolResult(ok=True, data={"document_ids": []})
+            index = KnowledgeVectorIndex(self.knowledge_repository)
+            persisted_ids: list[str] = []
+            for claim in claims:
+                now = datetime.now(timezone.utc)
+                source_url = str(claim.get("source_url") or "")
+                if not source_url:
+                    continue
+                confidence = float(claim.get("confidence") or TRUSTED_WEB_EVIDENCE_CONFIDENCE)
+                metadata = {
+                    "topic": claim.get("topic"),
+                    "required_aspects": list(claim.get("required_aspects") or []),
+                    "covered_aspects": list(claim.get("covered_aspects") or []),
+                    "missing_aspects": list(claim.get("missing_aspects") or []),
+                    "language": claim.get("language") or "es",
+                    "evidence_type": "validated_web_claim",
+                    "answerability_status": claim.get("answerability_status"),
+                    "validation_confidence": confidence,
+                    "source_support_claim": claim.get("claim"),
+                    "source_support_quote": claim.get("evidence_quote"),
+                    "persisted_from": "assistant_final_judge",
+                    "source_domain": claim.get("source_domain"),
+                }
+                document = KnowledgeDocumentInput(
+                    scientific_name=str(claim.get("scientific_name") or ""),
+                    topic=str(claim.get("topic") or "care"),
+                    title=f"{claim.get('scientific_name')}: validated web claim",
+                    content=_validated_claim_content(claim),
+                    confidence=confidence,
+                    review_status=ReviewStatus.auto_ingested,
+                    metadata=metadata,
+                    sources=[
+                        KnowledgeSourceInput(
+                            title=str(claim.get("source_title") or claim.get("source_domain") or source_url),
+                            url=source_url,
+                            source_domain=str(claim.get("source_domain") or ""),
+                            retrieved_at=now,
+                            validation_status=str(claim.get("answerability_status") or "validated"),
+                        )
+                    ],
+                )
+                persisted = await index.ingest_document(document, embedding_provider=self.providers.embeddings)
+                persisted_ids.append(str(persisted.id))
+        except Exception as exc:
+            await self.knowledge_repository.rollback()
+            return ToolResult(ok=False, error=f"ingest_validated_claims failed: {exc}")
+        return ToolResult(ok=True, data={"document_ids": persisted_ids})
+
     async def taxonomy_validate(self, scientific_name: str) -> ToolResult:
         try:
             return ToolResult(ok=True, data=await GbifClient().match_name(scientific_name))
@@ -261,6 +321,16 @@ def _web_evidence_content(
         for item in evidence_items
     )
     return f"Live web fallback evidence for {scientific_name} about {topic}. {evidence}"
+
+
+def _validated_claim_content(claim: dict[str, object]) -> str:
+    aspects = ", ".join(str(aspect) for aspect in claim.get("covered_aspects") or [])
+    return (
+        f"Validated evidence for {claim.get('scientific_name')}. "
+        f"Topic: {claim.get('topic')}. Covered aspects: {aspects}. "
+        f"Claim: {claim.get('claim')}. Evidence quote: {claim.get('evidence_quote')}. "
+        f"Source: {claim.get('source_url')}. Validation confidence: {claim.get('confidence')}."
+    )
 
 
 def _metadata_for_source(metadata: dict[str, object], item: TrustedPageEvidence) -> dict[str, object]:

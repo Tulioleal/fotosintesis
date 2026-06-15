@@ -1110,7 +1110,20 @@ async def test_gemini_judge_maps_response(fake_gemini_module: None) -> None:
     class FakeModels:
         async def generate_content(self, **kwargs: object) -> object:
             return types.SimpleNamespace(
-                text='{"score": 0.75, "passed": false, "reasons": ["weak grounding"]}'
+                text=(
+                    '{"status":"partial","covered_aspects":["light_exposure"],'
+                    '"missing_aspects":["watering_frequency_or_trigger"],'
+                    '"source_support":[{"claim":"light is supported",'
+                    '"source_urls":["https://example.org/light"],'
+                    '"covered_aspects":["light_exposure"],'
+                    '"evidence_quote":"bright indirect light","confidence":0.75}],'
+                    '"contradictions":[{"claim_a":"Water weekly",'
+                    '"claim_b":"Water monthly",'
+                    '"source_a_urls":["https://example.org/a"],'
+                    '"source_b_urls":["https://example.org/b"]}],'
+                    '"confidence":0.75,"score":0.75,'
+                    '"passed":false,"reasons":["weak grounding"]}'
+                )
             )
 
     provider = GeminiJudgeProvider(
@@ -1126,6 +1139,19 @@ async def test_gemini_judge_maps_response(fake_gemini_module: None) -> None:
     assert result.score == 0.75
     assert result.passed is False
     assert result.reasons == ["weak grounding"]
+    assert result.status == "partial"
+    assert result.covered_aspects == ["light_exposure"]
+    assert result.missing_aspects == ["watering_frequency_or_trigger"]
+    assert result.source_support[0]["source_urls"] == ["https://example.org/light"]
+    assert result.contradictions == [
+        {
+            "claim_a": "Water weekly",
+            "claim_b": "Water monthly",
+            "source_a_urls": ["https://example.org/a"],
+            "source_b_urls": ["https://example.org/b"],
+        }
+    ]
+    assert result.confidence == 0.75
 
 
 @pytest.mark.asyncio

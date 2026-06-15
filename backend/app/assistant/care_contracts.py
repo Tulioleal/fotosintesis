@@ -27,6 +27,7 @@ class CareTopic(str, Enum):
     temperature = "temperature"
     humidity = "humidity"
     repotting = "repotting"
+    taxonomy = "taxonomy"
     general_care = "general_care"
     unknown = "unknown"
 

@@ -16,7 +16,7 @@ from app.auth.tables import (
     knowledge_sources,
 )
 from app.knowledge.acquisition import KnowledgeAcquisitionService, TrustedSourceValidator
-from app.knowledge.page_evidence import TrustedPageEvidenceFetcher
+from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
 from app.knowledge.rag import (
     AppEmbeddingTransform,
     KnowledgeVectorIndex,
@@ -742,6 +742,33 @@ async def test_page_evidence_fetcher_does_not_fetch_untrusted_url() -> None:
     assert fetcher.fetch_attempts == 0
     assert evidence.content is None
     assert evidence.evidence_text == "Untrusted snippet."
+
+
+@pytest.mark.asyncio
+async def test_page_evidence_fetcher_caps_trusted_fetches_to_three() -> None:
+    class RecordingFetcher(TrustedPageEvidenceFetcher):
+        def __init__(self) -> None:
+            super().__init__(TrustedSourceValidator(["example.org"]))
+            self.fetched_urls: list[str] = []
+
+        async def fetch(self, result):
+            self.fetched_urls.append(result.url)
+            return TrustedPageEvidence(result=result, content=f"Fetched {result.url}")
+
+    results = [
+        _search_result(url=f"https://example.org/source-{index}")
+        for index in range(4)
+    ]
+    fetcher = RecordingFetcher()
+
+    evidence = await fetcher.fetch_all(results)
+
+    assert fetcher.fetched_urls == [
+        "https://example.org/source-0",
+        "https://example.org/source-1",
+        "https://example.org/source-2",
+    ]
+    assert [item.result.url for item in evidence] == fetcher.fetched_urls
 
 
 @pytest.mark.asyncio
