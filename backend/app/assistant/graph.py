@@ -187,6 +187,21 @@ class AssistantGraph:
             CareIntent.garden_action,
             CareIntent.plant_identification_question,
         }
+        logger.info(
+            "assistant intent classified",
+            extra={
+                "ctx_trace_id": get_trace_id(),
+                "ctx_intent": intent,
+                "ctx_care_intent": classification.intent.value,
+                "ctx_topic": classification.topic.value,
+                "ctx_required_aspects": [a.value for a in classification.required_aspects],
+                "ctx_answer_language": classification.answer_language,
+                "ctx_needs_retrieval": classification.needs_retrieval,
+                "ctx_classification_confidence": classification.confidence,
+                "ctx_classification_source": classification.source,
+                "ctx_classification_fallback_reason": failure,
+            },
+        )
         return {
             "intent": intent,
             "topic": classification.topic.value,
@@ -940,6 +955,25 @@ def _care_topic_for_aspects(aspects: list[RequiredAspect], message: str) -> Care
     return CareTopic.general_care
 
 
+ASPECT_VALIDATION_GUIDANCE: dict[str, str] = {
+    "watering_frequency_or_trigger": (
+        "This aspect is covered by either a fixed watering interval or a condition-based trigger. "
+        "For questions like 'how often should I water?', evidence such as "
+        "'water when the soil is dry', 'water when the substrate dries', 'let the top layer dry before watering', "
+        "or equivalent phrasing directly answers the requested aspect, even if no calendar interval is given. "
+        "Do not mark it insufficient merely because the evidence corrects the premise of watering by fixed time."
+    ),
+}
+
+
+def _aspect_validation_guidance(required_aspects: list[str]) -> dict[str, str]:
+    return {
+        aspect: ASPECT_VALIDATION_GUIDANCE[aspect]
+        for aspect in required_aspects
+        if aspect in ASPECT_VALIDATION_GUIDANCE
+    }
+
+
 async def _judge_answerability(
     tools: AssistantTools,
     *,
@@ -960,6 +994,7 @@ async def _judge_answerability(
         "plant_name": plant_name,
         "topic": topic,
         "required_aspects": required_aspects or [],
+        "aspect_validation_guidance": _aspect_validation_guidance(required_aspects or []),
         "evidence_type": evidence_type,
         "evidence": _shorten(evidence, 1800),
         "source_metadata": source_metadata[:5],
@@ -975,6 +1010,8 @@ async def _judge_answerability(
             "Return contradictory when supplied sources make conflicting claims that prevent a reliable answer.",
             "For safety, edibility, toxicity, native range, morphology or water-temperature questions, mark those aspects missing unless directly supported by supplied evidence.",
             "Do not use general model knowledge outside the supplied evidence.",
+            "Use aspect_validation_guidance when deciding whether evidence directly covers a required aspect.",
+            "For watering_frequency_or_trigger, evidence that gives a condition-based watering trigger, such as watering when soil/substrate dries, directly covers the aspect even without a fixed day interval.",
         ],
         "expected_output": {
             "status": "one of full, partial, insufficient, contradictory",
@@ -988,11 +1025,40 @@ async def _judge_answerability(
             "reasons": "short explanations for the status decision",
         },
     }
+    logger.info(
+        "assistant answerability judge requested",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_evidence_type": evidence_type,
+            "ctx_topic": topic,
+            "ctx_plant_name_present": bool(plant_name),
+            "ctx_required_aspects": required_aspects or [],
+            "ctx_source_count": len(source_metadata),
+            "ctx_evidence_chars": len(evidence),
+            "ctx_has_extra_payload": bool(extra_payload),
+        },
+    )
     try:
         result = await judge.judge_response(payload, rubric)
     except Exception as exc:
         return AnswerabilityResult(reason=f"answerability judge failed: {exc}")
-    return _answerability_from_judge_result(result)
+    normalized = _answerability_from_judge_result(result)
+    logger.info(
+        "assistant answerability judge completed",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_evidence_type": evidence_type,
+            "ctx_status": normalized.status,
+            "ctx_answerable": normalized.answerable,
+            "ctx_covered_aspects": normalized.covered_aspects,
+            "ctx_missing_aspects": normalized.missing_aspects,
+            "ctx_judge_confidence": normalized.confidence,
+            "ctx_source_support_count": len(normalized.source_support),
+            "ctx_contradictions_count": len(normalized.contradictions),
+            "ctx_reason": normalized.reason,
+        },
+    )
+    return normalized
 
 
 def _answerability_from_judge_result(result: Any) -> AnswerabilityResult:
@@ -1278,13 +1344,27 @@ async def _judge_combined_evidence(
         validated.status in {"full", "partial"}
         and validated.confidence < settings.assistant_evidence_validation_threshold
     ):
-        return AnswerabilityResult(
+        validated = AnswerabilityResult(
             status="insufficient",
             answerable=False,
             missing_aspects=requested_values,
             reason="combined evidence confidence below validation threshold",
             confidence=validated.confidence,
         )
+    logger.info(
+        "assistant combined evidence judge evaluated",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_required_aspects": requested_values,
+            "ctx_rag_chunk_count": len(rag_chunks),
+            "ctx_web_result_count": len(results),
+            "ctx_source_count": len(source_metadata),
+            "ctx_semantic_status": semantic.status,
+            "ctx_validated_status": validated.status,
+            "ctx_validated_confidence": validated.confidence,
+            "ctx_validated_missing_aspects": validated.missing_aspects,
+        },
+    )
     return validated
 
 
@@ -1388,7 +1468,12 @@ def _targeted_web_query(
     topic: str,
     question: str,
 ) -> str:
-    aspect_text = " ".join(aspect.replace("_", " ") for aspect in missing_aspects) or topic
+    aspect_parts: list[str] = []
+    for aspect in missing_aspects:
+        aspect_parts.append(aspect.replace("_", " "))
+        if aspect == "watering_frequency_or_trigger":
+            aspect_parts.extend(["soil dry", "substrate dry", "watering trigger"])
+    aspect_text = " ".join(aspect_parts) or topic
     question_context = _web_query_question_context(question)
     return f"{scientific_name} {aspect_text} {question_context} houseplant care trusted source"
 
@@ -1624,9 +1709,13 @@ def _log_answerability_decision(
         extra={
             "ctx_trace_id": get_trace_id(),
             "ctx_evidence_type": evidence_type,
+            "ctx_status": result.status,
             "ctx_answerable": result.answerable,
+            "ctx_covered_aspects": result.covered_aspects,
             "ctx_missing_aspects": result.missing_aspects,
             "ctx_answerability_confidence": result.confidence,
+            "ctx_source_support_count": len(result.source_support),
+            "ctx_contradictions_count": len(result.contradictions),
             "ctx_fallback_reason": fallback_reason,
         },
     )

@@ -6,11 +6,14 @@ import pytest
 from sqlalchemy import select
 
 from app.assistant.graph import (
+    ASPECT_VALIDATION_GUIDANCE,
     AnswerabilityResult,
     AssistantGraph,
     _answerability_from_judge_result,
+    _aspect_validation_guidance,
     _care_classifier_prompt,
     _grounded_answer_prompt,
+    _targeted_web_query,
     _validated_answerability,
 )
 from app.assistant import service as assistant_service
@@ -2095,17 +2098,102 @@ async def test_answerability_and_fallback_logs_are_emitted(monkeypatch: pytest.M
     )
 
     assert any(
+        message == "assistant intent classified"
+        and extra["ctx_intent"] == "botanical"
+        and extra["ctx_care_intent"] == "plant_care_question"
+        and extra["ctx_topic"] == "toxicity"
+        and extra["ctx_required_aspects"] == ["pet_toxicity"]
+        and extra["ctx_answer_language"] == "es"
+        and extra["ctx_needs_retrieval"] is True
+        and extra["ctx_classification_confidence"] == 0.92
+        and extra["ctx_classification_source"] == "llm"
+        and extra["ctx_classification_fallback_reason"] is None
+        and extra["ctx_trace_id"]
+        for message, extra in logs
+    )
+    assert any(
+        message == "assistant answerability judge requested"
+        and extra["ctx_evidence_type"] == "rag"
+        and extra["ctx_topic"] == "toxicity"
+        and extra["ctx_plant_name_present"] is True
+        and extra["ctx_required_aspects"] == ["pet_toxicity"]
+        and extra["ctx_source_count"] == 1
+        and extra["ctx_evidence_chars"] > 0
+        and extra["ctx_has_extra_payload"] is False
+        and extra["ctx_trace_id"]
+        for message, extra in logs
+    )
+    assert any(
+        message == "assistant answerability judge completed"
+        and extra["ctx_evidence_type"] == "rag"
+        and extra["ctx_status"] == "insufficient"
+        and extra["ctx_answerable"] is False
+        and extra["ctx_covered_aspects"] == []
+        and extra["ctx_missing_aspects"] == ["pet_toxicity"]
+        and extra["ctx_judge_confidence"] == 0.0
+        and extra["ctx_source_support_count"] == 0
+        and extra["ctx_contradictions_count"] == 0
+        and extra["ctx_trace_id"]
+        for message, extra in logs
+    )
+    assert any(
         message == "assistant answerability decision"
         and extra["ctx_evidence_type"] == "rag"
+        and extra["ctx_status"] == "insufficient"
         and extra["ctx_answerable"] is False
+        and extra["ctx_covered_aspects"] == []
         and extra["ctx_missing_aspects"] == ["pet_toxicity"]
         and extra["ctx_answerability_confidence"] == 0.0
+        and extra["ctx_source_support_count"] == 0
+        and extra["ctx_contradictions_count"] == 0
         and extra["ctx_fallback_reason"] == "rag_not_answerable"
         and extra["ctx_trace_id"]
         for message, extra in logs
     )
     assert any(
         message == "assistant fallback route" and extra["ctx_fallback_reason"] == "web_search_used"
+        for message, extra in logs
+    )
+
+
+@pytest.mark.asyncio
+async def test_combined_evidence_judge_log_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    logs: list[tuple[str, dict]] = []
+
+    def record_info(message: str, *, extra: dict) -> None:
+        logs.append((message, extra))
+
+    monkeypatch.setattr("app.assistant.graph.logger.info", record_info)
+    tools = FakeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert any(
+        message == "assistant combined evidence judge evaluated"
+        and extra["ctx_required_aspects"] == ["watering_frequency_or_trigger"]
+        and extra["ctx_rag_chunk_count"] == 0
+        and extra["ctx_web_result_count"] == 1
+        and extra["ctx_source_count"] >= 1
+        and extra["ctx_semantic_status"] == "full"
+        and extra["ctx_validated_status"] == "full"
+        and extra["ctx_validated_confidence"] == 1.0
+        and extra["ctx_validated_missing_aspects"] == []
+        and extra["ctx_trace_id"]
         for message, extra in logs
     )
 
@@ -3213,3 +3301,217 @@ async def test_complete_reminder_suggestion_returns_confirmation_payload() -> No
     )
     assert result["reminder_suggestion"]["recurrence"] == "weekly"
     assert "asistente" in result["reminder_suggestion"]["suggestion_justification"]
+
+
+def test_aspect_validation_guidance_returns_watering_trigger_for_watering_aspect() -> None:
+    guidance = _aspect_validation_guidance(["watering_frequency_or_trigger"])
+
+    assert "watering_frequency_or_trigger" in guidance
+    assert "condition-based trigger" in guidance["watering_frequency_or_trigger"]
+    assert "soil is dry" in guidance["watering_frequency_or_trigger"]
+    assert "substrate dries" in guidance["watering_frequency_or_trigger"]
+
+
+def test_aspect_validation_guidance_ignores_unknown_aspect() -> None:
+    guidance = _aspect_validation_guidance(["light_exposure"])
+
+    assert guidance == {}
+
+
+def test_aspect_validation_guidance_ignores_unmapped_aspects() -> None:
+    guidance = _aspect_validation_guidance(["unknown_aspect", "light_exposure"])
+
+    assert guidance == {}
+
+
+def test_aspect_validation_guidance_handles_mixed_known_and_unknown() -> None:
+    guidance = _aspect_validation_guidance(["watering_frequency_or_trigger", "unknown_aspect"])
+
+    assert len(guidance) == 1
+    assert "watering_frequency_or_trigger" in guidance
+
+
+def test_judge_rubric_includes_watering_trigger_guidance() -> None:
+    async def _run():
+        class WateringGuidanceJudgeTools(FakeTools):
+            async def judge_response(self, payload, rubric, **kwargs):
+                self.judge_calls.append({"payload": payload, "rubric": rubric})
+                return await super().judge_response(payload, rubric, **kwargs)
+
+        tools = WateringGuidanceJudgeTools(
+            degraded_knowledge=True,
+            web_results=[
+                SearchResult(
+                    title="Trusted watering guide",
+                    url="https://example.org/watering",
+                    snippet="Water when the substrate dries.",
+                    source_domain="example.org",
+                )
+            ],
+        )
+
+        await AssistantGraph(tools).run(
+            user_id=uuid4(),
+            message="¿Cada cuánto debo regar mi Pata?",
+            plant_hint=None,
+            plant_binomial_name=CONFIRMED_BINOMIAL,
+        )
+
+        judge_payload = tools.judge_calls[-1]["payload"]
+        judge_rubric = tools.judge_calls[-1]["rubric"]
+
+        assert "aspect_validation_guidance" in judge_payload
+        guidance = judge_payload["aspect_validation_guidance"]
+        assert "watering_frequency_or_trigger" in guidance
+        assert "condition-based trigger" in guidance["watering_frequency_or_trigger"]
+
+        criteria_text = " ".join(judge_rubric["criteria"])
+        assert "aspect_validation_guidance" in criteria_text
+        assert "condition-based watering trigger" in criteria_text
+
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(_run())
+
+
+@pytest.mark.asyncio
+async def test_validated_web_evidence_with_substrate_dry_trigger_becomes_answerable() -> None:
+    class SubstrateDryJudgeTools(FakeTools):
+        async def judge_response(self, payload, rubric, **kwargs):
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            evidence = str(payload.get("evidence", "")).lower()
+            guidance = payload.get("aspect_validation_guidance", {})
+            required = list(payload.get("required_aspects") or [])
+            if (
+                "watering_frequency_or_trigger" in required
+                and "watering_frequency_or_trigger" in guidance
+                and ("substrate dries" in evidence or "soil is dry" in evidence or "soil dries" in evidence)
+            ):
+                return SimpleNamespace(
+                    score=0.9,
+                    passed=True,
+                    status="full",
+                    covered_aspects=["watering_frequency_or_trigger"],
+                    missing_aspects=[],
+                    source_support=[
+                        {
+                            "claim": "Water when the substrate dries.",
+                            "source_urls": ["https://example.org/watering"],
+                            "covered_aspects": ["watering_frequency_or_trigger"],
+                            "evidence_quote": "Water when the substrate dries.",
+                            "confidence": 0.9,
+                        }
+                    ],
+                    contradictions=[],
+                    confidence=0.9,
+                    reasons=[],
+                )
+            return SimpleNamespace(
+                score=0.0,
+                passed=False,
+                status="insufficient",
+                covered_aspects=[],
+                missing_aspects=required,
+                source_support=[],
+                contradictions=[],
+                confidence=0.0,
+                reasons=["evidence does not cover watering aspect"],
+            )
+
+    tools = SubstrateDryJudgeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries before watering again.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "full"
+    assert "watering_frequency_or_trigger" in (result.get("covered_aspects") or [])
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["missing_aspects"] == []
+
+
+@pytest.mark.asyncio
+async def test_generic_watering_text_still_fails_validation() -> None:
+    class GenericWateringJudgeTools(FakeTools):
+        async def judge_response(self, payload, rubric, **kwargs):
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            evidence = str(payload.get("evidence", "")).lower()
+            required = list(payload.get("required_aspects") or [])
+            if "watering_frequency_or_trigger" in required:
+                has_trigger = any(
+                    term in evidence
+                    for term in ["substrate dries", "soil is dry", "soil dries", "dry between watering", "dry before watering"]
+                )
+                if not has_trigger:
+                    return SimpleNamespace(
+                        score=0.0,
+                        passed=False,
+                        status="insufficient",
+                        covered_aspects=[],
+                        missing_aspects=["watering_frequency_or_trigger"],
+                        source_support=[],
+                        contradictions=[],
+                        confidence=0.0,
+                        reasons=["generic watering text does not cover watering trigger"],
+                    )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = GenericWateringJudgeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="General care guide",
+                url="https://example.org/care",
+                snippet="This is a popular houseplant and needs moderate watering.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] != "full" or "watering_frequency_or_trigger" not in (result.get("covered_aspects") or [])
+
+
+def test_targeted_web_query_expands_watering_frequency_terms() -> None:
+    query = _targeted_web_query(
+        "Epipremnum aureum",
+        ["watering_frequency_or_trigger"],
+        "watering",
+        "¿Cada cuánto debo regar?",
+    )
+
+    assert "soil dry" in query
+    assert "substrate dry" in query
+    assert "watering trigger" in query
+    assert "Epipremnum aureum" in query
+
+
+def test_targeted_web_query_does_not_expand_non_watering_aspects() -> None:
+    query = _targeted_web_query(
+        "Epipremnum aureum",
+        ["light_exposure"],
+        "light",
+        "¿Cuánta luz necesita?",
+    )
+
+    assert "soil dry" not in query
+    assert "substrate dry" not in query
+    assert "light exposure" in query
