@@ -3515,3 +3515,258 @@ def test_targeted_web_query_does_not_expand_non_watering_aspects() -> None:
     assert "soil dry" not in query
     assert "substrate dry" not in query
     assert "light exposure" in query
+
+
+# --- RAG contextual validation threshold regression tests ---
+
+
+class StrongWateringJudgeTools(FakeTools):
+    """Judge returns full status with low confidence (0.35) but structurally strong."""
+
+    async def judge_response(self, payload, rubric, **kwargs):
+        evidence_type = payload.get("evidence_type")
+        required_aspects = list(payload.get("required_aspects") or ["watering_frequency_or_trigger"])
+        if evidence_type == "rag":
+            return SimpleNamespace(
+                score=0.35,
+                passed=True,
+                status="full",
+                covered_aspects=required_aspects,
+                missing_aspects=[],
+                source_support=[
+                    {
+                        "claim": "Water when soil is dry.",
+                        "source_urls": ["https://example.org/watering"],
+                        "covered_aspects": required_aspects,
+                        "evidence_quote": "Water when the top inch of soil is dry.",
+                        "confidence": 0.35,
+                    }
+                ],
+                contradictions=[],
+                confidence=0.35,
+                reasons=["evidence directly answers watering question"],
+            )
+        return await super().judge_response(payload, rubric, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_strong_watering_support_is_accepted() -> None:
+    tools = StrongWateringJudgeTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cada cuánto debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is True
+    assert "watering_frequency_or_trigger" in result.get("covered_aspects", [])
+    assert result["answerability_status"] == "full"
+    assert tools.web_search_calls == 0
+
+
+class LowConfidenceSafetyJudgeTools(FakeTools):
+    """Judge returns full status with low confidence (0.35) for safety aspect."""
+
+    async def judge_response(self, payload, rubric, **kwargs):
+        evidence_type = payload.get("evidence_type")
+        required_aspects = list(payload.get("required_aspects") or ["pet_toxicity"])
+        if evidence_type == "rag":
+            return SimpleNamespace(
+                score=0.35,
+                passed=True,
+                status="full",
+                covered_aspects=required_aspects,
+                missing_aspects=[],
+                source_support=[
+                    {
+                        "claim": "This plant may be toxic to pets.",
+                        "source_urls": ["https://example.org/toxicity"],
+                        "covered_aspects": required_aspects,
+                        "evidence_quote": "Toxic to cats and dogs.",
+                        "confidence": 0.35,
+                    }
+                ],
+                contradictions=[],
+                confidence=0.35,
+                reasons=["evidence addresses pet toxicity"],
+            )
+        return await super().judge_response(payload, rubric, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_safety_support_is_rejected() -> None:
+    tools = LowConfidenceSafetyJudgeTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Es tóxica para mascotas mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert "pet_toxicity" in result.get("missing_aspects", [])
+    assert "pet_toxicity" not in result.get("covered_aspects", [])
+
+
+class PartialLowConfidenceJudgeTools(FakeTools):
+    """Judge returns partial status with low confidence (0.35) for watering + light."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.classifier_data = {
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Cotyledon tomentosa",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        }
+
+    async def judge_response(self, payload, rubric, **kwargs):
+        evidence_type = payload.get("evidence_type")
+        required_aspects = list(payload.get("required_aspects") or ["watering_frequency_or_trigger", "light_exposure"])
+        if evidence_type == "rag":
+            return SimpleNamespace(
+                score=0.35,
+                passed=False,
+                status="partial",
+                covered_aspects=required_aspects,
+                missing_aspects=[],
+                source_support=[
+                    {
+                        "claim": "Water when soil is dry and provide bright indirect light.",
+                        "source_urls": ["https://example.org/care"],
+                        "covered_aspects": required_aspects,
+                        "evidence_quote": "Water when dry, bright indirect light.",
+                        "confidence": 0.35,
+                    }
+                ],
+                contradictions=[],
+                confidence=0.35,
+                reasons=["evidence partially answers the question"],
+            )
+        return await super().judge_response(payload, rubric, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_partial_low_confidence_support_is_rejected() -> None:
+    tools = PartialLowConfidenceJudgeTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cada cuánto debo regar mi Pata y cuánta luz necesita?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert result.get("covered_aspects") == [] or result.get("covered_aspects") is None
+
+
+class HighConfidencePartialJudgeTools(FakeTools):
+    """Judge returns partial status with high confidence (0.80)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.classifier_data = {
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Cotyledon tomentosa",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        }
+
+    async def judge_response(self, payload, rubric, **kwargs):
+        evidence_type = payload.get("evidence_type")
+        required_aspects = list(payload.get("required_aspects") or ["watering_frequency_or_trigger", "light_exposure"])
+        if evidence_type == "rag":
+            return SimpleNamespace(
+                score=0.80,
+                passed=False,
+                status="partial",
+                covered_aspects=["watering_frequency_or_trigger"],
+                missing_aspects=["light_exposure"],
+                source_support=[
+                    {
+                        "claim": "Water when soil is dry.",
+                        "source_urls": ["https://example.org/watering"],
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "evidence_quote": "Water when the top inch of soil is dry.",
+                        "confidence": 0.80,
+                    }
+                ],
+                contradictions=[],
+                confidence=0.80,
+                reasons=["evidence supports watering but not light"],
+            )
+        return await super().judge_response(payload, rubric, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_partial_support_still_works_as_partial() -> None:
+    tools = HighConfidencePartialJudgeTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cada cuánto debo regar mi Pata y cuánta luz necesita?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert "watering_frequency_or_trigger" in result.get("covered_aspects", [])
+    assert "light_exposure" in result.get("missing_aspects", [])
+
+
+class SlowJudgeTools(FakeTools):
+    """Judge that always times out."""
+
+    async def judge_response(self, payload, rubric, **kwargs):
+        import asyncio
+        await asyncio.sleep(100)
+        return SimpleNamespace(score=1.0, passed=True, status="full")
+
+
+@pytest.mark.asyncio
+async def test_judge_timeout_returns_controlled_insufficient_result() -> None:
+    from app.core.settings import Settings
+    tools = SlowJudgeTools()
+    settings = Settings(assistant_judge_timeout_seconds=0.1)
+    result = await AssistantGraph(tools, settings=settings).run(
+        user_id=uuid4(),
+        message="Cada cuánto debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert result["answerability_status"] == "insufficient"
+    assert tools.web_search_calls == 1
+
+
+class SlowWebSearchTools(FakeTools):
+    """Web search that always times out."""
+
+    async def trusted_web_search(self, query):
+        import asyncio
+        await asyncio.sleep(100)
+        return ToolResult(ok=True, data=[])
+
+
+@pytest.mark.asyncio
+async def test_web_search_timeout_returns_controlled_fallback() -> None:
+    from app.core.settings import Settings
+    tools = SlowWebSearchTools(rag_answerable=False)
+    settings = Settings(assistant_web_search_timeout_seconds=0.1)
+    result = await AssistantGraph(tools, settings=settings).run(
+        user_id=uuid4(),
+        message="Cada cuánto debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert any("timed out" in f for f in result.get("tool_failures", []))

@@ -75,7 +75,18 @@ The system MUST restrict incremental acquisition and assistant fallback evidence
 
 ### Requirement: Aspect-aware evidence validation
 
-Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence.
+Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the judge result.
+
+#### Scenario: Strong full-support non-safety evidence accepted with lower threshold
+
+- **WHEN** the answerability judge returns `status: "full"`, `answerable: true`, all requested aspects are covered, `source_support` is non-empty, `contradictions` is empty, and no requested aspect is safety-sensitive
+- **AND** the judge confidence is above `assistant_strong_answer_validation_threshold` (default 0.30)
+- **THEN** the evidence is treated as sufficient for the requested aspects
+
+#### Scenario: Safety-sensitive aspect requires strict threshold
+
+- **WHEN** the requested aspect is safety-sensitive, including pet toxicity or human edibility
+- **THEN** validation requires direct evidence and the configured safety-sensitive threshold (default 0.85) before marking the aspect covered
 
 #### Scenario: Generic care evidence fails specific aspect validation
 
@@ -96,13 +107,8 @@ Runtime botanical evidence retrieval and fallback evidence acquisition SHALL val
 
 #### Scenario: Low-confidence validation rejected
 
-- **WHEN** validation confidence is below the configured evidence validation threshold
+- **WHEN** validation confidence is below the configured evidence validation threshold for non-strong, non-safety results
 - **THEN** the evidence is treated as insufficient for the requested aspects
-
-#### Scenario: Safety-sensitive validation uses higher threshold
-
-- **WHEN** the requested aspect is safety-sensitive, including pet toxicity or human edibility
-- **THEN** validation requires direct evidence and the configured safety-sensitive threshold before marking the aspect covered
 
 #### Scenario: Deterministic keyword mismatch does not block semantic support
 

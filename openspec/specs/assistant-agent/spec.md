@@ -220,12 +220,23 @@ Conservative safety fallbacks SHALL remain selected by deterministic safety and 
 
 ### Requirement: Aspect-gated care answer synthesis
 
-The assistant SHALL validate local and web evidence against the requested `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST NOT blend verified claims and general guidance in the same sentence.
+The assistant SHALL validate local and web evidence against the requested `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST NOT blend verified claims and general guidance in the same sentence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the judge result.
 
 #### Scenario: Complete aspect coverage answers directly
 
 - **WHEN** validated evidence covers every requested required aspect above the configured threshold
 - **THEN** the assistant answers directly in `answer_language` using the validated evidence and source metadata without mentioning internal validation steps
+
+#### Scenario: Strong full-support non-safety answer accepted with lower threshold
+
+- **WHEN** the answerability judge returns `status: "full"`, `answerable: true`, all requested aspects are covered, `source_support` is non-empty, `contradictions` is empty, and no requested aspect is safety-sensitive
+- **AND** the judge confidence is above `assistant_strong_answer_validation_threshold` (default 0.30)
+- **THEN** the assistant treats the evidence as sufficient and answers from RAG without triggering web fallback
+
+#### Scenario: Safety-sensitive aspect requires strict threshold
+
+- **WHEN** a requested aspect is `pet_toxicity` or `human_edibility`
+- **THEN** validation requires the aspect confidence to be above `assistant_safety_validation_threshold` (default 0.85) before marking the aspect covered
 
 #### Scenario: Partial non-critical coverage answers covered aspects
 
@@ -271,7 +282,19 @@ The assistant response SHALL expose bounded diagnostic metadata for plant-care a
 
 ### Requirement: Tool-aware assistant
 
-The assistant SHALL use tools for knowledge search, trusted web search, taxonomy validation, ingestion, embeddings, garden lookup, reminder creation and light measurement lookup when appropriate. The assistant SHALL expose structured reminder suggestions for user confirmation when it proposes a reminder from conversation context instead of directly creating one. The assistant SHALL not call structured plant-data lookup in the normal chat-time plant-care answer path after non-full RAG evidence.
+The assistant SHALL use tools for knowledge search, trusted web search, taxonomy validation, ingestion, embeddings, garden lookup, reminder creation and light measurement lookup when appropriate. The assistant SHALL expose structured reminder suggestions for user confirmation when it proposes a reminder from conversation context instead of directly creating one. The assistant SHALL not call structured plant-data lookup in the normal chat-time plant-care answer path after non-full RAG evidence. The assistant SHALL enforce configurable timeouts on answerability judge and web search tool calls.
+
+#### Scenario: Judge timeout returns controlled result
+
+- **WHEN** the answerability judge exceeds `assistant_judge_timeout_seconds`
+- **THEN** the assistant returns a controlled `AnswerabilityResult` with `status: "insufficient"` and reason containing "timed out"
+- **AND** the request does not hang
+
+#### Scenario: Web search timeout returns controlled fallback
+
+- **WHEN** the trusted web search exceeds `assistant_web_search_timeout_seconds`
+- **THEN** the assistant records a tool failure with "timed out" reason
+- **AND** the request completes with fallback reasons preserved
 
 #### Scenario: Missing reminder data
 
@@ -302,7 +325,14 @@ The assistant SHALL use tools for knowledge search, trusted web search, taxonomy
 
 ### Requirement: RAG-grounded answers
 
-The assistant MUST use retrieved or fallback evidence for botanical answers when available and SHALL synthesize final botanical responses with the configured language model. The synthesized response MUST be grounded in supplied source-supported evidence for verified claims, SHALL communicate uncertainty proportionally when evidence is limited, incomplete or contradictory, and MUST preserve source attribution in the assistant API response. RAG evidence SHALL be considered full only when answerability evaluation determines that it directly answers every requested required aspect. When persisted retrieval is not full and trusted live web fallback evidence is available, the assistant MUST prefer fetched trusted page content over citation-only snippets while still answering from trusted snippets when page fetching fails. If grounded model generation fails, the assistant SHALL route the user-facing fallback through the centralized fallback-response generator using a model-generation-failed response intent; if that fallback rendering also fails, the assistant SHALL return the minimal Spanish emergency response without links.
+The assistant MUST use retrieved or fallback evidence for botanical answers when available and SHALL synthesize final botanical responses with the configured language model. The synthesized response MUST be grounded in supplied source-supported evidence for verified claims, SHALL communicate uncertainty proportionally when evidence is limited, incomplete or contradictory, and MUST preserve source attribution in the assistant API response. RAG evidence SHALL be considered full only when answerability evaluation determines that it directly answers every requested required aspect. When RAG is structurally strong and meets the strong-answer threshold, the assistant SHALL NOT trigger web fallback. When persisted retrieval is not full and trusted live web fallback evidence is available, the assistant MUST prefer fetched trusted page content over citation-only snippets while still answering from trusted snippets when page fetching fails. If grounded model generation fails, the assistant SHALL route the user-facing fallback through the centralized fallback-response generator using a model-generation-failed response intent; if that fallback rendering also fails, the assistant SHALL return the minimal Spanish emergency response without links.
+
+#### Scenario: Strong RAG answer accepted without web fallback
+
+- **WHEN** RAG evidence is structurally strong (status full, answerable, all aspects covered, source support present, no contradictions) and confidence is above `assistant_strong_answer_validation_threshold`
+- **AND** no requested aspect is safety-sensitive
+- **THEN** the assistant answers from RAG evidence without calling trusted web search
+- **AND** the response metadata does not include `web_search_used` in fallback reasons
 
 #### Scenario: Evidence-backed answer
 
@@ -472,6 +502,11 @@ The assistant SHALL track internal fallback reason codes and answerability statu
 
 - **WHEN** retrieved RAG evidence is judged not full
 - **THEN** the assistant records the RAG answerability status and `rag_not_answerable` or equivalent internal routing metadata
+
+#### Scenario: RAG accepted by strong threshold
+
+- **WHEN** retrieved RAG evidence is structurally strong and meets the strong-answer threshold
+- **THEN** the assistant records the RAG answerability status without `rag_not_answerable` or `web_search_used` fallback reasons
 
 #### Scenario: Structured lookup skipped
 

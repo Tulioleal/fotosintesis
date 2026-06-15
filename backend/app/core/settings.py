@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     assistant_classification_accept_threshold: float = 0.70
     assistant_evidence_validation_threshold: float = 0.75
     assistant_safety_validation_threshold: float = 0.85
+    assistant_strong_answer_validation_threshold: float = 0.30
+    assistant_judge_timeout_seconds: float = 25.0
+    assistant_web_search_timeout_seconds: float = 20.0
     trusted_source_domains: list[str] = [
         "www.rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",

@@ -283,6 +283,7 @@ class AssistantGraph:
             required_aspects=state.get("required_aspects", []),
             evidence=_evidence_from_chunks(chunks),
             source_metadata=state.get("sources", []),
+            timeout_seconds=self.settings.assistant_judge_timeout_seconds,
         )
         requested = state.get("required_aspects", [])
         result = _validated_answerability(
@@ -297,6 +298,7 @@ class AssistantGraph:
             semantic_result=result,
             threshold=self.settings.assistant_evidence_validation_threshold,
             safety_threshold=self.settings.assistant_safety_validation_threshold,
+            strong_threshold=self.settings.assistant_strong_answer_validation_threshold,
         )
         if validation.covered_aspects:
             return {
@@ -333,7 +335,17 @@ class AssistantGraph:
         )
         fallback_reasons = _append_reason(state, "web_search_used")
         _log_fallback_route("web_search_used", evidence_type="web")
-        result = await self.tools.trusted_web_search(query)
+        try:
+            result = await asyncio.wait_for(
+                self.tools.trusted_web_search(query),
+                timeout=self.settings.assistant_web_search_timeout_seconds,
+            )
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+            return {
+                "tool_failures": state.get("tool_failures", [])
+                + [f"trusted_web_search timed out after {self.settings.assistant_web_search_timeout_seconds}s"],
+                "fallback_reasons": fallback_reasons,
+            }
         if not result.ok:
             return {
                 "tool_failures": state.get("tool_failures", [])
@@ -423,6 +435,7 @@ class AssistantGraph:
             required_aspects=state.get("required_aspects", []),
             evidence=evidence.content,
             source_metadata=_sources_from_structured_evidence(evidence),
+            timeout_seconds=self.settings.assistant_judge_timeout_seconds,
         )
         _log_answerability_decision(
             "structured_api",
@@ -985,6 +998,7 @@ async def _judge_answerability(
     source_metadata: list[dict],
     required_aspects: list[str] | None = None,
     extra_payload: dict[str, object] | None = None,
+    timeout_seconds: float | None = None,
 ) -> AnswerabilityResult:
     judge = getattr(getattr(tools, "providers", None), "judge", None)
     if judge is None or not hasattr(judge, "judge_response"):
@@ -1039,7 +1053,16 @@ async def _judge_answerability(
         },
     )
     try:
-        result = await judge.judge_response(payload, rubric)
+        if timeout_seconds is not None:
+            result = await asyncio.wait_for(judge.judge_response(payload, rubric), timeout=timeout_seconds)
+        else:
+            result = await judge.judge_response(payload, rubric)
+    except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+        return AnswerabilityResult(
+            status="insufficient",
+            answerable=False,
+            reason=f"answerability judge timed out after {timeout_seconds}s",
+        )
     except Exception as exc:
         return AnswerabilityResult(reason=f"answerability judge failed: {exc}")
     normalized = _answerability_from_judge_result(result)
@@ -1275,18 +1298,45 @@ def _validate_evidence_against_required_aspects(
     semantic_result: AnswerabilityResult,
     threshold: float,
     safety_threshold: float,
+    strong_threshold: float = 0.30,
 ) -> EvidenceValidationResult:
     requested = _required_aspects_from_state(state)
     if semantic_result.status == "full" and semantic_result.answerable:
         candidate_values = [aspect.value for aspect in requested]
     else:
         candidate_values = semantic_result.covered_aspects
-    covered = [
-        aspect
-        for aspect in requested
-        if aspect.value in candidate_values
-        and _aspect_meets_threshold(aspect, semantic_result.confidence, threshold, safety_threshold)
-    ]
+    strong_support = _is_strong_full_support(
+        semantic_result, [aspect.value for aspect in requested]
+    )
+    covered = []
+    for aspect in requested:
+        if aspect.value not in candidate_values:
+            continue
+        aspect_threshold = _validation_threshold_for_aspect(
+            aspect,
+            semantic_result,
+            [aspect.value for aspect in requested],
+            default_threshold=threshold,
+            strong_threshold=strong_threshold,
+            safety_threshold=safety_threshold,
+        )
+        validated = semantic_result.confidence >= aspect_threshold
+        logger.info(
+            "assistant threshold decision",
+            extra={
+                "ctx_trace_id": get_trace_id(),
+                "ctx_aspect": aspect.value,
+                "ctx_threshold_used": aspect_threshold,
+                "ctx_confidence": semantic_result.confidence,
+                "ctx_status": semantic_result.status,
+                "ctx_answerable": semantic_result.answerable,
+                "ctx_strong_full_support": strong_support,
+                "ctx_safety_sensitive": aspect in SAFETY_SENSITIVE_ASPECTS,
+                "ctx_validated": validated,
+            },
+        )
+        if validated:
+            covered.append(aspect)
     missing = [aspect for aspect in requested if aspect not in covered]
     return EvidenceValidationResult(
         answerable=not missing and bool(covered),
@@ -1322,6 +1372,7 @@ async def _judge_combined_evidence(
         evidence=combined,
         source_metadata=source_metadata,
         extra_payload={"rag_answerability": state.get("answerability", {})},
+        timeout_seconds=settings.assistant_judge_timeout_seconds,
     )
     if semantic.status == "full" and semantic.answerable:
         covered_values = _safety_constrained_covered_aspects(requested_values, combined)
@@ -1449,9 +1500,33 @@ def _required_aspects_from_state(state: AssistantState | dict) -> list[RequiredA
     return aspects or [RequiredAspect.general_care_summary]
 
 
-def _aspect_meets_threshold(aspect: RequiredAspect, confidence: float, threshold: float, safety_threshold: float) -> bool:
-    required = safety_threshold if aspect in SAFETY_SENSITIVE_ASPECTS else threshold
-    return confidence >= required
+def _is_strong_full_support(
+    semantic_result: AnswerabilityResult,
+    requested_aspects: list[str],
+) -> bool:
+    if semantic_result.status != "full" or not semantic_result.answerable:
+        return False
+    if not semantic_result.source_support:
+        return False
+    if semantic_result.contradictions:
+        return False
+    covered = set(semantic_result.covered_aspects)
+    return all(aspect in covered for aspect in requested_aspects)
+
+
+def _validation_threshold_for_aspect(
+    aspect: RequiredAspect,
+    semantic_result: AnswerabilityResult,
+    requested_aspects: list[str],
+    default_threshold: float,
+    strong_threshold: float,
+    safety_threshold: float,
+) -> float:
+    if aspect in SAFETY_SENSITIVE_ASPECTS:
+        return safety_threshold
+    if _is_strong_full_support(semantic_result, requested_aspects):
+        return strong_threshold
+    return default_threshold
 
 
 def _merge_aspect_values(left: list[str], right: list[str]) -> list[str]:
