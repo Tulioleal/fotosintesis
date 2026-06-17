@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.assistant.graph import (
     ASPECT_VALIDATION_GUIDANCE,
+    CARE_CLASSIFIER_SCHEMA,
     AnswerabilityResult,
     AssistantGraph,
     _answerability_from_judge_result,
@@ -653,16 +654,16 @@ async def test_classifier_failure_falls_back_to_deterministic_routing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_classifier_falls_back_to_deterministic_routing() -> None:
+async def test_low_confidence_valid_classifier_output_is_accepted() -> None:
     tools = FakeTools(
         classifier_data={
-            "language": "en",
-            "answer_language": "en",
-            "intent": "out_of_domain",
-            "topic": "unknown",
-            "required_aspects": [],
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger"],
             "confidence": 0.2,
-            "needs_retrieval": False,
+            "needs_retrieval": True,
         }
     )
 
@@ -674,7 +675,7 @@ async def test_low_confidence_classifier_falls_back_to_deterministic_routing() -
 
     assert result["intent"] == "botanical"
     assert result["required_aspects"] == ["watering_frequency_or_trigger"]
-    assert "below confidence threshold" in result["tool_failures"][0]
+    assert not any("confidence" in f for f in result["tool_failures"])
 
 
 @pytest.mark.asyncio
@@ -804,6 +805,84 @@ async def test_classifier_timeout_falls_back_to_deterministic_routing() -> None:
     assert result["intent"] == "botanical"
     assert result["required_aspects"] == ["watering_frequency_or_trigger"]
     assert "timed out" in result["tool_failures"][0]
+
+
+@pytest.mark.asyncio
+async def test_missing_confidence_repaired_by_retry_uses_llm_classification() -> None:
+    class RetryTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self._classifier_call_count = 0
+
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            if self._classifier_call_count == 0:
+                self._classifier_call_count += 1
+                return ToolResult(
+                    ok=True,
+                    data={
+                        "language": "es",
+                        "answer_language": "es",
+                        "intent": "plant_care_question",
+                        "topic": "watering",
+                        "required_aspects": ["watering_frequency_or_trigger"],
+                        "plant_reference": "Pata",
+                        "needs_retrieval": True,
+                    },
+                )
+            return await super().generate_json(prompt, schema, **kwargs)
+
+    tools = RetryTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert result["intent"] == "botanical"
+    assert result["required_aspects"] == ["watering_frequency_or_trigger"]
+    assert not result["tool_failures"] or not any(
+        "invalid output" in f for f in result["tool_failures"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_classifier_output_after_retry_falls_back_to_deterministic() -> None:
+    class AlwaysInvalidTools(FakeTools):
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            return ToolResult(
+                ok=True,
+                data={
+                    "language": "es",
+                    "answer_language": "es",
+                    "intent": "not_a_valid_intent",
+                    "topic": "watering",
+                    "required_aspects": ["watering_frequency_or_trigger"],
+                    "confidence": 0.95,
+                    "needs_retrieval": True,
+                },
+            )
+
+    result = await AssistantGraph(AlwaysInvalidTools()).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert result["intent"] == "botanical"
+    assert result["required_aspects"] == ["watering_frequency_or_trigger"]
+    assert any("invalid output after retry" in f for f in result["tool_failures"])
+
+
+def test_classifier_schema_requires_confidence_and_care_classification_fields() -> None:
+    required = CARE_CLASSIFIER_SCHEMA.get("required", [])
+    assert "confidence" in required
+    assert "language" in required
+    assert "answer_language" in required
+    assert "intent" in required
+    assert "topic" in required
+    assert "required_aspects" in required
+    assert "plant_reference" in required
+    assert "needs_retrieval" in required
 
 
 @pytest.mark.asyncio
