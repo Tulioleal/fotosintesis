@@ -13,6 +13,7 @@ from app.providers.gemini import (
     GeminiProviderError,
     GeminiSearchProvider,
     GeminiVisionProvider,
+    _JUDGE_SCHEMA,
     _VISION_SCHEMA,
 )
 from app.providers.openai import (
@@ -1103,6 +1104,19 @@ def test_gemini_vision_schema_uses_nullable_fields() -> None:
 
     assert candidate_schema["common_name"] == {"type": "string", "nullable": True}
     assert candidate_schema["confidence_score"] == {"type": "number", "nullable": True}
+
+
+def test_gemini_judge_schema_aspect_arrays_are_enum_constrained() -> None:
+    from app.assistant.care_contracts import RequiredAspect
+
+    aspect_values = [item.value for item in RequiredAspect]
+    covered_items = _JUDGE_SCHEMA["properties"]["covered_aspects"]["items"]
+    missing_items = _JUDGE_SCHEMA["properties"]["missing_aspects"]["items"]
+    source_items = _JUDGE_SCHEMA["properties"]["source_support"]["items"]["properties"]["covered_aspects"]["items"]
+
+    assert covered_items["enum"] == aspect_values
+    assert missing_items["enum"] == aspect_values
+    assert source_items["enum"] == aspect_values
 
 
 @pytest.mark.asyncio

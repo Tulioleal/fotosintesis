@@ -1176,8 +1176,6 @@ def _answerability_from_judge_result(result: Any) -> AnswerabilityResult:
         status = "full" if bool(getattr(result, "passed", False)) else "insufficient"
     covered_aspects = _string_list(getattr(result, "covered_aspects", []))
     missing_aspects = _string_list(getattr(result, "missing_aspects", []))
-    if status != "full" and not missing_aspects:
-        missing_aspects = reasons
     answerable = status == "full"
     if hasattr(result, "answerable"):
         answerable = bool(getattr(result, "answerable"))
@@ -1283,6 +1281,17 @@ def _validated_answerability(
         )
 
     if result.status == "partial":
+        if set(covered) >= set(requested) and support and not contradictions:
+            return AnswerabilityResult(
+                status="full",
+                answerable=True,
+                covered_aspects=covered,
+                missing_aspects=[],
+                source_support=support,
+                contradictions=contradictions,
+                reason=result.reason,
+                confidence=result.confidence,
+            )
         if covered and support:
             return AnswerabilityResult(
                 status="partial",

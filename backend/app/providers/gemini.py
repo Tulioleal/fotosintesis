@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from app.assistant.care_contracts import RequiredAspect
 from app.observability.provider_logging import log_provider_call
 from app.providers.interfaces import (
     ImageAnalysisProvider,
@@ -490,8 +491,8 @@ _JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "status": {"type": "string", "enum": ["full", "partial", "insufficient", "contradictory"]},
-        "covered_aspects": {"type": "array", "items": {"type": "string"}},
-        "missing_aspects": {"type": "array", "items": {"type": "string"}},
+        "covered_aspects": {"type": "array", "items": {"type": "string", "enum": [item.value for item in RequiredAspect]}},
+        "missing_aspects": {"type": "array", "items": {"type": "string", "enum": [item.value for item in RequiredAspect]}},
         "source_support": {
             "type": "array",
             "items": {
@@ -499,7 +500,7 @@ _JUDGE_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "claim": {"type": "string"},
                     "source_urls": {"type": "array", "items": {"type": "string"}},
-                    "covered_aspects": {"type": "array", "items": {"type": "string"}},
+                    "covered_aspects": {"type": "array", "items": {"type": "string", "enum": [item.value for item in RequiredAspect]}},
                     "evidence_quote": {"type": "string"},
                     "confidence": {"type": "number"},
                 },

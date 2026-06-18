@@ -104,6 +104,82 @@ def test_validated_answerability_requires_explicit_source_support() -> None:
     assert result.missing_aspects == ["watering_frequency_or_trigger"]
 
 
+def test_answerability_from_judge_result_does_not_copy_reasons_into_missing_aspects() -> None:
+    result = _answerability_from_judge_result(
+        SimpleNamespace(
+            score=0.5,
+            passed=False,
+            status="partial",
+            covered_aspects=[],
+            missing_aspects=[],
+            source_support=[],
+            contradictions=[],
+            confidence=0.5,
+            reasons=["could not determine a specific watering interval"],
+        )
+    )
+
+    assert result.status == "partial"
+    assert result.missing_aspects == []
+    assert result.reason == "could not determine a specific watering interval"
+
+
+def test_validated_answerability_promotes_complete_partial_to_full() -> None:
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="partial",
+            answerable=False,
+            covered_aspects=["watering_frequency_or_trigger"],
+            missing_aspects=["watering_frequency_or_trigger"],
+            source_support=[
+                {
+                    "claim": "Water when the top inch of soil feels dry.",
+                    "source_urls": ["https://example.org/watering"],
+                    "covered_aspects": ["watering_frequency_or_trigger"],
+                    "evidence_quote": "allow the top inch of soil to dry between waterings",
+                    "confidence": 0.7,
+                }
+            ],
+            reason="partial but covers the requested aspect",
+            confidence=0.7,
+        ),
+        requested_aspects=["watering_frequency_or_trigger"],
+    )
+
+    assert result.status == "full"
+    assert result.answerable is True
+    assert result.missing_aspects == []
+    assert "watering_frequency_or_trigger" in result.covered_aspects
+
+
+def test_validated_answerability_preserves_true_partial_for_multi_aspect() -> None:
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="partial",
+            answerable=False,
+            covered_aspects=["watering_frequency_or_trigger"],
+            missing_aspects=["light_exposure"],
+            source_support=[
+                {
+                    "claim": "Water when soil is dry.",
+                    "source_urls": ["https://example.org/watering"],
+                    "covered_aspects": ["watering_frequency_or_trigger"],
+                    "evidence_quote": "let soil dry between waterings",
+                    "confidence": 0.7,
+                }
+            ],
+            reason="covers watering but not light",
+            confidence=0.7,
+        ),
+        requested_aspects=["watering_frequency_or_trigger", "light_exposure"],
+    )
+
+    assert result.status == "partial"
+    assert result.answerable is False
+    assert "watering_frequency_or_trigger" in result.covered_aspects
+    assert "light_exposure" in result.missing_aspects
+
+
 class FakeTools:
     def __init__(
         self,
@@ -4015,7 +4091,7 @@ class PartialLowConfidenceJudgeTools(FakeTools):
 
 
 @pytest.mark.asyncio
-async def test_partial_low_confidence_support_is_rejected() -> None:
+async def test_partial_low_confidence_support_is_promoted_when_all_aspects_covered() -> None:
     tools = PartialLowConfidenceJudgeTools()
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
@@ -4024,8 +4100,9 @@ async def test_partial_low_confidence_support_is_rejected() -> None:
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert result["sufficient"] is False
-    assert result.get("covered_aspects") == [] or result.get("covered_aspects") is None
+    assert result["sufficient"] is True
+    assert "watering_frequency_or_trigger" in result.get("covered_aspects", [])
+    assert "light_exposure" in result.get("covered_aspects", [])
 
 
 class HighConfidencePartialJudgeTools(FakeTools):

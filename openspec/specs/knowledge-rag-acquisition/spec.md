@@ -75,13 +75,22 @@ The system MUST restrict incremental acquisition and assistant fallback evidence
 
 ### Requirement: Aspect-aware evidence validation
 
-Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity, evidence source type and structural strength of the judge result. For non-safety assistant web fallback evidence, validation confidence SHALL be informational and SHALL NOT be the sole reason to reject direct source-supported requested-aspect coverage.
+Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity, evidence source type and structural strength of the normalized judge result. For non-safety assistant web fallback evidence, validation confidence SHALL be informational and SHALL NOT be the sole reason to reject direct source-supported requested-aspect coverage. Normalized validation results MUST constrain `covered_aspects` and `missing_aspects` to canonical requested aspect identifiers and MUST NOT copy free-form judge reasons into aspect arrays.
 
 #### Scenario: Strong full-support non-safety evidence accepted with lower threshold
 
 - **WHEN** the answerability judge returns `status: "full"`, `answerable: true`, all requested aspects are covered, `source_support` is non-empty, `contradictions` is empty, and no requested aspect is safety-sensitive
 - **AND** the judge confidence is above `assistant_strong_answer_validation_threshold` (default 0.30)
 - **THEN** the evidence is treated as sufficient for the requested aspects
+
+#### Scenario: Complete partial result is promoted after normalization
+
+- **WHEN** the answerability judge returns `status: "partial"` with valid source support for every requested required aspect
+- **AND** normalized covered aspects include every requested required aspect
+- **AND** normalized missing aspects are empty
+- **AND** no contradictions are present
+- **THEN** the validation result uses `status: "full"`
+- **AND** the validation result uses `answerable: true`
 
 #### Scenario: Safety-sensitive aspect requires strict threshold
 
@@ -98,6 +107,12 @@ Runtime botanical evidence retrieval and fallback evidence acquisition SHALL val
 
 - **WHEN** evidence validation returns covered aspects
 - **THEN** every covered aspect is a subset of the requested `required_aspects`
+
+#### Scenario: Missing aspects constrained to request
+
+- **WHEN** evidence validation returns missing aspects
+- **THEN** every missing aspect is a subset of the requested `required_aspects`
+- **AND** missing aspects do not contain explanations, reason strings, or unrequested aspect identifiers
 
 #### Scenario: Missing aspects make evidence partial
 
