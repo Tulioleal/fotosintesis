@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
@@ -10,6 +12,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.knowledge.acquisition import TrustedSourceValidator
 from app.observability.logging import get_logger
+from app.observability.tracing import get_trace_id
 from app.providers.types import SearchResult
 
 
@@ -33,10 +36,22 @@ class TrustedPageEvidence:
     content: str | None = None
     error: str | None = None
     validation_status: str = "trusted"
+    fetch_status: str = "not_fetched"
+    fetch_error_category: str | None = None
+    fetched_content_length: int = 0
+    snippet_length: int = 0
 
     @property
     def evidence_text(self) -> str:
         return self.content or self.result.snippet
+
+    @property
+    def has_fetched_content(self) -> bool:
+        return bool(self.content)
+
+    @property
+    def evidence_source(self) -> str:
+        return "fetched_content" if self.has_fetched_content else "snippet"
 
 
 class TrustedPageEvidenceFetcher:
@@ -61,23 +76,53 @@ class TrustedPageEvidenceFetcher:
         return list(await asyncio.gather(*tasks)) if tasks else []
 
     async def fetch(self, result: SearchResult) -> TrustedPageEvidence:
+        start = time.monotonic()
+        snippet_length = len(result.snippet or "")
         if not self.trusted_sources.is_trusted(result):
-            return TrustedPageEvidence(result=result, error="untrusted source")
+            evidence = TrustedPageEvidence(
+                result=result,
+                error="untrusted source",
+                fetch_status="skipped",
+                fetch_error_category="untrusted_source",
+                snippet_length=snippet_length,
+            )
+            _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
+            return evidence
         try:
             content = await asyncio.to_thread(self._fetch_sync, result)
         except Exception as exc:
-            logger.debug(
-                "trusted page evidence fetch failed",
-                extra={
-                    "ctx_source_domain": result.source_domain,
-                    "ctx_error_type": type(exc).__name__,
-                    "ctx_error": str(exc),
-                },
+            evidence = TrustedPageEvidence(
+                result=result,
+                error=str(exc),
+                fetch_status="failed",
+                fetch_error_category=_fetch_error_category(exc),
+                snippet_length=snippet_length,
             )
-            return TrustedPageEvidence(result=result, error=str(exc))
+            _log_page_fetch(
+                evidence,
+                elapsed_seconds=time.monotonic() - start,
+                error_type=type(exc).__name__,
+            )
+            return evidence
         if not content:
-            return TrustedPageEvidence(result=result, error="empty extracted content")
-        return TrustedPageEvidence(result=result, content=content)
+            evidence = TrustedPageEvidence(
+                result=result,
+                error="empty extracted content",
+                fetch_status="empty",
+                fetch_error_category="empty_content",
+                snippet_length=snippet_length,
+            )
+            _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
+            return evidence
+        evidence = TrustedPageEvidence(
+            result=result,
+            content=content,
+            fetch_status="fetched",
+            fetched_content_length=len(content),
+            snippet_length=snippet_length,
+        )
+        _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
+        return evidence
 
     def _fetch_sync(self, result: SearchResult) -> str:
         parsed = urlparse(result.url)
@@ -138,7 +183,10 @@ class _BoundedRedirectHandler(HTTPRedirectHandler):
 
 
 class _ReadableTextParser(HTMLParser):
-    ignored_tags = {"script", "style", "noscript", "svg", "canvas", "iframe"}
+    ignored_tags = {
+        "script", "style", "noscript", "svg", "canvas", "iframe",
+        "nav", "header", "footer", "form", "button", "select", "option",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -172,3 +220,43 @@ def normalize_evidence_text(text: str, *, limit: int = MAX_EVIDENCE_CHARS) -> st
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rsplit(" ", 1)[0].strip()
+
+
+def _fetch_error_category(exc: Exception) -> str:
+    message = str(exc).casefold()
+    if "timed out" in message or isinstance(exc, TimeoutError):
+        return "timeout"
+    if "unsupported content type" in message:
+        return "unsupported_content_type"
+    if "redirect" in message:
+        return "redirect"
+    if "maximum size" in message:
+        return "too_large"
+    if "http error 403" in message or "forbidden" in message:
+        return "blocked"
+    if "http error 404" in message or "not found" in message:
+        return "not_found"
+    return "fetch_error"
+
+
+def _log_page_fetch(
+    evidence: TrustedPageEvidence,
+    *,
+    elapsed_seconds: float,
+    error_type: str | None = None,
+) -> None:
+    result = evidence.result
+    logger.info(
+        "trusted page evidence fetch completed",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_source_domain": result.source_domain,
+            "ctx_url_hash": hashlib.sha256(result.url.encode("utf-8")).hexdigest()[:16],
+            "ctx_fetch_status": evidence.fetch_status,
+            "ctx_fetch_error_category": evidence.fetch_error_category,
+            "ctx_error_type": error_type,
+            "ctx_fetched_content_length": evidence.fetched_content_length,
+            "ctx_snippet_length": evidence.snippet_length,
+            "ctx_elapsed_seconds": round(elapsed_seconds, 6),
+        },
+    )

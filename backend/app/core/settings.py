@@ -62,10 +62,26 @@ class Settings(BaseSettings):
         "fieldreport.caes.uga.edu",
         "hgic.clemson.edu",
         "extension.msstate.edu",
+        "extension.umn.edu",
+        "extension.psu.edu",
+        "extension.unh.edu",
+        "extension.illinois.edu",
+        "plants.ces.ncsu.edu",
+        "www.missouribotanicalgarden.org",
         "thespruce.com",
         "gardens.si.edu",
         "perenual.com",
-        "trefle.io"
+        "trefle.io",
+        "plants.ces.ncsu.edu/",
+        "www.missouribotanicalgarden.org",
+        "extension.umn.edu",
+        "hort.extension.wisc.edu",
+        "extension.psu.edu",
+        "extension.missouri.edu",
+        "ccenassau.org",
+        "extension.wvu.edu",
+        "garden.org",
+        "ourhouseplants.com"
     ]
 
 

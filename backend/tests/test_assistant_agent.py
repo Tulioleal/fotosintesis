@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -148,12 +149,14 @@ class FakeTools:
         self.knowledge_content = knowledge_content
         self.model_calls = 0
         self.model_prompts: list[str] = []
+        self.classifier_calls = 0
         self.call_order: list[str] = []
         self.judge_calls: list[dict] = []
         self.judge_scores = list(judge_scores or [])
         self.providers = SimpleNamespace(judge=self)
 
     async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+        self.classifier_calls += 1
         if self.fail_classifier:
             return ToolResult(ok=False, error="classifier unavailable")
         if self.classifier_data:
@@ -292,13 +295,16 @@ class FakeTools:
     async def light_measurement_lookup(self, **kwargs) -> ToolResult:
         return ToolResult(ok=True, data=None)
 
-    async def trusted_web_search(self, query: str) -> ToolResult:
+    async def trusted_web_search(
+        self, query: str, *, candidates: list[SearchResult] | None = None
+    ) -> ToolResult:
         self.call_order.append("web")
-        self.web_search_calls += 1
+        if candidates is None:
+            self.web_search_calls += 1
         self.web_search_query = query
         if self.fail_web_search:
             return ToolResult(ok=False, error="trusted_web_search failed: unavailable")
-        return ToolResult(ok=True, data=self.web_results)
+        return ToolResult(ok=True, data=candidates or self.web_results)
 
     async def generate_text(self, prompt: str) -> ToolResult:
         self.model_calls += 1
@@ -651,6 +657,7 @@ async def test_classifier_failure_falls_back_to_deterministic_routing() -> None:
     assert result["intent"] == "botanical"
     assert result["required_aspects"] == ["watering_frequency_or_trigger"]
     assert "classifier unavailable" in result["tool_failures"][0]
+    assert tools.classifier_calls == 1
 
 
 @pytest.mark.asyncio
@@ -675,6 +682,32 @@ async def test_low_confidence_valid_classifier_output_is_accepted() -> None:
 
     assert result["intent"] == "botanical"
     assert result["required_aspects"] == ["watering_frequency_or_trigger"]
+    assert not any("confidence" in f for f in result["tool_failures"])
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_valid_classifier_preserves_answer_language() -> None:
+    tools = FakeTools(
+        classifier_data={
+            "language": "en",
+            "answer_language": "en",
+            "intent": "out_of_domain",
+            "topic": "unknown",
+            "required_aspects": [],
+            "plant_reference": None,
+            "confidence": 0.2,
+            "needs_retrieval": False,
+        }
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="What is the capital of France? Respond in Spanish.",
+        plant_hint=None,
+    )
+
+    assert result["answer_language"] == "en"
+    assert "Answer language: en" in tools.model_prompts[-1]
     assert not any("confidence" in f for f in result["tool_failures"])
 
 
@@ -788,6 +821,34 @@ async def test_classifier_identification_question_does_not_run_care_evidence_ope
     assert tools.plant_data_calls == 0
     assert tools.web_search_calls == 0
     assert "Puedo ayudarte con cuidado de plantas" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_classifier_light_measurement_question_skips_care_retrieval() -> None:
+    tools = FakeTools(
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "light_measurement_question",
+            "topic": "unknown",
+            "required_aspects": [],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": False,
+        }
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cómo mido la luz de mi Pata?",
+        plant_hint="Pata",
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["intent"] == "light"
+    assert tools.knowledge_search_kwargs is None
+    assert tools.plant_data_calls == 0
+    assert tools.web_search_calls == 0
 
 
 @pytest.mark.asyncio
@@ -1590,7 +1651,7 @@ async def test_combined_web_answer_uses_supported_rag_and_web_evidence() -> None
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_partial_final_judge_blocks_answer_and_ingestion() -> None:
+async def test_low_confidence_partial_web_judge_keeps_supported_aspect() -> None:
     class LowConfidencePartialJudgeTools(FakeTools):
         async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
             self.judge_calls.append({"payload": payload, "rubric": rubric})
@@ -1650,10 +1711,11 @@ async def test_low_confidence_partial_final_judge_blocks_answer_and_ingestion() 
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert result["answerability_status"] == "insufficient"
+    assert result["answerability_status"] == "partial"
     assert result["sufficient"] is False
-    assert result["covered_aspects"] == []
-    assert result.get("ingestion_claims", []) == []
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["missing_aspects"] == ["light_exposure"]
+    assert result["web_validation_confidence"] == 0.6
 
 
 @pytest.mark.asyncio
@@ -1704,7 +1766,228 @@ async def test_insufficient_judge_result_blocks_web_answer_and_ingestion() -> No
     assert result.get("ingestion_claims", []) == []
     assert result["source_support"] == []
     assert result["missing_aspects"] == ["watering_frequency_or_trigger"]
-    assert "web_search_not_validated" in result["fallback_reasons"]
+    assert "web_search_no_direct_answer" in result["fallback_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_fetched_web_content_is_passed_to_combined_judge() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        web_results=[
+            TrustedPageEvidence(
+                result=SearchResult(
+                    title="Trusted watering guide",
+                    url="https://example.org/watering",
+                    snippet="Generic plant page.",
+                    source_domain="example.org",
+                ),
+                content="Water when the substrate dries before watering again.",
+                fetch_status="fetched",
+                fetched_content_length=53,
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    combined_payloads = [
+        call["payload"] for call in tools.judge_calls if call["payload"].get("evidence_type") == "combined_rag_web"
+    ]
+    assert combined_payloads
+    assert "Water when the substrate dries" in combined_payloads[0]["evidence"]
+    assert result["answerability_status"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_full_web_support_is_not_blocked_for_non_safety() -> None:
+    class LowConfidenceFullJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    data={
+                        "status": "full",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": [],
+                        "source_support": [
+                            {
+                                "claim": "Water when the substrate dries.",
+                                "source_urls": ["https://example.org/watering"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Water when the substrate dries.",
+                                "confidence": 0.2,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.2,
+                        "score": 0.2,
+                        "passed": True,
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = LowConfidenceFullJudgeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "full"
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["web_validation_confidence"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_safety_web_support_is_rejected() -> None:
+    class LowConfidenceSafetyJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    data={
+                        "status": "full",
+                        "covered_aspects": ["pet_toxicity"],
+                        "missing_aspects": [],
+                        "source_support": [
+                            {
+                                "claim": "This plant is toxic to pets.",
+                                "source_urls": ["https://example.org/pets"],
+                                "covered_aspects": ["pet_toxicity"],
+                                "evidence_quote": "toxic to pets",
+                                "confidence": 0.2,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.2,
+                        "score": 0.2,
+                        "passed": True,
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = LowConfidenceSafetyJudgeTools(
+        degraded_knowledge=True,
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "toxicity",
+            "required_aspects": ["pet_toxicity"],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[
+            SearchResult(
+                title="Trusted pet guide",
+                url="https://example.org/pets",
+                snippet="This plant is toxic to pets.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Es toxica para mascotas mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "insufficient"
+    assert result["covered_aspects"] == []
+    assert result["missing_aspects"] == ["pet_toxicity"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_reuses_acquisition_search_candidates() -> None:
+    class CandidateTools(FakeTools):
+        async def knowledge_search(self, **kwargs) -> ToolResult:
+            self.call_order.append("rag")
+            self.knowledge_search_kwargs = kwargs
+            return ToolResult(
+                ok=True,
+                data=KnowledgeAcquisitionResult(
+                    status=AcquisitionStatus.degraded,
+                    chunks=[],
+                    limitations=["No trusted approved source was found."],
+                    search_candidates=[
+                        SearchResult(
+                            title="Trusted watering guide",
+                            url="https://example.org/watering",
+                            snippet="Water when the substrate dries.",
+                            source_domain="example.org",
+                        )
+                    ],
+                ),
+            )
+
+    tools = CandidateTools(web_results=[])
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "full"
+    assert tools.call_order == ["rag", "web"]
+    assert tools.web_search_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_logs_diagnostic_fields(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="app.assistant.graph")
+    tools = FakeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    messages = {record.message for record in caplog.records}
+    assert "assistant web fallback query prepared" in messages
+    assert "assistant web search candidates selected" in messages
+    assert "assistant web evidence selected" in messages
+    assert "assistant web judge evidence prepared" in messages
+    query_record = next(record for record in caplog.records if record.message == "assistant web fallback query prepared")
+    assert getattr(query_record, "ctx_query") == tools.web_search_query
+    assert "test-key" not in str(caplog.records)
 
 
 @pytest.mark.asyncio
@@ -3569,7 +3852,7 @@ async def test_generic_watering_text_still_fails_validation() -> None:
     assert result["answerability_status"] != "full" or "watering_frequency_or_trigger" not in (result.get("covered_aspects") or [])
 
 
-def test_targeted_web_query_expands_watering_frequency_terms() -> None:
+def test_targeted_web_query_does_not_expand_watering_frequency_terms() -> None:
     query = _targeted_web_query(
         "Epipremnum aureum",
         ["watering_frequency_or_trigger"],
@@ -3577,13 +3860,15 @@ def test_targeted_web_query_expands_watering_frequency_terms() -> None:
         "¿Cada cuánto debo regar?",
     )
 
-    assert "soil dry" in query
-    assert "substrate dry" in query
-    assert "watering trigger" in query
+    assert "watering frequency or trigger" in query
     assert "Epipremnum aureum" in query
+    assert "¿Cada cuánto debo regar?" in query
+    assert "soil dry" not in query
+    assert "substrate dry" not in query
+    assert "watering trigger" not in query
 
 
-def test_targeted_web_query_does_not_expand_non_watering_aspects() -> None:
+def test_targeted_web_query_converts_aspect_snake_case_to_words() -> None:
     query = _targeted_web_query(
         "Epipremnum aureum",
         ["light_exposure"],
@@ -3591,9 +3876,8 @@ def test_targeted_web_query_does_not_expand_non_watering_aspects() -> None:
         "¿Cuánta luz necesita?",
     )
 
-    assert "soil dry" not in query
-    assert "substrate dry" not in query
     assert "light exposure" in query
+    assert "Epipremnum aureum" in query
 
 
 # --- RAG contextual validation threshold regression tests ---
@@ -3830,7 +4114,7 @@ async def test_judge_timeout_returns_controlled_insufficient_result() -> None:
 class SlowWebSearchTools(FakeTools):
     """Web search that always times out."""
 
-    async def trusted_web_search(self, query):
+    async def trusted_web_search(self, query, *, candidates=None):
         import asyncio
         await asyncio.sleep(100)
         return ToolResult(ok=True, data=[])

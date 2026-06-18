@@ -366,13 +366,17 @@ def _search_results_from_response(response: Any) -> list[SearchResult]:
                 continue
             seen_urls.add(url)
             title = str(_value(web, "title") or parsed.netloc).strip()
-            snippet = snippets_by_index.get(index) or title
+            support_snippet = snippets_by_index.get(index)
+            snippet = support_snippet or title
             results.append(
                 SearchResult(
                     title=title,
                     url=url,
                     snippet=snippet,
                     source_domain=parsed.netloc.lower(),
+                    metadata={
+                        "snippet_source": "grounding_support" if support_snippet else "title_fallback"
+                    },
                 )
             )
     if not grounding_metadata_seen:

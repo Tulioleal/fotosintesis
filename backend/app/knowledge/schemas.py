@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
 
+from app.providers.types import SearchResult
+
 
 class ReviewStatus(str, Enum):
     auto_ingested = "auto_ingested"
@@ -86,3 +88,4 @@ class KnowledgeAcquisitionResult(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     retry_available: bool = False
     manual_search_url: str | None = None
+    search_candidates: list[SearchResult] = Field(default_factory=list)

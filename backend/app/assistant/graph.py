@@ -116,6 +116,7 @@ class AssistantState(TypedDict, total=False):
     out_of_domain: bool
     unsafe: bool
     retrieval: KnowledgeAcquisitionResult | None
+    web_search_candidates: list[SearchResult]
     web_results: list[TrustedPageEvidence]
     web_source_validations: list[dict[str, object]]
     web_validation_confidence: float
@@ -255,7 +256,11 @@ class AssistantGraph:
                 + [result.error or "knowledge_search failed"]
             }
         retrieval = result.data
-        return {"retrieval": retrieval, "sources": _sources_from_retrieval(retrieval)}
+        return {
+            "retrieval": retrieval,
+            "sources": _sources_from_retrieval(retrieval),
+            "web_search_candidates": list(getattr(retrieval, "search_candidates", []) or []),
+        }
 
     async def evaluate_sufficiency(self, state: AssistantState) -> dict:
         retrieval = state.get("retrieval")
@@ -333,11 +338,22 @@ class AssistantGraph:
             state.get("topic") or "care",
             state["message"],
         )
+        reusable_candidates = _reusable_web_search_candidates(state)
+        _log_web_fallback_query(
+            state,
+            scientific_name=scientific_name,
+            query=query,
+            missing_aspects=missing_aspects,
+            reused=bool(reusable_candidates),
+        )
         fallback_reasons = _append_reason(state, "web_search_used")
         _log_fallback_route("web_search_used", evidence_type="web")
         try:
             result = await asyncio.wait_for(
-                self.tools.trusted_web_search(query),
+                self.tools.trusted_web_search(
+                    query,
+                    candidates=reusable_candidates or None,
+                ),
                 timeout=self.settings.assistant_web_search_timeout_seconds,
             )
         except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -352,7 +368,10 @@ class AssistantGraph:
                 + [result.error or "trusted_web_search failed"],
                 "fallback_reasons": fallback_reasons,
             }
-        web_results = _usable_web_results(result.data)
+        selected_candidates = _candidate_results_from_web_data(result.data)
+        _log_web_search_candidates(selected_candidates, reused=bool(reusable_candidates))
+        web_results = _usable_web_results(result.data, required_aspects=missing_aspects)
+        _log_web_evidence_selection(web_results, required_aspects=missing_aspects)
         if not web_results:
             result = AnswerabilityResult(
                 status="insufficient",
@@ -363,6 +382,8 @@ class AssistantGraph:
             return {
                 "answerability_status": result.status,
                 "answerability": result.as_metadata(),
+                "source_support": result.source_support,
+                "contradictions": result.contradictions,
                 "fallback_reasons": _append_reason({**state, "fallback_reasons": fallback_reasons}, "web_search_no_direct_answer"),
             }
         requested_web_aspects = _requested_web_aspects(state)
@@ -841,7 +862,9 @@ async def _classify_care_message(
         return _deterministic_classification(state), "care classifier timed out"
     except Exception as exc:
         return _deterministic_classification(state), f"care classifier failed: {exc}"
-    if not result.ok or not isinstance(result.data, dict):
+    if not result.ok:
+        return _deterministic_classification(state), result.error or "care classifier failed"
+    if not isinstance(result.data, dict):
         retry_error = result.error or "care classifier returned invalid data"
         try:
             retry_result = await asyncio.wait_for(
@@ -1422,6 +1445,12 @@ async def _judge_combined_evidence(
         part for part in (_evidence_from_chunks(rag_chunks), web_evidence) if part.strip()
     )
     source_metadata = state.get("sources", []) + _sources_from_web_results(results[:3])
+    _log_combined_judge_evidence(
+        evidence_type="combined_rag_web",
+        results=results,
+        evidence=combined,
+        source_count=len(source_metadata),
+    )
     semantic = await _judge_answerability(
         tools,
         evidence_type="combined_rag_web",
@@ -1454,12 +1483,13 @@ async def _judge_combined_evidence(
     if (
         validated.status in {"full", "partial"}
         and validated.confidence < settings.assistant_evidence_validation_threshold
+        and _has_requested_safety_aspect(requested_values)
     ):
         validated = AnswerabilityResult(
             status="insufficient",
             answerable=False,
             missing_aspects=requested_values,
-            reason="combined evidence confidence below validation threshold",
+            reason="combined safety evidence confidence below validation threshold",
             confidence=validated.confidence,
         )
     logger.info(
@@ -1606,11 +1636,114 @@ def _targeted_web_query(
     aspect_parts: list[str] = []
     for aspect in missing_aspects:
         aspect_parts.append(aspect.replace("_", " "))
-        if aspect == "watering_frequency_or_trigger":
-            aspect_parts.extend(["soil dry", "substrate dry", "watering trigger"])
     aspect_text = " ".join(aspect_parts) or topic
     question_context = _web_query_question_context(question)
     return f"{scientific_name} {aspect_text} {question_context} houseplant care trusted source"
+
+
+def _reusable_web_search_candidates(state: AssistantState | dict) -> list[SearchResult]:
+    candidates = list(state.get("web_search_candidates", []) or [])
+    if candidates:
+        return candidates
+    retrieval = state.get("retrieval")
+    if retrieval is None:
+        return []
+    return list(getattr(retrieval, "search_candidates", []) or [])
+
+
+def _candidate_results_from_web_data(data: object) -> list[SearchResult]:
+    if not isinstance(data, list):
+        return []
+    results: list[SearchResult] = []
+    for item in data:
+        if isinstance(item, TrustedPageEvidence):
+            results.append(item.result)
+        elif isinstance(item, SearchResult):
+            results.append(item)
+    return results
+
+
+def _log_web_fallback_query(
+    state: AssistantState | dict,
+    *,
+    scientific_name: str,
+    query: str,
+    missing_aspects: list[str],
+    reused: bool,
+) -> None:
+    logger.info(
+        "assistant web fallback query prepared",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_scientific_name": scientific_name,
+            "ctx_topic": state.get("topic") or "care",
+            "ctx_required_aspects": list(state.get("required_aspects", [])),
+            "ctx_missing_aspects": list(missing_aspects),
+            "ctx_query": query,
+            "ctx_reused_candidates": reused,
+        },
+    )
+
+
+def _log_web_search_candidates(results: list[SearchResult], *, reused: bool) -> None:
+    logger.info(
+        "assistant web search candidates selected",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_candidate_count": len(results),
+            "ctx_reused_candidates": reused,
+            "ctx_candidates": [
+                {
+                    "url": result.url,
+                    "domain": result.source_domain,
+                    "snippet_length": len(result.snippet or ""),
+                    "snippet_source": result.metadata.get("snippet_source") if isinstance(result.metadata, dict) else None,
+                }
+                for result in results[:5]
+            ],
+        },
+    )
+
+
+def _log_web_evidence_selection(results: list[TrustedPageEvidence], *, required_aspects: list[str]) -> None:
+    logger.info(
+        "assistant web evidence selected",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_required_aspects": list(required_aspects),
+            "ctx_result_count": len(results),
+            "ctx_fetched_content_count": sum(1 for result in results if result.has_fetched_content),
+            "ctx_snippet_only_count": sum(1 for result in results if not result.has_fetched_content),
+            "ctx_results": [
+                {
+                    "url": result.result.url,
+                    "domain": result.result.source_domain,
+                    "evidence_source": result.evidence_source,
+                    "fetch_status": result.fetch_status,
+                    "fetch_error_category": result.fetch_error_category,
+                    "fetched_content_length": result.fetched_content_length,
+                    "snippet_length": result.snippet_length or len(result.result.snippet or ""),
+                }
+                for result in results[:5]
+            ],
+        },
+    )
+
+
+def _log_combined_judge_evidence(
+    *, evidence_type: str, results: list[TrustedPageEvidence], evidence: str, source_count: int
+) -> None:
+    logger.info(
+        "assistant web judge evidence prepared",
+        extra={
+            "ctx_trace_id": get_trace_id(),
+            "ctx_evidence_type": evidence_type,
+            "ctx_fetched_content_count": sum(1 for result in results if result.has_fetched_content),
+            "ctx_snippet_only_count": sum(1 for result in results if not result.has_fetched_content),
+            "ctx_evidence_chars": len(evidence),
+            "ctx_source_count": source_count,
+        },
+    )
 
 
 def _web_query_question_context(question: str) -> str:
@@ -1896,6 +2029,15 @@ def _has_missing_safety_aspect(state: AssistantState | dict) -> bool:
         if value in RequiredAspect._value2member_map_
     }
     return bool(missing & SAFETY_SENSITIVE_ASPECTS)
+
+
+def _has_requested_safety_aspect(values: list[str]) -> bool:
+    requested = {
+        RequiredAspect(value)
+        for value in values
+        if value in RequiredAspect._value2member_map_
+    }
+    return bool(requested & SAFETY_SENSITIVE_ASPECTS)
 
 
 def _is_edibility_question(message: str) -> bool:
@@ -2197,6 +2339,9 @@ def _sources_from_web_results(
                 "domain": result.source_domain,
                 "confidence": confidence_by_url.get(result.url),
                 "evidence_type": "live_web",
+                "evidence_source": evidence.evidence_source,
+                "fetch_status": evidence.fetch_status,
+                "snippet_only": not evidence.has_fetched_content,
             }
         )
     return sources
@@ -2215,16 +2360,73 @@ def _sources_from_structured_evidence(evidence: StructuredPlantEvidence) -> list
     ]
 
 
-def _usable_web_results(data: object) -> list[TrustedPageEvidence]:
+def _usable_web_results(
+    data: object, *, required_aspects: list[str] | None = None
+) -> list[TrustedPageEvidence]:
     if not isinstance(data, list):
         return []
     results: list[TrustedPageEvidence] = []
+    aspects = required_aspects or []
     for item in data:
         if isinstance(item, TrustedPageEvidence) and item.result.url and item.evidence_text:
-            results.append(item)
+            if item.has_fetched_content or _snippet_directly_covers_aspect(item.result.snippet, aspects):
+                results.append(_with_evidence_lengths(item))
         elif isinstance(item, SearchResult) and item.url and item.snippet:
-            results.append(TrustedPageEvidence(result=item))
+            if _snippet_directly_covers_aspect(item.snippet, aspects):
+                results.append(
+                    TrustedPageEvidence(
+                        result=item,
+                        fetch_status="snippet_only",
+                        snippet_length=len(item.snippet or ""),
+                    )
+                )
     return results
+
+
+def _with_evidence_lengths(evidence: TrustedPageEvidence) -> TrustedPageEvidence:
+    if evidence.snippet_length:
+        return evidence
+    return TrustedPageEvidence(
+        result=evidence.result,
+        content=evidence.content,
+        error=evidence.error,
+        validation_status=evidence.validation_status,
+        fetch_status=evidence.fetch_status,
+        fetch_error_category=evidence.fetch_error_category,
+        fetched_content_length=evidence.fetched_content_length or len(evidence.content or ""),
+        snippet_length=len(evidence.result.snippet or ""),
+    )
+
+
+def _snippet_directly_covers_aspect(snippet: str, required_aspects: list[str]) -> bool:
+    normalized = snippet.casefold()
+    if not normalized.strip():
+        return False
+    if not required_aspects:
+        return True
+    return any(_text_covers_required_aspect(normalized, aspect) for aspect in required_aspects)
+
+
+def _text_covers_required_aspect(text: str, aspect: str) -> bool:
+    terms_by_aspect = {
+        "watering_frequency_or_trigger": ("water", "watering", "soil dry", "dry between", "riego", "regar", "seco"),
+        "watering_amount": ("water", "watering", "amount", "thoroughly", "riego", "cantidad"),
+        "light_exposure": ("light", "bright", "indirect", "shade", "sun", "luz", "sombra", "sol"),
+        "soil_drainage": ("soil", "drain", "substrate", "mix", "sustrato", "dren"),
+        "fertilizer_frequency": ("fertiliz", "feed", "feeding", "abono"),
+        "pruning_timing": ("prun", "trim", "poda"),
+        "pest_identification": ("pest", "insect", "aphid", "mealybug", "plaga"),
+        "treatment_action": ("treat", "control", "remove", "spray", "tratamiento"),
+        "repotting_timing": ("repot", "pot bound", "root bound", "transplant", "trasplant"),
+        "temperature_range": ("temperature", "°c", "°f", "temperatura"),
+        "humidity_preference": ("humidity", "humid", "humedad"),
+        "native_range": ("native", "range", "distribution", "origin", "nativa", "distribucion"),
+        "pet_toxicity": ("toxic", "pet", "cat", "dog", "mascota", "gato", "perro"),
+        "human_edibility": ("edible", "eat", "consume", "comestible", "inger"),
+        "general_care_summary": ("care", "grow", "cultivation", "cuidado"),
+    }
+    terms = terms_by_aspect.get(aspect, (aspect.replace("_", " "),))
+    return any(term in text for term in terms)
 
 
 def _grounded_answer_prompt(

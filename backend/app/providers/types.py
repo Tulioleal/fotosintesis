@@ -99,6 +99,7 @@ class SearchResult(BaseModel):
     url: str
     snippet: str
     source_domain: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlantDataResult(ProviderResponse):

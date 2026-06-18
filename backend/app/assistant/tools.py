@@ -77,12 +77,16 @@ class AssistantTools:
             return ToolResult(ok=False, error=f"knowledge_search failed: {exc}")
         return ToolResult(ok=True, data=result)
 
-    async def trusted_web_search(self, query: str) -> ToolResult:
+    async def trusted_web_search(
+        self, query: str, *, candidates: list[SearchResult] | None = None
+    ) -> ToolResult:
         try:
-            results = await self.providers.search.search(
-                query,
-                allowed_domains=sorted(self.trusted_sources.approved_domains),
-            )
+            results = candidates
+            if results is None:
+                results = await self.providers.search.search(
+                    query,
+                    allowed_domains=sorted(self.trusted_sources.approved_domains),
+                )
             selected = _trusted_first_results(results, self.trusted_sources)
             if _is_external_fallback_selection(selected, self.trusted_sources):
                 return ToolResult(
@@ -92,6 +96,9 @@ class AssistantTools:
                             result=selected[0],
                             error="external fallback source",
                             validation_status=EXTERNAL_FALLBACK_VALIDATION_STATUS,
+                            fetch_status="skipped",
+                            fetch_error_category="external_fallback",
+                            snippet_length=len(selected[0].snippet or ""),
                         )
                     ],
                 )

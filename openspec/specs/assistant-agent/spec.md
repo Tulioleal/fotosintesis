@@ -74,7 +74,7 @@ The backend SHALL use LangGraph nodes for intent classification, user context lo
 
 ### Requirement: Multilingual care intent classification
 
-The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, and `needs_retrieval`. The classifier SHALL use the configured cheaper/faster model from the same provider family as the main answer model. Classifier output MUST pass schema validation and meet the configured classification acceptance threshold before it can drive retrieval.
+The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, and `needs_retrieval`. The classifier SHALL use the configured cheaper/faster model from the same provider family as the main answer model. Classifier output MUST pass schema validation before it can drive routing or retrieval. Classifier confidence SHALL be retained as observability metadata and SHALL NOT be the sole reason to reject an otherwise valid classifier output.
 
 #### Scenario: Spanish watering frequency classification
 
@@ -96,19 +96,41 @@ The assistant plant-care answer pipeline SHALL classify user input before retrie
 - **WHEN** the classifier returns `garden_action`, `reminder_request`, `light_measurement_question`, `plant_identification_question`, `out_of_domain`, or `unsafe_or_injection`
 - **THEN** the assistant routes according to the non-care intent and does not run the plant-care evidence retrieval pipeline
 
+#### Scenario: Low-confidence valid classifier output routes normally
+
+- **WHEN** the classifier returns schema-valid output with confidence lower than the configured classification threshold
+- **THEN** the assistant uses the classifier output for routing
+- **AND** the assistant records the low confidence as diagnostic or structured log metadata without adding a tool failure
+
 ### Requirement: Classifier fallback handling
 
-The assistant SHALL fall back to deterministic classification or clarification when the multilingual classifier fails, times out, returns invalid JSON, returns unknown enum values, or returns confidence below the configured acceptance threshold. The fallback path SHALL NOT treat unvalidated classifier output as authoritative.
+The assistant SHALL fall back to deterministic classification or clarification when the multilingual classifier fails, times out, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative.
 
-#### Scenario: Invalid classifier output
+#### Scenario: Invalid classifier output is retried once
 
-- **WHEN** the classifier returns invalid JSON or values outside the allowed intent, topic, or required-aspect sets
+- **WHEN** the classifier returns invalid JSON, non-object data, missing required fields, forbidden extra fields, or values outside the allowed intent, topic, or required-aspect sets
+- **THEN** the assistant retries classification once with stricter repair instructions when the provider is still available
+- **AND** the assistant ignores the invalid first output for routing
+
+#### Scenario: Retry repairs missing required classifier field
+
+- **WHEN** the first classifier response omits a required field such as `confidence`
+- **AND** the repair retry returns schema-valid classifier output
+- **THEN** the assistant uses the repaired LLM classifier output for routing
+- **AND** the assistant does not fall back to deterministic classification for that request
+
+#### Scenario: Invalid classifier output after retry falls back
+
+- **WHEN** the classifier output remains invalid after one repair retry
 - **THEN** the assistant ignores the classifier output and uses deterministic routing or asks for clarification
+- **AND** the assistant records the classifier validation failure through existing failure metadata
 
-#### Scenario: Low-confidence classifier output
+#### Scenario: Low-confidence classifier output remains authoritative when valid
 
-- **WHEN** the classifier confidence is lower than the configured classification acceptance threshold
-- **THEN** the assistant uses deterministic routing or asks for clarification before any care-answer retrieval is attempted
+- **WHEN** the classifier confidence is lower than the configured classification threshold
+- **AND** the classifier output is schema-valid
+- **THEN** the assistant uses the LLM classifier output for routing
+- **AND** the assistant does not record the low confidence as a tool failure
 
 #### Scenario: Classifier provider failure
 
@@ -174,7 +196,7 @@ The assistant SHALL render every user-facing fallback response through a central
 
 ### Requirement: Classifier-owned answer language
 
-The assistant SHALL remove deterministic language detection from assistant routing. When LLM classification succeeds, the assistant SHALL use the classifier-provided `language` and `answer_language`. The classifier MUST set `answer_language` from the actual language used by the user's message and MUST ignore instructions that request a different response language. When deterministic classification is used because LLM classification fails, times out, returns invalid output, includes forbidden extra fields or is below confidence threshold, the assistant SHALL default both `language` and `answer_language` to Spanish.
+The assistant SHALL remove deterministic language detection from assistant routing. When LLM classification succeeds, the assistant SHALL use the classifier-provided `language` and `answer_language`. The classifier MUST set `answer_language` from the actual language used by the user's message and MUST ignore instructions that request a different response language. When deterministic classification is used because LLM classification fails, times out, returns invalid output, includes forbidden extra fields, or remains invalid after repair retry, the assistant SHALL default both `language` and `answer_language` to Spanish.
 
 #### Scenario: Spanish message requests English response
 
@@ -190,10 +212,16 @@ The assistant SHALL remove deterministic language detection from assistant routi
 
 #### Scenario: Classifier failure defaults language to Spanish
 
-- **WHEN** LLM classification fails, times out, returns invalid output, includes forbidden extra fields or is below confidence threshold
+- **WHEN** LLM classification fails, times out, returns invalid output, includes forbidden extra fields, or remains invalid after repair retry
 - **THEN** deterministic routing still classifies intent, topic and required care aspects when possible
 - **AND** deterministic routing sets `language` to `es`
 - **AND** deterministic routing sets `answer_language` to `es`
+
+#### Scenario: Low-confidence classifier preserves model language
+
+- **WHEN** LLM classification succeeds with schema-valid output and low confidence
+- **THEN** the assistant uses the classifier-provided `language` and `answer_language`
+- **AND** the assistant does not default language fields to Spanish solely because confidence is low
 
 ### Requirement: Policy-driven safety fallback rendering
 
@@ -411,6 +439,72 @@ The assistant SHALL include fetched trusted page content in fallback answer evid
 - **WHEN** fallback web search yields trusted results but page fetch or extraction fails
 - **THEN** the assistant generates its fallback answer from the trusted result snippets
 - **AND** does not claim that full page content was acquired
+
+### Requirement: Web fallback evidence quality
+
+The assistant web fallback SHALL distinguish fetched page content from snippet-only search metadata before answer synthesis. Snippet-only evidence SHALL NOT be treated as strong usable evidence unless it directly covers at least one requested required aspect. The assistant SHALL prefer fetched trusted page content over snippets when constructing combined web evidence for judging and final answer generation.
+
+#### Scenario: Fetched content supports requested aspect
+
+- **WHEN** web fallback fetches trusted page content that directly covers a requested required aspect
+- **THEN** the assistant includes that fetched content in the combined evidence passed to the answerability judge
+- **AND** the source can support a source-backed answer when the judge returns source support for that aspect
+
+#### Scenario: Snippet-only result lacks direct aspect coverage
+
+- **WHEN** a web search result has no fetched page content
+- **AND** its snippet does not directly answer any requested required aspect
+- **THEN** the assistant does not treat that result as usable evidence for a source-backed answer
+- **AND** the assistant may still log the result as a selected but weak candidate
+
+#### Scenario: Snippet-only result directly covers requested aspect
+
+- **WHEN** a web search result has no fetched page content
+- **AND** its snippet directly covers a requested required aspect
+- **THEN** the assistant may pass the snippet to the answerability judge as weak web evidence
+- **AND** the evidence metadata identifies that the support came from snippet-only evidence
+
+### Requirement: Web fallback confidence is informational
+
+The assistant SHALL NOT reject non-safety web fallback evidence solely because the answerability judge confidence is below the general evidence validation threshold. For web fallback, direct requested-aspect coverage, source support, contradiction handling, and safety-sensitive aspect policy SHALL determine whether evidence can support an answer. Confidence SHALL remain available as diagnostics and metadata.
+
+#### Scenario: Useful web evidence has low confidence
+
+- **WHEN** combined web evidence directly covers all requested non-safety required aspects with source support and no contradictions
+- **AND** the judge confidence is below the general evidence validation threshold
+- **THEN** the assistant can use the web evidence for a source-backed answer
+- **AND** the assistant records the confidence as informational metadata
+
+#### Scenario: Safety-sensitive web evidence remains strict
+
+- **WHEN** the requested aspect is safety-sensitive, including pet toxicity or human edibility
+- **THEN** the assistant requires direct evidence and safety-sensitive validation before using web fallback for a definitive source-backed answer
+
+#### Scenario: Web evidence lacks direct support
+
+- **WHEN** web evidence does not directly cover the requested required aspects
+- **THEN** the assistant treats the web evidence as insufficient regardless of confidence
+
+### Requirement: Web fallback search reuse
+
+The assistant SHALL avoid duplicate live web searches when usable search candidates or fetched evidence from the current retrieval/acquisition path are already available for the same confirmed taxonomy and requested aspects. Reused candidates MUST still pass trusted-source validation and answerability judging before they can support an answer.
+
+#### Scenario: Acquisition search candidates are reusable
+
+- **WHEN** knowledge acquisition already searched web sources during the same assistant request
+- **AND** the candidates match the confirmed taxonomy and requested aspects closely enough for fallback evaluation
+- **THEN** assistant web fallback reuses those candidates or their fetched evidence before issuing another search provider call
+
+#### Scenario: Reused candidates fail validation
+
+- **WHEN** reused search candidates do not provide direct aspect coverage after judging
+- **THEN** the assistant treats them as insufficient
+- **AND** the assistant does not present them as source-backed evidence
+
+#### Scenario: No reusable candidates are available
+
+- **WHEN** the current request has no usable prior search candidates or fetched evidence
+- **THEN** assistant web fallback may issue a new trusted web search
 
 ### Requirement: Trusted web fallback for insufficient botanical evidence
 

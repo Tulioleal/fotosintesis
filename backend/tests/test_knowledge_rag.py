@@ -699,6 +699,10 @@ async def test_page_evidence_fetcher_real_fetch_path_uses_configured_redirect_li
 
     assert evidence.error is None
     assert evidence.content == "Fetched trusted watering guidance."
+    assert evidence.has_fetched_content is True
+    assert evidence.evidence_source == "fetched_content"
+    assert evidence.fetch_status == "fetched"
+    assert evidence.fetched_content_length == len("Fetched trusted watering guidance.")
     assert opener.requests
 
 
@@ -717,6 +721,8 @@ async def test_page_evidence_fetcher_rejects_non_https_before_fetch(
 
     assert evidence.content is None
     assert evidence.evidence_text == "Trusted HTTP snippet."
+    assert evidence.fetch_status == "skipped"
+    assert evidence.fetch_error_category == "untrusted_source"
 
 
 @pytest.mark.asyncio
@@ -742,6 +748,7 @@ async def test_page_evidence_fetcher_does_not_fetch_untrusted_url() -> None:
     assert fetcher.fetch_attempts == 0
     assert evidence.content is None
     assert evidence.evidence_text == "Untrusted snippet."
+    assert evidence.fetch_status == "skipped"
 
 
 @pytest.mark.asyncio
@@ -790,6 +797,8 @@ async def test_page_evidence_fetcher_returns_snippet_for_unsupported_content_typ
     assert evidence.content is None
     assert evidence.error == "unsupported content type: application/json"
     assert evidence.evidence_text == "Trusted snippet fallback."
+    assert evidence.fetch_status == "failed"
+    assert evidence.fetch_error_category == "unsupported_content_type"
 
 
 @pytest.mark.asyncio
@@ -809,6 +818,7 @@ async def test_page_evidence_fetcher_returns_snippet_for_oversized_response(
     assert evidence.content is None
     assert evidence.error == "response exceeded maximum size"
     assert evidence.evidence_text == "Trusted snippet fallback."
+    assert evidence.fetch_error_category == "too_large"
 
 
 @pytest.mark.asyncio
@@ -830,6 +840,7 @@ async def test_page_evidence_fetcher_returns_snippet_for_trust_crossing_redirect
     assert evidence.content is None
     assert evidence.error == "redirected outside trusted HTTPS source"
     assert evidence.evidence_text == "Trusted snippet fallback."
+    assert evidence.fetch_error_category == "redirect"
 
 
 def _document(topic: str = "care") -> KnowledgeDocumentInput:

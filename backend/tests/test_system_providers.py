@@ -1207,6 +1207,7 @@ async def test_gemini_search_maps_grounded_citations(fake_gemini_module: None) -
             url="https://www.rhs.org.uk/plants/cotyledon",
             snippet="Use the RHS guide for watering.",
             source_domain="www.rhs.org.uk",
+            metadata={"snippet_source": "grounding_support"},
         )
     ]
 
@@ -1247,6 +1248,7 @@ async def test_gemini_search_filters_malformed_and_duplicate_citations(
             url="https://example.org/a",
             snippet="First",
             source_domain="example.org",
+            metadata={"snippet_source": "title_fallback"},
         )
     ]
 

@@ -104,6 +104,7 @@ class KnowledgeAcquisitionService:
                     topic,
                     existing,
                     "No trusted approved source was found for persistent knowledge ingestion.",
+                    search_candidates=search_results,
                 )
 
             document = await self._generate_document(scientific_name, topic, trusted[:3])
@@ -120,6 +121,7 @@ class KnowledgeAcquisitionService:
                 status=AcquisitionStatus.acquired,
                 chunks=retrieved,
                 document_id=persisted.id,
+                search_candidates=search_results,
             )
         except Exception:
             await self.repository.rollback()
@@ -189,6 +191,7 @@ def _degraded_result(
     topic: str,
     chunks: list,
     limitation: str,
+    search_candidates: list[SearchResult] | None = None,
 ) -> KnowledgeAcquisitionResult:
     return KnowledgeAcquisitionResult(
         status=AcquisitionStatus.degraded,
@@ -199,6 +202,7 @@ def _degraded_result(
             "https://www.google.com/search?q="
             f"{quote(f'{scientific_name} {topic} trusted botanical source')}"
         ),
+        search_candidates=search_candidates or [],
     )
 
 
