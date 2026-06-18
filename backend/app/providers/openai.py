@@ -308,9 +308,11 @@ def _search_results_from_response(response: Any) -> list[SearchResult]:
         text = ""
     results: list[SearchResult] = []
     seen_urls: set[str] = set()
+    has_annotations = False
     for annotation in _response_annotations(response):
         if _annotation_value(annotation, "type") != "url_citation":
             continue
+        has_annotations = True
         url = str(_annotation_value(annotation, "url") or "").strip()
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc or url in seen_urls:
@@ -326,6 +328,8 @@ def _search_results_from_response(response: Any) -> list[SearchResult]:
                 source_domain=parsed.netloc.lower(),
             )
         )
+    if not has_annotations:
+        return results
     return results
 
 

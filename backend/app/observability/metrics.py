@@ -9,6 +9,11 @@ class MetricsRegistry:
     provider_calls_total: int = 0
     tool_runs_total: int = 0
     request_latency_seconds: list[float] = field(default_factory=list)
+    fallback_attempts_total: int = 0
+    fallback_successes_total: int = 0
+    provider_failures_total: int = 0
+    skipped_unhealthy_providers_total: int = 0
+    circuit_breaker_opens_total: int = 0
 
     def record_request(self, latency_seconds: float, failed: bool) -> None:
         self.requests_total += 1
@@ -38,6 +43,21 @@ class MetricsRegistry:
                 "# HELP fotosintesis_request_latency_seconds_avg Average HTTP latency.",
                 "# TYPE fotosintesis_request_latency_seconds_avg gauge",
                 f"fotosintesis_request_latency_seconds_avg {average_latency:.6f}",
+                "# HELP fotosintesis_fallback_attempts_total Total provider fallback attempts.",
+                "# TYPE fotosintesis_fallback_attempts_total counter",
+                f"fotosintesis_fallback_attempts_total {self.fallback_attempts_total}",
+                "# HELP fotosintesis_fallback_successes_total Total successful fallback completions.",
+                "# TYPE fotosintesis_fallback_successes_total counter",
+                f"fotosintesis_fallback_successes_total {self.fallback_successes_total}",
+                "# HELP fotosintesis_provider_failures_total Total provider failures.",
+                "# TYPE fotosintesis_provider_failures_total counter",
+                f"fotosintesis_provider_failures_total {self.provider_failures_total}",
+                "# HELP fotosintesis_skipped_unhealthy_providers_total Total skipped unhealthy providers.",
+                "# TYPE fotosintesis_skipped_unhealthy_providers_total counter",
+                f"fotosintesis_skipped_unhealthy_providers_total {self.skipped_unhealthy_providers_total}",
+                "# HELP fotosintesis_circuit_breaker_opens_total Total circuit breaker opens.",
+                "# TYPE fotosintesis_circuit_breaker_opens_total counter",
+                f"fotosintesis_circuit_breaker_opens_total {self.circuit_breaker_opens_total}",
                 "",
             ]
         )

@@ -83,6 +83,7 @@ class AssistantService:
                 "sources": state.get("sources", []),
                 "tool_failures": state.get("tool_failures", []),
                 "fallback_reasons": state.get("fallback_reasons", []),
+                "provider_fallbacks": state.get("provider_fallbacks", []),
                 "diagnostics": diagnostics,
             },
         )

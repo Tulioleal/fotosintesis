@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     embedding_provider: str = "mock"
     trefle_provider: str = "mock"
     perenual_provider: str = "mock"
+    model_providers: list[str] | None = None
+    judge_providers: list[str] | None = None
+    search_providers: list[str] | None = None
+    vision_providers: list[str] | None = None
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     trefle_api_key: str | None = None
@@ -53,6 +57,14 @@ class Settings(BaseSettings):
     assistant_strong_answer_validation_threshold: float = 0.30
     assistant_judge_timeout_seconds: float = 25.0
     assistant_web_search_timeout_seconds: float = 20.0
+    model_provider_attempt_timeout_seconds: float = 30.0
+    judge_provider_attempt_timeout_seconds: float = 30.0
+    search_provider_attempt_timeout_seconds: float = 25.0
+    vision_provider_attempt_timeout_seconds: float = 30.0
+    model_circuit_breaker_duration_seconds: float = 60.0
+    judge_circuit_breaker_duration_seconds: float = 60.0
+    search_circuit_breaker_duration_seconds: float = 60.0
+    vision_circuit_breaker_duration_seconds: float = 60.0
     trusted_source_domains: list[str] = [
         "www.rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",

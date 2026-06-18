@@ -23,6 +23,7 @@ from app.knowledge.plant_data import StructuredPlantEvidence
 from app.knowledge.schemas import AcquisitionStatus, KnowledgeAcquisitionResult, KnowledgeChunk
 from app.observability.logging import get_logger
 from app.observability.tracing import get_trace_id
+from app.providers.fallback_context import get_provider_fallbacks, clear_provider_fallbacks
 from app.providers.types import SearchResult
 
 
@@ -133,6 +134,7 @@ class AssistantState(TypedDict, total=False):
     requires_confirmation: bool
     reminder_suggestion: dict
     tool_failures: list[str]
+    provider_fallbacks: list[dict]
 
 
 class AssistantGraph:
@@ -171,9 +173,17 @@ class AssistantGraph:
             "tool_failures": [],
             "sources": [],
             "fallback_reasons": [],
+            "provider_fallbacks": [],
             "requires_confirmation": False,
         }
-        return await self.graph.ainvoke(state)
+        clear_provider_fallbacks()
+        result = await self.graph.ainvoke(state)
+        provider_fallbacks = get_provider_fallbacks()
+        if provider_fallbacks:
+            existing = list(result.get("provider_fallbacks", []))
+            result["provider_fallbacks"] = existing + provider_fallbacks
+            result["fallback_reasons"] = list(result.get("fallback_reasons", []))
+        return result
 
     async def classify_intent(self, state: AssistantState) -> dict:
         classification, failure = await _classify_care_message(self.tools, self.settings, state)
@@ -1836,6 +1846,9 @@ def _diagnostics(state: AssistantState | dict) -> dict[str, object]:
     ).model_dump(mode="json")
     diagnostics["answerability_status"] = state.get("answerability_status")
     diagnostics["contradictions"] = list(state.get("contradictions", []))
+    provider_fallbacks = state.get("provider_fallbacks", [])
+    if provider_fallbacks:
+        diagnostics["provider_fallbacks"] = list(provider_fallbacks)
     return diagnostics
 
 

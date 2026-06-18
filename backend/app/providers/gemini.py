@@ -349,6 +349,19 @@ def _search_prompt(query: str, allowed_domains: Any) -> str:
     return prompt
 
 
+def _is_internal_redirect_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.netloc.endswith(".google.com") or parsed.netloc.endswith(".google"):
+        return True
+    path = parsed.path.lower()
+    return (
+        "redirect" in path
+        or "search" in path
+        or "url?q=" in parsed.query
+        or parsed.netloc.endswith(".googleusercontent.com")
+    )
+
+
 def _search_results_from_response(response: Any) -> list[SearchResult]:
     text = _optional_response_text(response)
     results: list[SearchResult] = []
@@ -362,8 +375,12 @@ def _search_results_from_response(response: Any) -> list[SearchResult]:
         for index, chunk in enumerate(chunks):
             web = _value(chunk, "web") or chunk
             url = str(_value(web, "uri") or _value(web, "url") or "").strip()
+            if not url or url in seen_urls:
+                continue
             parsed = urlparse(url)
-            if not parsed.scheme or not parsed.netloc or url in seen_urls:
+            if not parsed.scheme or not parsed.netloc:
+                continue
+            if _is_internal_redirect_url(url):
                 continue
             seen_urls.add(url)
             title = str(_value(web, "title") or parsed.netloc).strip()

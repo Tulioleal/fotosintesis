@@ -34,6 +34,7 @@ class AssistantCareDiagnostics(ApiSchema):
     answer_language: str | None = None
     answerability_status: str | None = None
     contradictions: list[dict] = []
+    provider_fallbacks: list[dict] | None = None
 
 
 class AssistantReminderSuggestion(ApiSchema):
