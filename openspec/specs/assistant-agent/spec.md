@@ -89,7 +89,38 @@ The assistant plant-care answer pipeline SHALL classify user input before retrie
 #### Scenario: Multi-aspect classification
 
 - **WHEN** a user asks one plant-care question covering watering and light
-- **THEN** the classifier output includes all applicable canonical required aspects for the requested watering and light information
+- **THEN** the classifier output includes only the applicable domain-qualified watering and light required aspects directly requested by the message
+
+#### Scenario: Symptom diagnosis classification
+
+- **WHEN** a user asks what yellow leaves, browning, leaf drop, wilting, spots, lesions, mushy tissue, or stunted growth could mean without explicitly asking about a specific care routine
+- **THEN** the classifier uses `topic: "diagnosis"`
+- **AND** required aspects use matching `diagnosis_*` values such as `diagnosis_leaf_color_change_causes`, `diagnosis_leaf_browning_causes`, or `diagnosis_triage_steps`
+- **AND** the classifier does not add `watering_*`, `nutrition_*`, `pest_*`, or `disease_*` aspects unless the user wording explicitly requests or strongly implies that domain
+
+#### Scenario: Pest classification uses pest aspects
+
+- **WHEN** a user describes pests, insects, webbing, white dots, scale, mealybugs, mites, aphids, or asks how to treat a plant pest
+- **THEN** the classifier uses `topic: "pests"`
+- **AND** required aspects use `pest_*` values such as `pest_identification`, `pest_treatment_action`, `pest_isolation_steps`, or `pest_prevention_steps`
+
+#### Scenario: Disease classification uses disease aspects
+
+- **WHEN** a user asks about plant disease, infection, fungal or bacterial symptoms, or disease prevention or treatment
+- **THEN** the classifier uses `topic: "disease"`
+- **AND** required aspects use `disease_*` values such as `disease_identification`, `disease_treatment_action`, `disease_prevention_steps`, or `disease_spread_risk`
+
+#### Scenario: Toxicity and safety classification
+
+- **WHEN** a user asks whether a plant is safe for pets, children, humans, skin contact, ingestion, chemical treatment, disposal, cross-contamination, or emergency escalation
+- **THEN** the classifier uses `topic: "toxicity_safety"`
+- **AND** required aspects use applicable `toxicity_*` or `safety_*` values such as `toxicity_pet_safety`, `toxicity_child_safety`, `toxicity_skin_irritation_risk`, or `safety_when_to_contact_vet_or_poison_control`
+
+#### Scenario: Broad care classification stays general
+
+- **WHEN** a user asks for broad beginner care, a general care summary, common mistakes, care priorities, or a monitoring routine without requesting specific care domains
+- **THEN** the classifier may use `topic: "general_care"`
+- **AND** required aspects use matching `general_*` values instead of over-selecting unrelated domain-specific aspects
 
 #### Scenario: Non-care intent routes away from care retrieval
 
@@ -104,7 +135,7 @@ The assistant plant-care answer pipeline SHALL classify user input before retrie
 
 ### Requirement: Classifier fallback handling
 
-The assistant SHALL fall back to deterministic classification or clarification when the multilingual classifier fails, times out, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative.
+The assistant SHALL fall back to minimal deterministic routing or clarification when the multilingual classifier fails, times out, all classifier provider attempts fail, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative. The fallback path MUST NOT infer detailed botanical `topic` or domain-qualified `required_aspects` values from deterministic keyword rules.
 
 #### Scenario: Invalid classifier output is retried once
 
@@ -117,13 +148,13 @@ The assistant SHALL fall back to deterministic classification or clarification w
 - **WHEN** the first classifier response omits a required field such as `confidence`
 - **AND** the repair retry returns schema-valid classifier output
 - **THEN** the assistant uses the repaired LLM classifier output for routing
-- **AND** the assistant does not fall back to deterministic classification for that request
+- **AND** the assistant does not fall back to minimal deterministic routing for that request
 
 #### Scenario: Invalid classifier output after retry falls back
 
 - **WHEN** the classifier output remains invalid after one repair retry
-- **THEN** the assistant ignores the classifier output and uses deterministic routing or asks for clarification
-- **AND** the assistant records the classifier validation failure through existing failure metadata
+- **THEN** the assistant ignores the classifier output and uses minimal deterministic routing or asks for clarification
+- **AND** the assistant records `llm_classifier_invalid_output` and `minimal_routing_fallback_used` through bounded failure or diagnostic metadata
 
 #### Scenario: Low-confidence classifier output remains authoritative when valid
 
@@ -134,8 +165,30 @@ The assistant SHALL fall back to deterministic classification or clarification w
 
 #### Scenario: Classifier provider failure
 
-- **WHEN** the classifier provider fails or times out
-- **THEN** the assistant records the failure through existing failure metadata and continues with deterministic routing or clarification
+- **WHEN** all classifier provider attempts fail or time out
+- **THEN** the assistant records `llm_classifier_provider_failure` or `llm_classifier_timeout` through bounded failure or diagnostic metadata
+- **AND** the assistant continues with minimal deterministic routing or clarification
+- **AND** the assistant records `minimal_routing_fallback_used` when that fallback route is selected
+
+#### Scenario: Minimal fallback routes explicit non-care intents
+
+- **WHEN** LLM classification cannot produce schema-valid output after provider fallback and repair
+- **AND** the user message explicitly matches unsafe or prompt-injection input, a reminder request, a light measurement request, a plant identification request, or an obvious out-of-domain message with no botanical relevance or plant context
+- **THEN** minimal deterministic routing MAY select only `unsafe_or_injection`, `reminder_request`, `light_measurement_question`, `plant_identification_question`, or `out_of_domain`
+- **AND** the assistant does not run the plant-care evidence retrieval pipeline for those routes
+
+#### Scenario: Minimal fallback routes unknown plant-care input conservatively
+
+- **WHEN** LLM classification cannot produce schema-valid output after provider fallback and repair
+- **AND** the user message contains plant context or obvious botanical language but is not one of the explicit non-care routes
+- **THEN** minimal deterministic routing selects `plant_care_question_unknown` or asks for clarification
+- **AND** if a classifier-shaped plant-care fallback is required, it uses `topic: "general_care"` and `required_aspects: ["general_care_summary"]`
+
+#### Scenario: Minimal fallback does not emit detailed botanical aspects
+
+- **WHEN** minimal deterministic routing handles a plant-care message after LLM classification failure
+- **THEN** the fallback output MUST NOT include domain-specific required aspects such as `watering_frequency_or_trigger`, `light_exposure`, `diagnosis_leaf_yellowing_causes`, `pest_treatment_action`, `repotting_post_care`, or `toxicity_pet_safety`
+- **AND** those detailed botanical aspects may only come from schema-valid LLM classifier output
 
 ### Requirement: Confirmed taxonomy gate for care answers
 
@@ -208,7 +261,7 @@ The assistant SHALL render every user-facing fallback response through a central
 
 ### Requirement: Classifier-owned answer language
 
-The assistant SHALL remove deterministic language detection from assistant routing. When LLM classification succeeds, the assistant SHALL use the classifier-provided `language` and `answer_language`. The classifier MUST set `answer_language` from the actual language used by the user's message and MUST ignore instructions that request a different response language. When deterministic classification is used because LLM classification fails, times out, returns invalid output, includes forbidden extra fields, or remains invalid after repair retry, the assistant SHALL default both `language` and `answer_language` to Spanish.
+The assistant SHALL remove deterministic language detection from assistant routing. When LLM classification succeeds, the assistant SHALL use the classifier-provided `language` and `answer_language`. The classifier MUST set `answer_language` from the actual language used by the user's message and MUST ignore instructions that request a different response language. When minimal deterministic routing is used because LLM classification fails, times out, returns invalid output, includes forbidden extra fields, all classifier provider attempts fail, or remains invalid after repair retry, the assistant SHALL default both `language` and `answer_language` to Spanish.
 
 #### Scenario: Spanish message requests English response
 
@@ -224,10 +277,10 @@ The assistant SHALL remove deterministic language detection from assistant routi
 
 #### Scenario: Classifier failure defaults language to Spanish
 
-- **WHEN** LLM classification fails, times out, returns invalid output, includes forbidden extra fields, or remains invalid after repair retry
-- **THEN** deterministic routing still classifies intent, topic and required care aspects when possible
-- **AND** deterministic routing sets `language` to `es`
-- **AND** deterministic routing sets `answer_language` to `es`
+- **WHEN** LLM classification fails, times out, returns invalid output, includes forbidden extra fields, all classifier provider attempts fail, or remains invalid after repair retry
+- **THEN** minimal deterministic routing does not infer the user's language from message text
+- **AND** minimal deterministic routing sets `language` to `es`
+- **AND** minimal deterministic routing sets `answer_language` to `es`
 
 #### Scenario: Low-confidence classifier preserves model language
 
@@ -258,9 +311,60 @@ Conservative safety fallbacks SHALL remain selected by deterministic safety and 
 - **AND** the rendered response recommends not consuming the plant until verified with a reliable toxicological or botanical source
 - **AND** the rendered response does not claim the plant is edible or safe to consume without direct evidence
 
+### Requirement: Metadata-driven aspect semantics
+
+The assistant plant-care pipeline SHALL consume the centralized aspect metadata registry for answerability guidance, targeted web fallback query construction, safety-sensitive routing checks where practical, and readable diagnostic labels where exposed. Canonical `RequiredAspect` values MUST remain the authoritative identifiers for classifier output, judge normalization, and existing diagnostic arrays.
+
+#### Scenario: Judge receives configured coverage guidance
+
+- **WHEN** the assistant asks the answerability judge to evaluate evidence for requested aspects that define metadata `coverage_guidance`
+- **THEN** the judge payload includes guidance for those requested aspects keyed by canonical aspect string
+- **AND** the payload does not include guidance for requested aspects whose metadata omits `coverage_guidance`
+
+#### Scenario: Watering trigger evidence remains covered
+
+- **WHEN** the requested aspect is `watering_frequency_or_trigger`
+- **AND** supplied evidence recommends watering based on a soil-moisture trigger such as letting the top layer or substrate dry
+- **THEN** the metadata-provided guidance allows the judge to treat that evidence as directly covering the watering aspect even without a calendar interval
+
+#### Scenario: Diagnosis guidance rejects unrelated general care
+
+- **WHEN** the requested aspect is a diagnosis aspect with metadata `coverage_guidance`
+- **AND** supplied evidence only contains general care information without explicitly connecting evidence to the symptom or diagnosis requested
+- **THEN** the assistant guidance tells the judge to treat the aspect as missing
+
+#### Scenario: Web fallback query uses aspect metadata
+
+- **WHEN** the assistant builds a trusted web fallback query for missing required aspects with metadata-defined query labels or search terms
+- **THEN** the query includes metadata-derived human-readable aspect terms instead of relying only on raw enum names with underscores replaced
+- **AND** the query still includes confirmed scientific plant context and the user's question context
+
+#### Scenario: Snippet eligibility is non-semantic
+
+- **WHEN** the assistant evaluates whether a trusted web snippet or fetched content is eligible for judge evaluation
+- **THEN** eligibility is determined only by non-semantic checks: valid URL, trusted source, non-empty text
+- **AND** deterministic keyword matching is NOT used to decide whether evidence covers an aspect
+
+#### Scenario: Safety checks use metadata
+
+- **WHEN** fallback or validation logic needs to know whether a requested or missing aspect is safety-sensitive
+- **THEN** it uses aspect metadata safety sensitivity where practical instead of a separate hardcoded aspect set
+
+#### Scenario: Diagnostics preserve canonical aspect values
+
+- **WHEN** assistant response diagnostics include required, covered, or missing aspects
+- **THEN** those arrays contain canonical aspect strings after normalization
+- **AND** any readable labels derived from metadata are additional diagnostic information and do not replace canonical values
+
+#### Scenario: Missing metadata falls back safely
+
+- **WHEN** the assistant receives an unknown aspect string or an aspect without a registry entry in a fallback path
+- **THEN** metadata consumers fall back to enum-derived labels, the original aspect string, or empty optional values as appropriate
+- **AND** the assistant does not crash
+
 ### Requirement: Aspect-gated care answer synthesis
 
-The assistant SHALL validate local and web evidence against the requested `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST NOT blend verified claims and general guidance in the same sentence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the normalized judge result. The normalized judge result MUST use only canonical requested aspect identifiers in `covered_aspects` and `missing_aspects`; explanatory judge text MUST remain in reason fields and MUST NOT be used as a missing aspect.
+The assistant SHALL validate local and web evidence against the requested domain-qualified `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST NOT blend verified claims and general guidance in the same sentence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the normalized judge result. The normalized judge result MUST use only canonical requested aspect identifiers in `covered_aspects` and `missing_aspects`; explanatory judge text MUST remain in reason fields and MUST NOT be used as a missing aspect. Diagnosis answers MUST present causes as hypotheses unless source-supported evidence directly supports a definitive claim.
 
 #### Scenario: Complete aspect coverage answers directly
 
@@ -283,7 +387,7 @@ The assistant SHALL validate local and web evidence against the requested `requi
 
 #### Scenario: Safety-sensitive aspect requires strict threshold
 
-- **WHEN** a requested aspect is `pet_toxicity` or `human_edibility`
+- **WHEN** a requested aspect is a `toxicity_*` or `safety_*` aspect that affects pet, child, human, ingestion, skin-irritation, chemical-treatment, disposal, cross-contamination, vet, or poison-control guidance
 - **THEN** validation requires the aspect confidence to be above `assistant_safety_validation_threshold` (default 0.85) before marking the aspect covered
 
 #### Scenario: Partial non-critical coverage answers covered aspects
@@ -298,6 +402,12 @@ The assistant SHALL validate local and web evidence against the requested `requi
 - **WHEN** the answerability judge returns source-supported coverage for some but not all requested non-critical required aspects
 - **THEN** the assistant preserves `status: "partial"` and `answerable: false`
 - **AND** the assistant computes missing aspects from requested aspects that are not covered after normalization
+
+#### Scenario: Diagnosis remains hypothetical
+
+- **WHEN** requested aspects include `diagnosis_*` causes and evidence supports multiple possible causes
+- **THEN** the assistant presents causes as hypotheses or possibilities
+- **AND** the assistant does not state a definitive diagnosis unless source-supported evidence directly identifies the cause for the specific plant and symptom context
 
 #### Scenario: No validated coverage returns transparent insufficient answer
 
@@ -322,12 +432,17 @@ The assistant SHALL validate local and web evidence against the requested `requi
 
 ### Requirement: Care answer diagnostic metadata
 
-The assistant response SHALL expose bounded diagnostic metadata for plant-care answers including `intent`, `topic`, `required_aspects`, `covered_aspects`, `missing_aspects`, `evidence_path`, and `answer_language`. The response MUST NOT expose prompts, raw model reasoning, raw full evidence text, or internal provider errors beyond existing tool failure metadata. Diagnostic `covered_aspects` and `missing_aspects` MUST contain only canonical requested aspect identifiers after answerability normalization.
+The assistant response SHALL expose bounded diagnostic metadata for plant-care answers including `intent`, `topic`, `required_aspects`, `covered_aspects`, `missing_aspects`, `evidence_path`, and `answer_language`. The response MUST NOT expose prompts, raw model reasoning, raw full evidence text, or internal provider errors beyond existing tool failure metadata. Diagnostic `topic` and `required_aspects` MUST contain the expanded canonical enum values exactly as selected. Diagnostic `covered_aspects` and `missing_aspects` MUST contain only canonical requested aspect identifiers after answerability normalization.
 
 #### Scenario: Diagnostics included for grounded answer
 
 - **WHEN** the assistant returns a plant-care answer from validated evidence
 - **THEN** the response metadata includes intent, topic, requested aspects, covered aspects, missing aspects, evidence path, and answer language
+
+#### Scenario: Diagnostics expose domain-qualified aspects
+
+- **WHEN** the classifier selects `topic: "pests"` with `required_aspects: ["pest_identification", "pest_treatment_action"]`
+- **THEN** the assistant diagnostics expose those values exactly without converting them to generic aspect names
 
 #### Scenario: Diagnostics exclude malformed missing-aspect explanations
 
@@ -540,7 +655,7 @@ The assistant SHALL avoid duplicate live web searches when usable search candida
 
 ### Requirement: Trusted web fallback for insufficient botanical evidence
 
-The assistant SHALL run trusted-first web search for botanical questions when retrieved RAG evidence is partial, insufficient, contradictory, missing, or degraded and a specific confirmed plant context is available. The assistant SHALL construct trusted web fallback queries from the operational scientific name, classified topic, requested required aspects, a capped copy of the original user question, and trusted botanical source terms. One web search call MAY yield multiple candidate source URLs; the assistant SHALL fetch up to three usable sources and SHALL run one final combined judge over RAG and web evidence before answer synthesis. The assistant MUST validate final judge output structurally before using source support for answer synthesis, response source attribution, or background ingestion.
+The assistant SHALL run trusted-first web search for botanical questions when retrieved RAG evidence is partial, insufficient, contradictory, missing, or degraded and a specific confirmed plant context is available. The assistant SHALL construct trusted web fallback queries from the operational scientific name, classified topic, requested domain-qualified required aspects, a capped copy of the original user question, and trusted botanical source terms. Domain-qualified required aspects MUST be converted into useful natural-language search terms without relying on `CareTopic` to infer their domain. One web search call MAY yield multiple candidate source URLs; the assistant SHALL fetch up to three usable sources and SHALL run one final combined judge over RAG and web evidence before answer synthesis. The assistant MUST validate final judge output structurally before using source support for answer synthesis, response source attribution, or background ingestion.
 
 #### Scenario: Degraded RAG triggers web fallback
 
@@ -556,8 +671,14 @@ The assistant SHALL run trusted-first web search for botanical questions when re
 #### Scenario: Unsupported botanical question terms are preserved in web query
 
 - **WHEN** RAG evidence is not full for a botanical question whose intent is not represented by the classified topic alone
-- **THEN** the trusted web search query includes the operational scientific name, required aspects, and relevant terms from the original user question
+- **THEN** the trusted web search query includes the operational scientific name, domain-qualified required aspects, and relevant terms from the original user question
 - **AND** the trusted web search query uses capped question context rather than only the generic classified topic
+
+#### Scenario: Domain-qualified aspect guides web query
+
+- **WHEN** trusted web fallback searches for missing `disease_prevention_steps` or `pest_treatment_action`
+- **THEN** the query includes natural-language disease prevention or pest treatment terms respectively
+- **AND** the query does not require `CareTopic` to distinguish disease from pest intent
 
 #### Scenario: Allowed-domain web results take precedence
 
@@ -616,7 +737,7 @@ The assistant SHALL run trusted-first web search for botanical questions when re
 
 #### Scenario: Safety-sensitive web evidence requires direct support
 
-- **WHEN** the requested missing aspect is pet toxicity, human edibility or another safety-sensitive aspect
+- **WHEN** the requested missing aspect is a safety-sensitive `toxicity_*` or `safety_*` aspect
 - **THEN** final combined judging must report direct source support and meet the safety validation threshold before the assistant treats the aspect as verified
 - **AND** the assistant returns conservative general guidance when no direct source support validates the safety-sensitive aspect
 

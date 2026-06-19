@@ -75,7 +75,7 @@ The system MUST restrict incremental acquisition and assistant fallback evidence
 
 ### Requirement: Aspect-aware evidence validation
 
-Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity, evidence source type and structural strength of the normalized judge result. For non-safety assistant web fallback evidence, validation confidence SHALL be informational and SHALL NOT be the sole reason to reject direct source-supported requested-aspect coverage. Normalized validation results MUST constrain `covered_aspects` and `missing_aspects` to canonical requested aspect identifiers and MUST NOT copy free-form judge reasons into aspect arrays.
+Runtime botanical evidence retrieval and fallback evidence acquisition SHALL validate evidence against the requested plant-care `required_aspects` before the evidence can be treated as answerable. Validation SHALL use semantic judging as the authority for aspect coverage and SHALL return answerability status, covered aspects, missing aspects, source support, contradictions, reason and confidence. The system MUST structurally validate judge output and degrade incoherent results to a safer status before answer synthesis or persistence. Validation SHALL use context-aware thresholds based on aspect safety sensitivity, evidence source type and structural strength of the normalized judge result. For non-safety assistant web fallback evidence, validation confidence SHALL be informational and SHALL NOT be the sole reason to reject direct source-supported requested-aspect coverage. Normalized validation results MUST constrain `covered_aspects` and `missing_aspects` to canonical requested aspect identifiers and MUST NOT copy free-form judge reasons into aspect arrays. Validation MUST NOT infer an aspect domain from `CareTopic` when judging coverage.
 
 #### Scenario: Strong full-support non-safety evidence accepted with lower threshold
 
@@ -94,7 +94,7 @@ Runtime botanical evidence retrieval and fallback evidence acquisition SHALL val
 
 #### Scenario: Safety-sensitive aspect requires strict threshold
 
-- **WHEN** the requested aspect is safety-sensitive, including pet toxicity or human edibility
+- **WHEN** the requested aspect is safety-sensitive, including `toxicity_pet_safety`, `toxicity_human_edibility`, `toxicity_child_safety`, `toxicity_skin_irritation_risk`, `toxicity_ingestion_symptoms`, `toxicity_handling_precautions`, or applicable `safety_*` treatment, disposal, cross-contamination, vet, or poison-control aspects
 - **THEN** validation requires direct evidence and the configured safety-sensitive threshold (default 0.85) before marking the aspect covered
 
 #### Scenario: Generic care evidence fails specific aspect validation
@@ -102,6 +102,12 @@ Runtime botanical evidence retrieval and fallback evidence acquisition SHALL val
 - **WHEN** retrieved RAG evidence contains generic plant-care information but does not directly cover the requested watering frequency aspect
 - **THEN** evidence validation does not mark `watering_frequency_or_trigger` as covered
 - **AND** the evidence is not treated as full for that aspect
+
+#### Scenario: Domain-qualified aspect cannot be covered by sibling domain evidence
+
+- **WHEN** requested aspects include `pest_treatment_action`
+- **AND** evidence only discusses disease treatment or generic treatment steps
+- **THEN** evidence validation does not mark `pest_treatment_action` as covered
 
 #### Scenario: Covered aspects constrained to request
 
@@ -152,7 +158,7 @@ Runtime botanical evidence retrieval and fallback evidence acquisition SHALL val
 
 ### Requirement: Targeted missing-aspect web fallback
 
-Trusted web fallback for assistant plant-care answers SHALL run after local evidence validation fails to return `full`. Web search SHALL use confirmed taxonomy, topic, required aspects, and the original user question, and SHALL exclude nicknames, display names, and classifier plant references from search construction. This change SHALL keep the current query construction strategy and SHALL NOT add per-aspect query expansion.
+Trusted web fallback for assistant plant-care answers SHALL run after local evidence validation fails to return `full`. Web search SHALL use confirmed taxonomy, topic, domain-qualified required aspects, and the original user question, and SHALL exclude nicknames, display names, and classifier plant references from search construction. Query construction SHALL convert selected domain-qualified aspects into useful natural-language terms and MUST NOT depend on `CareTopic` to disambiguate the aspect domain. This change SHALL keep the current single-search strategy and SHALL NOT add per-aspect query expansion.
 
 #### Scenario: RAG covers no requested aspects
 
@@ -173,6 +179,11 @@ Trusted web fallback for assistant plant-care answers SHALL run after local evid
 
 - **WHEN** the display plant name differs from confirmed taxonomy
 - **THEN** trusted web fallback query construction uses `plant_binomial_name` or `plant_scientific_name` and does not use the display name, nickname, apodo, or classifier plant reference
+
+#### Scenario: Domain-qualified aspect terms are used
+
+- **WHEN** missing aspects include `propagation_rooting_conditions`, `nutrition_deficiency_signs`, or `toxicity_pet_safety`
+- **THEN** trusted web fallback query construction includes natural-language terms for propagation rooting conditions, nutrition deficiency signs, or pet toxicity safety respectively
 
 #### Scenario: Web fallback skipped when local evidence complete
 

@@ -8,6 +8,20 @@ schema: spec-driven
 #     Tech stack: TypeScript, React, Node.js
 #     We use conventional commits
 #     Domain: e-commerce platform
+context: |
+  This is a multilingual plant-care app. Do not solve classification,
+  evidence validation, retrieval eligibility, answerability, or language
+  handling with hardcoded keyword lists, translated word lists, regexes,
+  substring checks, or English/Spanish-only heuristics.
+
+  Botanical meaning must be handled through the multilingual classifier,
+  schema-validated model outputs, semantic answerability judging, structured
+  taxonomy/aspect metadata, and source-grounded evidence.
+
+  Deterministic code is acceptable only for non-semantic safety boundaries,
+  schema validation, enum validation, provider selection, trusted URL/domain
+  checks, non-empty text checks, and conservative fallback routing after model
+  failure.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
@@ -18,3 +32,13 @@ schema: spec-driven
 #       - Always include a "Non-goals" section
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Do not propose deterministic keyword lists, translated word lists, regex language detection, or English/Spanish-only heuristics for semantic plant-care behavior.
+    - If semantic classification or evidence coverage is needed, propose model/schema/judge-based behavior instead.
+  design:
+    - Explicitly reject hardcoded keyword matching, token presence checks, and language-specific word lists for multilingual botanical semantics.
+    - Deterministic logic may only be used for schema validation, enum validation, trusted-source gates, non-empty checks, safety boundaries, and minimal fallback routing.
+  tasks:
+    - Do not create tasks that ask implementers to add or expand deterministic keyword mappings for classification, retrieval, evidence coverage, language detection, or answerability.
+    - Add regression tests proving non-English, synonym, or paraphrased evidence reaches semantic judging without keyword matches.
