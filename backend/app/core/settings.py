@@ -66,9 +66,8 @@ class Settings(BaseSettings):
     search_circuit_breaker_duration_seconds: float = 60.0
     vision_circuit_breaker_duration_seconds: float = 60.0
     trusted_source_domains: list[str] = [
-        "www.rhs.org.uk",
+        "rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",
-        "extension.umd.edu",
         "yardandgarden.extension.iastate.edu",
         "extension.oregonstate.edu",
         "fieldreport.caes.uga.edu",
@@ -77,23 +76,19 @@ class Settings(BaseSettings):
         "extension.umn.edu",
         "extension.psu.edu",
         "extension.unh.edu",
+        "extension.wvu.edu",
+        "hort.extension.wisc.edu",
+        "extension.missouri.edu",
         "extension.illinois.edu",
         "plants.ces.ncsu.edu",
-        "www.missouribotanicalgarden.org",
+        "missouribotanicalgarden.org",
         "thespruce.com",
         "gardens.si.edu",
-        "perenual.com",
-        "trefle.io",
-        "plants.ces.ncsu.edu/",
-        "www.missouribotanicalgarden.org",
-        "extension.umn.edu",
-        "hort.extension.wisc.edu",
-        "extension.psu.edu",
-        "extension.missouri.edu",
         "ccenassau.org",
-        "extension.wvu.edu",
         "garden.org",
-        "ourhouseplants.com"
+        "ourhouseplants.com",
+        "perenual.com",
+        "trefle.io"
     ]
 
 

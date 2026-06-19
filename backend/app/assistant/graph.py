@@ -2213,7 +2213,13 @@ def operational_plant_name(
     plant_binomial_name: str | None,
     plant_scientific_name: str | None,
 ) -> str | None:
-    return _first_non_blank(plant_binomial_name, plant_scientific_name)
+    explicit = _normalize_plant_name(plant_binomial_name)
+    if explicit:
+        return explicit
+    derived = _binomial_from_scientific_name(plant_scientific_name)
+    if derived:
+        return derived
+    return _normalize_plant_name(plant_scientific_name)
 
 
 def display_plant_name(
@@ -2240,10 +2246,27 @@ def _normalize_plant_name(value: str | None) -> str | None:
     return stripped or None
 
 
+_LATIN_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z]{2,}$")
+
+
+def _binomial_from_scientific_name(value: str | None) -> str | None:
+    normalized = _normalize_plant_name(value)
+    if not normalized:
+        return None
+    tokens = normalized.split()
+    if len(tokens) < 2:
+        return None
+    first, second = tokens[0], tokens[1]
+    if _LATIN_TOKEN_RE.match(first) and _LATIN_TOKEN_RE.match(second):
+        return f"{first} {second}"
+    return None
+
+
 def _operational_name_for_tools(state: AssistantState) -> str | None:
-    return _first_non_blank(
-        state.get("plant_binomial_name"),
-        state.get("plant_scientific_name"),
+    return operational_plant_name(
+        plant=state.get("plant_hint"),
+        plant_binomial_name=state.get("plant_binomial_name"),
+        plant_scientific_name=state.get("plant_scientific_name"),
     )
 
 
