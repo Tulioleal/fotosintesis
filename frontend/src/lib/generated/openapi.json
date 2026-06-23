@@ -1,6 +1,112 @@
 {
   "components": {
     "schemas": {
+      "AssistantCareDiagnostics": {
+        "properties": {
+          "answer_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Language"
+          },
+          "answerability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answerability Status"
+          },
+          "contradictions": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Contradictions",
+            "type": "array"
+          },
+          "covered_aspects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Covered Aspects",
+            "type": "array"
+          },
+          "evidence_path": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Path",
+            "type": "array"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "missing_aspects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Aspects",
+            "type": "array"
+          },
+          "provider_fallbacks": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Fallbacks"
+          },
+          "required_aspects": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Aspects",
+            "type": "array"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          }
+        },
+        "title": "AssistantCareDiagnostics",
+        "type": "object"
+      },
       "AssistantChatRequest": {
         "properties": {
           "conversation_id": {
@@ -65,6 +171,16 @@
             "format": "uuid",
             "title": "Conversation Id",
             "type": "string"
+          },
+          "diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssistantCareDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "message": {
             "$ref": "#/components/schemas/AssistantMessage"
@@ -184,6 +300,58 @@
           "suggestion_justification"
         ],
         "title": "AssistantReminderSuggestion",
+        "type": "object"
+      },
+      "AssistantRetryableError": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "detail": {
+            "default": "No model-generated assistant response could be produced. Please retry.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "error_type": {
+            "default": "total_generation_failure",
+            "title": "Error Type",
+            "type": "string"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "provider_failures": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProviderFailureDetail"
+            },
+            "title": "Provider Failures",
+            "type": "array"
+          },
+          "retryable": {
+            "default": true,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "title": "AssistantRetryableError",
         "type": "object"
       },
       "AssistantSource": {
@@ -890,6 +1058,81 @@
         "title": "ProfileSource",
         "type": "object"
       },
+      "ProviderFailureDetail": {
+        "properties": {
+          "attempt_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Index"
+          },
+          "cause_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cause Type"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "operation": {
+            "default": "",
+            "title": "Operation",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "",
+            "title": "Role",
+            "type": "string"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          },
+          "transient": {
+            "default": false,
+            "title": "Transient",
+            "type": "boolean"
+          }
+        },
+        "title": "ProviderFailureDetail",
+        "type": "object"
+      },
       "PublicAuthUser": {
         "properties": {
           "email": {
@@ -1494,7 +1737,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AssistantChatResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AssistantChatResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AssistantRetryableError"
+                    }
+                  ],
+                  "title": "Response Assistant Chat Assistant Chat Post"
                 }
               }
             },

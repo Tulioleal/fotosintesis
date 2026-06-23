@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -16,6 +16,15 @@ from app.knowledge.schemas import (
     ReviewStatus,
 )
 from app.providers.factory import ProviderRegistry, get_provider_registry
+from app.providers.fallback import (
+    AttemptMetadata,
+    ProviderFallbackMetadata,
+    classify_failure,
+    extract_cause_type,
+    extract_status_code,
+    is_transient_failure,
+)
+from app.providers.wrappers import AllProvidersFailedError
 from app.providers.types import SearchResult
 
 
@@ -23,12 +32,99 @@ TRUSTED_WEB_EVIDENCE_CONFIDENCE = 0.55
 EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE = 0.35
 EXTERNAL_FALLBACK_VALIDATION_STATUS = "external_fallback"
 
+_NON_RECOVERABLE_CATEGORIES = frozenset({
+    "timeout",
+    "rate_limit",
+    "service_unavailable",
+    "network_error",
+    "non_transient",
+})
+
+
+@dataclass(frozen=True)
+class ProviderFailureEntry:
+    provider: str
+    role: str
+    operation: str
+    failure_category: str | None = None
+    retryable: bool = False
+    transient: bool = False
+    status_code: int | None = None
+    cause_type: str | None = None
+    attempt_index: int | None = None
+
+
+@dataclass(frozen=True)
+class AssistantFailureMetadata:
+    failure_category: str
+    retryable: bool = False
+    transient: bool = False
+    provider_failures: list[ProviderFailureEntry] = field(default_factory=list)
+
 
 @dataclass(frozen=True)
 class ToolResult:
     ok: bool
     data: object | None = None
     error: str | None = None
+    failure_metadata: AssistantFailureMetadata | None = None
+
+
+def _sanitize_attempt(attempt: AttemptMetadata) -> ProviderFailureEntry:
+    return ProviderFailureEntry(
+        provider=attempt.provider,
+        role=attempt.role,
+        operation=attempt.operation,
+        failure_category=attempt.failure_category,
+        retryable=attempt.retryable,
+        transient=attempt.transient,
+        status_code=attempt.status_code,
+        cause_type=attempt.cause_type,
+        attempt_index=attempt.attempt_index,
+    )
+
+
+def build_assistant_failure_metadata(exc: Exception) -> AssistantFailureMetadata:
+    if isinstance(exc, AllProvidersFailedError):
+        meta = exc.fallback_metadata
+        category = _category_from_fallback_metadata(meta)
+        entries = [_sanitize_attempt(a) for a in meta.attempts if a.outcome != "skipped_unhealthy"]
+        return AssistantFailureMetadata(
+            failure_category=category,
+            retryable=exc.is_retryable,
+            transient=exc.is_transient,
+            provider_failures=entries,
+        )
+    fb_category = classify_failure(exc)
+    entry = ProviderFailureEntry(
+        provider="",
+        role="",
+        operation="",
+        failure_category=fb_category.value,
+        retryable=is_transient_failure(fb_category),
+        transient=is_transient_failure(fb_category),
+        status_code=extract_status_code(exc),
+        cause_type=extract_cause_type(exc),
+    )
+    return AssistantFailureMetadata(
+        failure_category=fb_category.value,
+        retryable=is_transient_failure(fb_category),
+        transient=is_transient_failure(fb_category),
+        provider_failures=[entry],
+    )
+
+
+def _category_from_fallback_metadata(meta: ProviderFallbackMetadata) -> str:
+    non_transient = [
+        a for a in meta.attempts
+        if a.failure_category and a.failure_category in _NON_RECOVERABLE_CATEGORIES
+    ]
+    if non_transient:
+        return non_transient[0].failure_category
+    categories = [a.failure_category for a in meta.attempts if a.failure_category]
+    if categories:
+        return categories[-1]
+    return "unknown"
 
 
 class AssistantTools:
@@ -110,14 +206,16 @@ class AssistantTools:
         try:
             result = await self.providers.model.generate_text(prompt)
         except Exception as exc:
-            return ToolResult(ok=False, error=f"model_generate_text failed: {exc}")
+            metadata = build_assistant_failure_metadata(exc)
+            return ToolResult(ok=False, error=f"model_generate_text failed: {exc}", failure_metadata=metadata)
         return ToolResult(ok=True, data=result.text)
 
     async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
         try:
             result = await self.providers.model.generate_json(prompt, schema, **kwargs)
         except Exception as exc:
-            return ToolResult(ok=False, error=f"model_generate_json failed: {exc}")
+            metadata = build_assistant_failure_metadata(exc)
+            return ToolResult(ok=False, error=f"model_generate_json failed: {exc}", failure_metadata=metadata)
         return ToolResult(ok=True, data=result.data)
 
     async def plant_data_lookup(self, *, scientific_name: str, topic: str) -> ToolResult:

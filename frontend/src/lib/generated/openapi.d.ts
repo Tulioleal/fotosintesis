@@ -335,6 +335,48 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AssistantCareDiagnostics */
+        AssistantCareDiagnostics: {
+            /** Answer Language */
+            answer_language?: string | null;
+            /** Answerability Status */
+            answerability_status?: string | null;
+            /**
+             * Contradictions
+             * @default []
+             */
+            contradictions: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Covered Aspects
+             * @default []
+             */
+            covered_aspects: string[];
+            /**
+             * Evidence Path
+             * @default []
+             */
+            evidence_path: string[];
+            /** Intent */
+            intent?: string | null;
+            /**
+             * Missing Aspects
+             * @default []
+             */
+            missing_aspects: string[];
+            /** Provider Fallbacks */
+            provider_fallbacks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Required Aspects
+             * @default []
+             */
+            required_aspects: string[];
+            /** Topic */
+            topic?: string | null;
+        };
         /** AssistantChatRequest */
         AssistantChatRequest: {
             /** Conversation Id */
@@ -355,6 +397,7 @@ export interface components {
              * Format: uuid
              */
             conversation_id: string;
+            diagnostics?: components["schemas"]["AssistantCareDiagnostics"] | null;
             message: components["schemas"]["AssistantMessage"];
             reminder_suggestion?: components["schemas"]["AssistantReminderSuggestion"] | null;
             /**
@@ -407,6 +450,33 @@ export interface components {
             recurrence: components["schemas"]["ReminderRecurrence"];
             /** Suggestion Justification */
             suggestion_justification: string;
+        };
+        /** AssistantRetryableError */
+        AssistantRetryableError: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /**
+             * Detail
+             * @default No model-generated assistant response could be produced. Please retry.
+             */
+            detail: string;
+            /**
+             * Error Type
+             * @default total_generation_failure
+             */
+            error_type: string;
+            /** Failure Category */
+            failure_category?: string | null;
+            /**
+             * Provider Failures
+             * @default []
+             */
+            provider_failures: components["schemas"]["ProviderFailureDetail"][];
+            /**
+             * Retryable
+             * @default true
+             */
+            retryable: boolean;
         };
         /** AssistantSource */
         AssistantSource: {
@@ -670,6 +740,42 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** ProviderFailureDetail */
+        ProviderFailureDetail: {
+            /** Attempt Index */
+            attempt_index?: number | null;
+            /** Cause Type */
+            cause_type?: string | null;
+            /** Failure Category */
+            failure_category?: string | null;
+            /**
+             * Operation
+             * @default
+             */
+            operation: string;
+            /**
+             * Provider
+             * @default
+             */
+            provider: string;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /**
+             * Role
+             * @default
+             */
+            role: string;
+            /** Status Code */
+            status_code?: number | null;
+            /**
+             * Transient
+             * @default false
+             */
+            transient: boolean;
+        };
         /** PublicAuthUser */
         PublicAuthUser: {
             /**
@@ -891,7 +997,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AssistantChatResponse"];
+                    "application/json": components["schemas"]["AssistantChatResponse"] | components["schemas"]["AssistantRetryableError"];
                 };
             };
             /** @description Validation Error */

@@ -14,6 +14,8 @@ from app.providers.fallback import (
     ProviderRole,
     circuit_breaker,
     classify_failure,
+    extract_cause_type,
+    extract_status_code,
     is_circuit_breaker_failure,
     is_transient_failure,
 )
@@ -48,9 +50,14 @@ def _record_fallback_success(
             "attempted_providers": [
                 {
                     "provider": a.provider,
+                    "attempt_index": a.attempt_index,
                     "outcome": a.outcome,
                     "failure_category": a.failure_category,
                     "skipped_unhealthy": a.skipped_unhealthy,
+                    "transient": a.transient,
+                    "retryable": a.retryable,
+                    "status_code": a.status_code,
+                    "cause_type": a.cause_type,
                 }
                 for a in metadata.attempts
             ],
@@ -127,7 +134,14 @@ def _classify_and_record_failure(
     latency: float,
 ) -> AttemptMetadata:
     category = classify_failure(exc)
-    metrics_registry.provider_failures_total += 1
+    transient = is_transient_failure(category)
+    retryable = transient
+    metrics_registry.record_provider_failure(
+        role=role,
+        provider=provider,
+        operation=operation,
+        failure_category=category.value,
+    )
     outcome = f"failed:{category.value}"
     _log_fallback_event(
         "attempt_failed",
@@ -146,6 +160,10 @@ def _classify_and_record_failure(
         latency_seconds=latency,
         outcome=outcome,
         failure_category=category.value,
+        transient=transient,
+        retryable=retryable,
+        status_code=extract_status_code(exc),
+        cause_type=extract_cause_type(exc),
     )
 
 
@@ -798,6 +816,14 @@ class AllProvidersFailedError(RuntimeError):
         super().__init__(
             f"All providers failed for role={metadata.role} operation={metadata.operation}"
         )
+
+    @property
+    def is_transient(self) -> bool:
+        return any(a.transient for a in self.fallback_metadata.attempts if a.failure_category)
+
+    @property
+    def is_retryable(self) -> bool:
+        return self.is_transient
 
 
 def _raise_all_providers_failed(metadata: ProviderFallbackMetadata) -> None:

@@ -197,6 +197,7 @@ class FakeTools:
         plant_data_ingestion_error: str | None = None,
         model_response: str = "Respuesta sintetizada por modelo.",
         fail_model: bool = False,
+        model_error_message: str | None = None,
         classifier_data: dict | None = None,
         fail_classifier: bool = False,
         knowledge_content: str = "Requiere riego moderado y sustrato con buen drenaje.",
@@ -222,6 +223,7 @@ class FakeTools:
         self.plant_data_kwargs = None
         self.model_response = model_response
         self.fail_model = fail_model
+        self.model_error_message = model_error_message
         self.classifier_data = classifier_data
         self.fail_classifier = fail_classifier
         self.knowledge_content = knowledge_content
@@ -401,7 +403,44 @@ class FakeTools:
         self.model_calls += 1
         self.model_prompts.append(prompt)
         if self.fail_model:
-            return ToolResult(ok=False, error="model_generate_text failed: unavailable")
+            from app.assistant.tools import AssistantFailureMetadata, ProviderFailureEntry
+            error = self.model_error_message or "model_generate_text failed: unavailable"
+            if "all providers failed" in error.lower():
+                category = "all_providers_failed"
+                retryable = False
+                transient = False
+            elif "service unavailable" in error.lower():
+                category = "service_unavailable"
+                retryable = False
+                transient = False
+            elif "timeout" in error.lower():
+                category = "timeout"
+                retryable = False
+                transient = False
+            elif "rate limit" in error.lower():
+                category = "rate_limit"
+                retryable = False
+                transient = False
+            else:
+                category = "unknown"
+                retryable = True
+                transient = True
+            metadata = AssistantFailureMetadata(
+                failure_category=category,
+                retryable=retryable,
+                transient=transient,
+                provider_failures=[
+                    ProviderFailureEntry(
+                        provider="gemini",
+                        role="model",
+                        operation="generate_text",
+                        failure_category=category,
+                        retryable=retryable,
+                        transient=transient,
+                    )
+                ],
+            )
+            return ToolResult(ok=False, error=error, failure_metadata=metadata)
         if prompt.startswith("Render a fallback response"):
             if "Intent: missing_confirmed_taxonomy" in prompt:
                 return ToolResult(ok=True, data="Necesito el nombre cientifico confirmado de la planta antes de buscar evidencia confiable de cuidado.")
@@ -628,7 +667,7 @@ async def test_spanish_message_requesting_english_uses_classifier_spanish_for_fa
 
 
 @pytest.mark.asyncio
-async def test_fallback_renderer_failure_returns_minimal_spanish_without_links() -> None:
+async def test_fallback_renderer_failure_signals_total_generation_failure() -> None:
     tools = FakeTools(fail_model=True)
 
     result = await AssistantGraph(tools).run(
@@ -637,8 +676,9 @@ async def test_fallback_renderer_failure_returns_minimal_spanish_without_links()
         plant_hint=None,
     )
 
-    assert result["answer"] == "No pude generar una respuesta segura en este momento. Intentá de nuevo con más detalles."
-    assert "http" not in result["answer"]
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
+    assert "http" not in (result.get("answer") or "")
     assert result["tool_failures"]
 
 
@@ -1265,7 +1305,7 @@ async def test_minimal_fallback_does_not_emit_domain_specific_aspects() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assistant_falls_back_to_deterministic_answer_when_model_fails() -> None:
+async def test_total_generation_failure_calls_recovery_and_signals_failure() -> None:
     tools = FakeTools(fail_model=True)
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
@@ -1275,8 +1315,8 @@ async def test_assistant_falls_back_to_deterministic_answer_when_model_fails() -
     )
 
     assert tools.model_calls == 2
-    assert result["answer"] == "No pude generar una respuesta segura en este momento. Intentá de nuevo con más detalles."
-    assert "http" not in result["answer"]
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
     assert "model_generate_text failed" in result["tool_failures"][0]
     assert result["sources"][0]["url"] == "https://example.org/source"
 
@@ -3144,6 +3184,62 @@ async def test_background_ingestion_exception_logs_plant_and_source_context(
 
 
 @pytest.mark.asyncio
+async def test_assistant_service_total_generation_failure_returns_retryable_error(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When graph returns total_generation_failure, service returns AssistantRetryableError
+    with only the user message persisted and no assistant message."""
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            from app.assistant.tools import AssistantFailureMetadata, ProviderFailureEntry
+            return {
+                "total_generation_failure": True,
+                "tool_failures": ["all providers failed: gemini unavailable"],
+                "generation_failure": AssistantFailureMetadata(
+                    failure_category="all_providers_failed",
+                    retryable=False,
+                    transient=False,
+                    provider_failures=[
+                        ProviderFailureEntry(
+                            provider="gemini",
+                            role="model",
+                            operation="generate_text",
+                            failure_category="service_unavailable",
+                            retryable=False,
+                            transient=False,
+                        )
+                    ],
+                ),
+                "sources": [],
+            }
+
+    monkeypatch.setattr(
+        "app.assistant.tools.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        response = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="Como debo regar mi Pata?", plant="Pata"),
+        )
+
+        messages = (await session.execute(select(conversation_messages))).all()
+
+    from app.assistant.schemas import AssistantRetryableError
+    assert isinstance(response, AssistantRetryableError)
+    assert response.retryable is True
+    assert response.failure_category == "all_providers_failed"
+    assert response.provider_failures[0].failure_category == "service_unavailable"
+    assert response.provider_failures[0].provider == "gemini"
+    assert response.conversation_id is not None
+    assert [message.role for message in messages] == ["user"]
+
+
+@pytest.mark.asyncio
 async def test_assistant_tools_passes_configured_providers_to_acquisition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3956,11 +4052,13 @@ async def test_complete_reminder_creates_with_due_at_and_recurrence() -> None:
         plant_hint=None,
     )
 
-    assert "cree el recordatorio" in result["answer"]
+    assert result.get("answer")
     assert tools.created_reminders == 1
     assert "reminder_suggestion" not in result
     assert tools.reminder_kwargs["due_at"] == datetime(2026, 6, 1, 10, 30, tzinfo=timezone.utc)
     assert tools.reminder_kwargs["recurrence"] == "weekly"
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert any("reminder_created" in p for p in fallback_prompts)
 
 
 @pytest.mark.asyncio
@@ -5094,3 +5192,402 @@ async def test_non_english_snippet_reaches_judge_without_keyword_filter() -> Non
     judge_payload = judge_calls[0]["payload"]
     evidence_text = judge_payload.get("evidence", "")
     assert "toxica" in evidence_text.lower() or "mascotas" in evidence_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Deterministic prose removal tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_deterministic_emergency_prose_on_total_generation_failure() -> None:
+    """When all model providers fail, no deterministic prose is returned."""
+    tools = FakeTools(fail_model=True)
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
+    assert "No pude generar" not in (result.get("answer") or "")
+    assert "Intentá de nuevo" not in (result.get("answer") or "")
+
+
+@pytest.mark.asyncio
+async def test_rag_fallback_does_not_return_prewritten_prose() -> None:
+    """RAG fallback must not return prewritten prose as final assistant content."""
+    tools = FakeTools(rag_answerable=False, plant_data=None, web_results=[])
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    answer = result.get("answer", "")
+    assert "una guia practica es:" not in answer
+    assert "Para" != answer[:3]
+
+
+@pytest.mark.asyncio
+async def test_all_models_failed_returns_retryable_signal() -> None:
+    """When all model providers fail, the graph signals total generation failure."""
+    tools = FakeTools(fail_model=True)
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
+
+
+@pytest.mark.asyncio
+async def test_total_generation_failure_does_not_assign_answer() -> None:
+    """Total generation failure must not assign any answer to the state."""
+    tools = FakeTools(fail_model=True)
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert "answer" not in result or not result["answer"]
+    assert result.get("total_generation_failure") is True
+
+
+@pytest.mark.asyncio
+async def test_model_recovery_attempt_uses_structured_draft() -> None:
+    """Fallback rendering uses structured draft with allowed facts and answer_language."""
+    tools = FakeTools(rag_answerable=False, plant_data=None, web_results=[])
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) >= 1
+    assert "Answer language:" in fallback_prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_action_confirmation_generated_through_model() -> None:
+    """Action confirmations are generated through the model path."""
+    tools = FakeTools()
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Crea un recordatorio para Pata el 2026-06-01 10:30 regar semanal",
+        plant_hint=None,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    has_action_intent = any(
+        "reminder_" in p for p in fallback_prompts
+    )
+    assert has_action_intent or result.get("answer")
+
+
+@pytest.mark.asyncio
+async def test_reminder_success_generated_through_model() -> None:
+    """Successful reminder creation generates confirmation through the model."""
+    tools = FakeTools()
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Crea un recordatorio para Pata el 2026-06-01 10:30 regar semanal",
+        plant_hint=None,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    has_created_intent = any("reminder_created" in p for p in fallback_prompts)
+    assert has_created_intent
+
+
+@pytest.mark.asyncio
+async def test_non_english_evidence_reaches_model_without_keyword_matching() -> None:
+    """Non-English evidence reaches the model without deterministic keyword matching."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[
+            SearchResult(
+                title="Guia de riego en italiano",
+                url="https://example.org/irrigazione",
+                snippet="La pianta richiede annaffiature moderate. Il terreno deve essere asciutto tra un'annaffiatura e l'altra.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como debo regar mi Monstera?",
+        plant_hint=None,
+        plant_binomial_name="Monstera deliciosa",
+    )
+
+    assert tools.web_search_calls == 1
+    judge_calls = [
+        c for c in tools.judge_calls
+        if c["payload"].get("evidence_type") == "combined_rag_web"
+    ]
+    assert len(judge_calls) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Structured recovery draft tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recovery_draft_uses_structured_facts_not_prewritten_prose() -> None:
+    """Recovery draft must contain structured source support facts, not prewritten prose."""
+    tools = FakeTools(fail_model=True)
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) >= 1
+    draft_prompt = fallback_prompts[-1]
+    assert "Answer language:" in draft_prompt
+    assert "Allowed user-facing facts:" in draft_prompt
+    assert "Required points:" in draft_prompt
+    assert "Prohibited points:" in draft_prompt
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_failure_skips_recovery_generation() -> None:
+    """Non-recoverable provider failures skip recovery and signal total failure immediately."""
+    tools = FakeTools(fail_model=True, model_error_message="all providers failed: gemini unavailable")
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_response_triggers_recovery_attempt() -> None:
+    """Empty model response triggers recovery attempt (recoverable failure)."""
+    tools = FakeTools(model_response="")
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) >= 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_draft_includes_source_support_claims() -> None:
+    """Recovery draft includes source support claims from state as allowed facts."""
+    tools = FakeTools(fail_model=True)
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) >= 1
+    draft_prompt = fallback_prompts[-1]
+    assert "riego" in draft_prompt.lower() or "water" in draft_prompt.lower() or "Allowed user-facing facts:" in draft_prompt
+
+
+# ---------------------------------------------------------------------------
+# Typed failure metadata tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_text_preserves_typed_failure_metadata() -> None:
+    """AssistantTools.generate_text() returns typed AssistantFailureMetadata on failure."""
+    from app.assistant.tools import AssistantFailureMetadata, ProviderFailureEntry
+
+    tools = FakeTools(fail_model=True, model_error_message="all providers failed: gemini unavailable")
+    result = await tools.generate_text("test prompt")
+
+    assert result.ok is False
+    assert result.failure_metadata is not None
+    assert isinstance(result.failure_metadata, AssistantFailureMetadata)
+    assert result.failure_metadata.failure_category == "all_providers_failed"
+    assert result.failure_metadata.retryable is False
+    assert result.failure_metadata.transient is False
+    assert len(result.failure_metadata.provider_failures) == 1
+    entry = result.failure_metadata.provider_failures[0]
+    assert isinstance(entry, ProviderFailureEntry)
+    assert entry.failure_category == "all_providers_failed"
+
+
+@pytest.mark.asyncio
+async def test_generate_text_preserves_typed_metadata_for_transient_failure() -> None:
+    """Transient failures get typed metadata with retryable=True."""
+    tools = FakeTools(fail_model=True, model_error_message="service temporarily unavailable")
+    result = await tools.generate_text("test prompt")
+
+    assert result.ok is False
+    assert result.failure_metadata is not None
+    assert result.failure_metadata.retryable is True
+    assert result.failure_metadata.transient is True
+
+
+@pytest.mark.asyncio
+async def test_grounded_answer_blocks_recovery_by_typed_category_not_string() -> None:
+    """Recovery is blocked by typed all_providers_failed category even if error string
+    does not contain recognizable keywords."""
+    from app.assistant.tools import AssistantFailureMetadata, ProviderFailureEntry
+
+    tools = FakeTools(fail_model=True, model_error_message="custom error message with no keywords")
+    original_generate = tools.generate_text
+
+    async def patched_generate(prompt: str) -> ToolResult:
+        result = await original_generate(prompt)
+        if not result.ok:
+            metadata = AssistantFailureMetadata(
+                failure_category="all_providers_failed",
+                retryable=False,
+                transient=False,
+                provider_failures=[
+                    ProviderFailureEntry(
+                        provider="gemini",
+                        role="model",
+                        operation="generate_text",
+                        failure_category="service_unavailable",
+                        retryable=False,
+                        transient=False,
+                    )
+                ],
+            )
+            return ToolResult(ok=False, error=result.error, failure_metadata=metadata)
+        return result
+
+    tools.generate_text = patched_generate
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("total_generation_failure") is True
+    assert not result.get("answer")
+    fallback_prompts = [p for p in tools.model_prompts if "Render a fallback response" in p]
+    assert len(fallback_prompts) == 0
+    assert result.get("generation_failure") is not None
+    assert result["generation_failure"].failure_category == "all_providers_failed"
+
+
+@pytest.mark.asyncio
+async def test_grounded_answer_stores_generation_failure_in_state() -> None:
+    """_generate_grounded_answer stores typed failure metadata in state.generation_failure."""
+    tools = FakeTools(fail_model=True, model_error_message="service unavailable")
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("total_generation_failure") is True
+    gen_failure = result.get("generation_failure")
+    assert gen_failure is not None
+    assert gen_failure.failure_category == "service_unavailable"
+    assert gen_failure.retryable is False
+    assert gen_failure.transient is False
+
+
+@pytest.mark.asyncio
+async def test_retryable_error_provider_failures_are_typed_not_strings(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AssistantRetryableError.provider_failures contains typed entries, not raw strings."""
+    from app.assistant.schemas import AssistantRetryableError, ProviderFailureDetail
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            from app.assistant.tools import AssistantFailureMetadata, ProviderFailureEntry
+            return {
+                "total_generation_failure": True,
+                "tool_failures": ["something"],
+                "generation_failure": AssistantFailureMetadata(
+                    failure_category="timeout",
+                    retryable=False,
+                    transient=False,
+                    provider_failures=[
+                        ProviderFailureEntry(
+                            provider="gemini",
+                            role="model",
+                            operation="generate_text",
+                            failure_category="timeout",
+                            retryable=False,
+                            transient=False,
+                            status_code=None,
+                            attempt_index=0,
+                        )
+                    ],
+                ),
+                "sources": [],
+            }
+
+    monkeypatch.setattr(
+        "app.assistant.tools.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        response = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="test", plant="test"),
+        )
+
+    assert isinstance(response, AssistantRetryableError)
+    assert len(response.provider_failures) == 1
+    entry = response.provider_failures[0]
+    assert isinstance(entry, ProviderFailureDetail)
+    assert entry.provider == "gemini"
+    assert entry.failure_category == "timeout"
+    assert entry.attempt_index == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_tools_generate_text_returns_metadata_for_empty_error() -> None:
+    """Even generic errors get typed metadata with failure_category='unknown'."""
+    tools = FakeTools(fail_model=True)
+    result = await tools.generate_text("prompt")
+
+    assert result.ok is False
+    assert result.failure_metadata is not None
+    assert result.failure_metadata.failure_category in ("unknown", "service_unavailable")
+    assert result.failure_metadata.provider_failures[0].provider == "gemini"

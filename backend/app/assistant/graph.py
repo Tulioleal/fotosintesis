@@ -20,11 +20,11 @@ from app.assistant.care_contracts import (
     EvidenceValidationResult,
     RequiredAspect,
 )
-from app.assistant.tools import AssistantTools
+from app.assistant.tools import AssistantFailureMetadata, AssistantTools
 from app.core.settings import Settings, get_settings
 from app.knowledge.page_evidence import TrustedPageEvidence
 from app.knowledge.plant_data import StructuredPlantEvidence
-from app.knowledge.schemas import AcquisitionStatus, KnowledgeAcquisitionResult, KnowledgeChunk
+from app.knowledge.schemas import KnowledgeAcquisitionResult, KnowledgeChunk
 from app.observability.logging import get_logger
 from app.observability.tracing import get_trace_id
 from app.providers.fallback_context import get_provider_fallbacks, clear_provider_fallbacks
@@ -104,6 +104,8 @@ class AssistantState(TypedDict, total=False):
     reminder_suggestion: dict
     tool_failures: list[str]
     provider_fallbacks: list[dict]
+    total_generation_failure: bool
+    generation_failure: AssistantFailureMetadata | None
 
 
 class AssistantGraph:
@@ -516,6 +518,13 @@ class AssistantGraph:
             }
         justification = "Sugerido por el asistente desde la conversacion. Requiere confirmacion antes de crearse."
         if _wants_reminder_suggestion(state["message"]):
+            rendered = await self._generate_fallback_response(state, _simple_fallback_draft(
+                state,
+                intent="reminder_suggestion_ready",
+                allowed_facts=[f"Reminder suggestion for {action} on {_display_plant(selected)} at {due_at}."],
+                required_points=["Tell the user a reminder suggestion is ready and needs confirmation before creation."],
+                prohibited_points=["Do not claim the reminder was created."],
+            ))
             return {
                 "requires_confirmation": True,
                 "reminder_suggestion": {
@@ -526,7 +535,7 @@ class AssistantGraph:
                     "recurrence": recurrence,
                     "suggestion_justification": justification,
                 },
-                "answer": "Tengo una sugerencia de recordatorio lista para confirmar antes de crearla.",
+                **rendered,
             }
         result = await self.tools.reminder_create(
             user_id=state["user_id"],
@@ -549,7 +558,14 @@ class AssistantGraph:
                 + [result.error or "reminder_create failed"],
                 **rendered,
             }
-        return {"answer": f"Listo: cree el recordatorio para {selected['scientific_name']}."}
+        rendered = await self._generate_fallback_response(state, _simple_fallback_draft(
+            state,
+            intent="reminder_created",
+            allowed_facts=[f"Reminder created for {action} on {_display_plant(selected)} at {due_at} with {recurrence} recurrence."],
+            required_points=["Confirm the reminder was created successfully.", "Include the action, plant, date, and recurrence."],
+            prohibited_points=["Do not invent additional details."],
+        ))
+        return rendered
 
     async def clarify(self, state: AssistantState) -> dict:
         if state.get("unsafe"):
@@ -625,7 +641,6 @@ class AssistantGraph:
             if state.get("covered_aspects") and chunks and not _has_missing_safety_aspect(state):
                 evidence = " ".join(_shorten(chunk.content, 280) for chunk in chunks[:3])
                 plant_name = _display_name_for_answer(state)
-                fallback = _partial_fallback_answer(plant_name, evidence, state.get("missing_aspects", []))
                 return await self._generate_grounded_answer(
                     state,
                     plant_name=plant_name,
@@ -633,14 +648,12 @@ class AssistantGraph:
                     evidence=evidence,
                     limitations=[f"No pude validar: {', '.join(state.get('missing_aspects', []))}"],
                     source_metadata=state.get("sources", []),
-                    fallback=fallback,
                 )
             return await self.clarify(state)
         if not chunks:
             return await self.clarify(state)
         evidence = " ".join(_shorten(chunk.content, 280) for chunk in chunks[:3])
         plant_name = _display_name_for_answer(state)
-        fallback = _rag_fallback_answer(plant_name, evidence, retrieval, limitations)
         return await self._generate_grounded_answer(
             state,
             plant_name=plant_name,
@@ -648,7 +661,6 @@ class AssistantGraph:
             evidence=evidence,
             limitations=limitations,
             source_metadata=state.get("sources", []),
-            fallback=fallback,
         )
 
     async def _generate_structured_answer(
@@ -656,7 +668,6 @@ class AssistantGraph:
     ) -> dict:
         plant_name = _display_name_for_answer(state) or evidence.scientific_name
         providers = ", ".join(evidence.providers)
-        fallback = _structured_fallback_answer(plant_name, evidence)
         source_metadata = state.get("sources", []) + [{"providers": evidence.providers}]
         return await self._generate_grounded_answer(
             state,
@@ -665,7 +676,6 @@ class AssistantGraph:
             evidence=_shorten(evidence.content, 1200),
             limitations=list(evidence.missing_fields),
             source_metadata=source_metadata,
-            fallback=fallback,
             extra_context=f"Providers: {providers}.",
         )
 
@@ -676,7 +686,6 @@ class AssistantGraph:
         topic = state.get("topic") or "care"
         evidence = _combined_answer_evidence(state, web_results)
         citations = ", ".join(result.result.url for result in web_results[:3])
-        fallback = _web_fallback_answer(plant_name, topic, evidence, citations)
         synthesized = await self._generate_grounded_answer(
             state,
             plant_name=plant_name,
@@ -686,7 +695,6 @@ class AssistantGraph:
                 "Esta guia usa fuentes web recientes aun no incorporadas al conocimiento persistido."
             ],
             source_metadata=state.get("sources", []),
-            fallback=fallback,
         )
         return {
             **synthesized,
@@ -706,7 +714,6 @@ class AssistantGraph:
         evidence: str,
         limitations: list[str],
         source_metadata: list[dict],
-        fallback: str,
         extra_context: str = "",
     ) -> dict:
         prompt = _grounded_answer_prompt(
@@ -729,17 +736,42 @@ class AssistantGraph:
         result = await self.tools.generate_text(prompt)
         if not result.ok:
             failure = result.error or "model_generate_text failed"
+            metadata = result.failure_metadata
+            if metadata and not is_recoverable_generation_failure(metadata):
+                return {
+                    "answer": None,
+                    "total_generation_failure": True,
+                    "tool_failures": state.get("tool_failures", []) + [failure],
+                    "generation_failure": metadata,
+                    "diagnostics": _diagnostics(state),
+                }
+            recovery = _recovery_draft_for_answer_generation(
+                state,
+                intent="model_generation_failed",
+                evidence_type=evidence_type,
+                evidence=evidence,
+                limitations=limitations,
+                source_metadata=source_metadata,
+            )
             rendered = await self._generate_fallback_response(
                 {**state, "tool_failures": state.get("tool_failures", []) + [failure]},
-                _model_generation_failed_draft(state, fallback),
+                recovery,
             )
             return {**rendered, "tool_failures": rendered.get("tool_failures", state.get("tool_failures", []) + [failure])}
         answer = str(result.data or "").strip()
         if not answer:
             failure = "model_generate_text failed: empty response"
+            recovery = _recovery_draft_for_answer_generation(
+                state,
+                intent="model_generation_failed",
+                evidence_type=evidence_type,
+                evidence=evidence,
+                limitations=limitations,
+                source_metadata=source_metadata,
+            )
             rendered = await self._generate_fallback_response(
                 {**state, "tool_failures": state.get("tool_failures", []) + [failure]},
-                _model_generation_failed_draft(state, fallback),
+                recovery,
             )
             return {**rendered, "tool_failures": rendered.get("tool_failures", state.get("tool_failures", []) + [failure])}
         return {"answer": answer, "diagnostics": _diagnostics(state)}
@@ -748,17 +780,25 @@ class AssistantGraph:
         result = await self.tools.generate_text(_fallback_response_prompt(draft))
         if not result.ok:
             return {
-                "answer": _minimal_spanish_emergency_response(),
+                "answer": None,
+                "total_generation_failure": True,
                 "tool_failures": state.get("tool_failures", [])
                 + [result.error or "fallback_generate_text failed"],
+                "generation_failure": result.failure_metadata,
                 "diagnostics": _diagnostics(state),
             }
         answer = str(result.data or "").strip()
         if not answer:
             return {
-                "answer": _minimal_spanish_emergency_response(),
+                "answer": None,
+                "total_generation_failure": True,
                 "tool_failures": state.get("tool_failures", [])
                 + ["fallback_generate_text failed: empty response"],
+                "generation_failure": AssistantFailureMetadata(
+                    failure_category="empty_response",
+                    retryable=True,
+                    transient=True,
+                ),
                 "diagnostics": _diagnostics(state),
             }
         return {"answer": answer, "diagnostics": _diagnostics(state)}
@@ -1915,11 +1955,72 @@ def _conservative_safety_draft(state: AssistantState | dict) -> FallbackResponse
     )
 
 
-def _model_generation_failed_draft(state: AssistantState | dict, fallback: str) -> FallbackResponseDraft:
+_NON_RECOVERABLE_FAILURE_CATEGORIES = frozenset({
+    "timeout",
+    "rate_limit",
+    "service_unavailable",
+    "network_error",
+    "non_transient",
+    "all_providers_failed",
+})
+
+
+def is_recoverable_generation_failure(failure: AssistantFailureMetadata) -> bool:
+    if failure.failure_category in _NON_RECOVERABLE_FAILURE_CATEGORIES:
+        return False
+    for entry in failure.provider_failures:
+        if entry.failure_category in _NON_RECOVERABLE_FAILURE_CATEGORIES:
+            return False
+    return True
+
+
+def _model_generation_failed_draft(
+    state: AssistantState | dict,
+    *,
+    intent: str,
+    allowed_facts: list[str],
+    limitations: list[str] | None = None,
+    source_support: list[dict] | None = None,
+    contradictions: list[dict] | None = None,
+    missing_aspects: list[str] | None = None,
+) -> FallbackResponseDraft:
+    draft_limitations = list(limitations or state.get("retrieval", None) and getattr(state.get("retrieval"), "limitations", []) or [])
+    draft_source_support = list(source_support or state.get("source_support", []))
+    draft_contradictions = list(contradictions or state.get("contradictions", []))
+    draft_missing = list(missing_aspects or state.get("missing_aspects", []))
+
+    support_lines: list[str] = []
+    for support in draft_source_support:
+        claim = str(support.get("claim") or "").strip()
+        if claim:
+            support_lines.append(claim)
+    contradiction_lines: list[str] = []
+    for contradiction in draft_contradictions:
+        detail = str(contradiction.get("detail") or contradiction.get("claim") or "").strip()
+        if detail:
+            contradiction_lines.append(detail)
+
+    enriched_facts = list(allowed_facts)
+    for line in support_lines[:5]:
+        if line not in enriched_facts:
+            enriched_facts.append(line)
+    for line in contradiction_lines[:3]:
+        entry = f"Contradiccion detectada: {line}"
+        if entry not in enriched_facts:
+            enriched_facts.append(entry)
+    for lim in draft_limitations[:3]:
+        entry = f"Limitacion: {lim}"
+        if entry not in enriched_facts:
+            enriched_facts.append(entry)
+    for missing in draft_missing[:3]:
+        entry = f"Aspecto faltante: {missing}"
+        if entry not in enriched_facts:
+            enriched_facts.append(entry)
+
     return _simple_fallback_draft(
         state,
-        intent="model_generation_failed",
-        allowed_facts=[_shorten(fallback, 1200)],
+        intent=intent,
+        allowed_facts=enriched_facts,
         required_points=[
             "Provide a brief answer using only the supplied allowed facts.",
             "Mention limitations only if present in the allowed facts.",
@@ -1928,6 +2029,42 @@ def _model_generation_failed_draft(state: AssistantState | dict, fallback: str) 
             "Do not add botanical facts beyond the supplied allowed facts.",
             "Do not add links unless the allowed facts explicitly require a user-facing link.",
         ],
+    )
+
+
+def _recovery_draft_for_answer_generation(
+    state: AssistantState | dict,
+    *,
+    intent: str,
+    evidence_type: str,
+    evidence: str,
+    limitations: list[str],
+    source_metadata: list[dict],
+    missing_aspects: list[str] | None = None,
+    extra_context: str = "",
+) -> FallbackResponseDraft:
+    plant_name = _display_name_for_answer(state) or "esta planta"
+    topic = state.get("topic") or "care"
+    source_support = list(state.get("source_support", []))
+    contradictions = list(state.get("contradictions", []))
+    allowed_facts = [evidence] if evidence else []
+
+    support_claims: list[str] = []
+    for support in source_support:
+        claim = str(support.get("claim") or "").strip()
+        if claim:
+            support_claims.append(claim)
+    if support_claims:
+        allowed_facts.extend(support_claims)
+
+    return _model_generation_failed_draft(
+        state,
+        intent=intent,
+        allowed_facts=allowed_facts,
+        limitations=limitations,
+        source_support=source_support,
+        contradictions=contradictions,
+        missing_aspects=missing_aspects or state.get("missing_aspects", []),
     )
 
 
@@ -1956,24 +2093,11 @@ def _fallback_response_prompt(draft: FallbackResponseDraft) -> str:
     )
 
 
-def _minimal_spanish_emergency_response() -> str:
-    return "No pude generar una respuesta segura en este momento. Intentá de nuevo con más detalles."
-
-
 def _log_missing_taxonomy(state: AssistantState) -> None:
     logger.warning(
         "assistant care answer missing confirmed taxonomy",
         extra={"ctx_trace_id": get_trace_id(), "ctx_plant_hint": state.get("plant_hint")},
     )
-
-
-def _missing_taxonomy_answer(state: AssistantState) -> str:
-    language = state.get("answer_language") or "es"
-    if language == "it":
-        return "Mi serve il nome scientifico confermato della pianta prima di cercare informazioni di cura affidabili."
-    if language == "en":
-        return "I need the plant's confirmed scientific name before searching for reliable care evidence."
-    return "Necesito el nombre cientifico confirmado de la planta antes de buscar evidencia confiable de cuidado."
 
 
 def _append_reason(state: AssistantState | dict, reason: str) -> list[str]:
@@ -2503,52 +2627,6 @@ def _grounded_answer_prompt(
         f"Fuentes/metadatos: {source_text}\n"
         f"Evidencia:\n{evidence}\n\n"
         "Respuesta final:"
-    )
-
-
-def _rag_fallback_answer(
-    plant_name: str | None,
-    evidence: str,
-    retrieval: KnowledgeAcquisitionResult | None,
-    limitations: list[str],
-) -> str:
-    note = ""
-    if getattr(retrieval, "status", None) == AcquisitionStatus.degraded or limitations:
-        detail = " ".join(limitations).strip()
-        note = " Nota: faltan detalles especificos para afinar umbrales o diagnostico."
-        if detail:
-            note += f" {detail}"
-    return (
-        f"Para {plant_name}, con la evidencia disponible, una guia practica es: {evidence}"
-        f"{note}"
-    )
-
-
-def _structured_fallback_answer(
-    plant_name: str | None, evidence: StructuredPlantEvidence
-) -> str:
-    providers = ", ".join(evidence.providers)
-    return (
-        f"Para {plant_name}, los datos estructurados indican: "
-        f"{_shorten(evidence.content, 700)} Fuentes: {providers}. "
-    )
-
-
-def _web_fallback_answer(
-    plant_name: str | None, topic: str, evidence: str, citations: str
-) -> str:
-    return (
-        f"Para {plant_name}, encontre evidencia web en vivo sobre {topic}: {evidence} "
-        "Nota: esta guia usa fuentes web recientes aun no incorporadas al conocimiento persistido. "
-        f"Fuentes: {citations}."
-    )
-
-
-def _partial_fallback_answer(plant_name: str | None, evidence: str, missing_aspects: list[str]) -> str:
-    missing = ", ".join(missing_aspects)
-    return (
-        f"Para {plant_name}, pude validar esta parte con evidencia disponible: {evidence} "
-        f"No pude validar estos aspectos solicitados: {missing}."
     )
 
 

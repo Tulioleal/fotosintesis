@@ -184,4 +184,36 @@ describe("AssistantChat", () => {
 
     expect(screen.getByText("Formato futuro")).toBeInTheDocument();
   });
+
+  it("shows retryable error without appending assistant message bubble", async () => {
+    mocks.sendAssistantMessage.mockResolvedValue({
+      retryable: true,
+      error_type: "total_generation_failure",
+      detail: "No model-generated assistant response could be produced. Please retry.",
+      failure_category: "all_providers_failed",
+      provider_failures: [{
+        provider: "gemini",
+        role: "model",
+        operation: "generate_text",
+        failure_category: "service_unavailable",
+        retryable: false,
+        transient: false,
+        status_code: null,
+        cause_type: null,
+        attempt_index: 0,
+      }],
+      conversation_id: "conversation-retry-1",
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Cada cuanto riego mi Pata?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("Cada cuanto riego mi Pata?")).toBeInTheDocument();
+    expect(screen.getByText("No model-generated assistant response could be produced. Please retry.")).toBeInTheDocument();
+    expect(screen.queryByText("Tengo una sugerencia lista para confirmar.")).not.toBeInTheDocument();
+  });
 });

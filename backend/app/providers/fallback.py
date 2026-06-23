@@ -48,6 +48,10 @@ class AttemptMetadata:
     outcome: str = "attempted"
     failure_category: str | None = None
     skipped_unhealthy: bool = False
+    transient: bool = False
+    retryable: bool = False
+    status_code: int | None = None
+    cause_type: str | None = None
 
 
 @dataclass
@@ -80,7 +84,35 @@ def classify_failure(exception: Exception) -> FailureCategory:
     if "unusable search" in exc_str or "no usable" in exc_str:
         return FailureCategory.unusable_search_output
 
+    original = getattr(exception, "original_exception", None) or getattr(exception, "__cause__", None)
+    if original is not None and original is not exception:
+        return classify_failure(original)
+
     return FailureCategory.unknown
+
+
+def extract_status_code(exception: Exception) -> int | None:
+    for attr in ("status_code", "code", "status"):
+        value = getattr(exception, attr, None)
+        if isinstance(value, int) and 100 <= value < 600:
+            return value
+    inner = (
+        getattr(exception, "original_exception", None)
+        or getattr(exception, "__cause__", None)
+    )
+    if inner is not None and inner is not exception:
+        return extract_status_code(inner)
+    return None
+
+
+def extract_cause_type(exception: Exception) -> str | None:
+    cause = (
+        getattr(exception, "__cause__", None)
+        or getattr(exception, "original_exception", None)
+    )
+    if cause is not None and cause is not exception:
+        return type(cause).__name__
+    return None
 
 
 def _is_timeout_error(exc_type: str, exc_str: str) -> bool:

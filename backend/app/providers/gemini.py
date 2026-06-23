@@ -23,7 +23,9 @@ from app.providers.types import (
 
 
 class GeminiProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, original_exception: Exception | None = None) -> None:
+        super().__init__(message)
+        self.original_exception = original_exception
 
 
 def _client(api_key: str) -> Any:
@@ -54,7 +56,10 @@ async def _logged(
     except GeminiProviderError:
         raise
     except Exception as exc:
-        raise GeminiProviderError(f"Gemini {operation} call failed") from exc
+        raise GeminiProviderError(
+            f"Gemini {operation} call failed",
+            original_exception=exc,
+        ) from exc
 
 
 class GeminiModelProvider(ModelProvider):

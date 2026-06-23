@@ -51,6 +51,7 @@ from app.providers.wrappers import (
     ModelProviderFallbackWrapper,
     SearchProviderFallbackWrapper,
 )
+from app.providers.gemini import GeminiProviderError
 from app.observability.metrics import metrics_registry
 
 
@@ -908,6 +909,7 @@ class TestProviderFallbackMetrics:
         metrics_registry.fallback_attempts_total = 0
         metrics_registry.fallback_successes_total = 0
         metrics_registry.provider_failures_total = 0
+        metrics_registry.provider_failure_counts.clear()
         metrics_registry.skipped_unhealthy_providers_total = 0
         metrics_registry.circuit_breaker_opens_total = 0
         metrics_registry.provider_calls_total = 0
@@ -931,6 +933,9 @@ class TestProviderFallbackMetrics:
         wrapper = ModelProviderFallbackWrapper([p1, p2])
         await wrapper.generate_text("test")
         assert metrics_registry.provider_failures_total == 1
+        assert metrics_registry.provider_failure_counts == {
+            ("model", "fail-p1", "generate_text", "service_unavailable"): 1,
+        }
 
     async def test_provider_failures_all_providers_failed(self) -> None:
         p1 = _FakeModelProvider(name="allfail-p1", fail_generate_text=True)
@@ -1001,6 +1006,10 @@ class TestProviderFallbackMetrics:
         assert "fotosintesis_fallback_attempts_total 2" in output
         assert "fotosintesis_fallback_successes_total 1" in output
         assert "fotosintesis_provider_failures_total 1" in output
+        assert (
+            'fotosintesis_provider_failures_total{role="model",provider="prom-p1",'
+            'operation="generate_text",failure_category="service_unavailable"} 1'
+        ) in output
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1021,7 @@ class TestFailureLatency:
         circuit_breaker.clear()
         metrics_registry.fallback_attempts_total = 0
         metrics_registry.provider_failures_total = 0
+        metrics_registry.provider_failure_counts.clear()
 
     async def test_failure_latency_is_elapsed_duration_not_timestamp(self) -> None:
         p1 = _FakeModelProvider(name="lat-p1", fail_generate_text=True, latency=0.05)
@@ -1104,3 +1114,124 @@ class TestFailureLatency:
         wrapper = ModelProviderFallbackWrapper([p1, p2])
         result = await wrapper.generate_json("test", {"type": "object"})
         assert result.provider == "retry-fallback"
+
+
+# ---------------------------------------------------------------------------
+# Typed failure metadata tests
+# ---------------------------------------------------------------------------
+
+
+class TestTypedFailureMetadata:
+    def test_attempt_metadata_includes_transient_flag(self) -> None:
+        from app.providers.fallback import AttemptMetadata
+        meta = AttemptMetadata(
+            provider="test", role="model", operation="generate_text",
+            attempt_index=0, failure_category="timeout", transient=True, retryable=True,
+        )
+        assert meta.transient is True
+        assert meta.retryable is True
+
+    def test_attempt_metadata_includes_status_code(self) -> None:
+        from app.providers.fallback import AttemptMetadata
+        meta = AttemptMetadata(
+            provider="test", role="model", operation="generate_text",
+            attempt_index=0, failure_category="service_unavailable",
+            status_code=503, cause_type="GoogleGenerativeAIClientError",
+        )
+        assert meta.status_code == 503
+        assert meta.cause_type == "GoogleGenerativeAIClientError"
+
+    def test_extract_status_code_from_exception(self) -> None:
+        from app.providers.fallback import extract_status_code
+        exc = RuntimeError("service unavailable")
+        exc.status_code = 503
+        assert extract_status_code(exc) == 503
+
+    def test_extract_status_code_returns_none_when_absent(self) -> None:
+        from app.providers.fallback import extract_status_code
+        exc = RuntimeError("service unavailable")
+        assert extract_status_code(exc) is None
+
+    def test_extract_cause_type_from_original_exception(self) -> None:
+        from app.providers.fallback import extract_cause_type
+        original = ValueError("bad config")
+        wrapper = RuntimeError("wrapped")
+        wrapper.original_exception = original
+        assert extract_cause_type(wrapper) == "ValueError"
+
+    def test_extract_cause_type_returns_none_when_no_cause(self) -> None:
+        from app.providers.fallback import extract_cause_type
+        exc = RuntimeError("simple")
+        assert extract_cause_type(exc) is None
+
+    def test_classify_failure_traverses_original_exception(self) -> None:
+        from app.providers.fallback import classify_failure, FailureCategory
+        original = RuntimeError("503 UNAVAILABLE")
+        wrapper = GeminiProviderError("Gemini generate_text call failed", original_exception=original)
+        assert classify_failure(wrapper) == FailureCategory.service_unavailable
+
+    def test_classify_failure_traverses_cause_chain(self) -> None:
+        from app.providers.fallback import classify_failure, FailureCategory
+        original = ConnectionError("network error")
+        wrapper = RuntimeError("wrapped error")
+        wrapper.__cause__ = original
+        assert classify_failure(wrapper) == FailureCategory.network_error
+
+    async def test_gemini_503_triggers_fallback(self) -> None:
+        """Gemini 503 UNAVAILABLE should be classified as transient and trigger fallback."""
+        class _Gemini503Provider(ModelProvider):
+            provider_name = "gemini-503"
+            async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
+                raise GeminiProviderError(
+                    "Gemini generate_text call failed",
+                    original_exception=RuntimeError("503 UNAVAILABLE The service is currently unavailable."),
+                )
+            async def generate_json(self, prompt: str, schema: dict[str, Any], **kwargs: Any) -> JsonGenerationResult:
+                raise GeminiProviderError(
+                    "Gemini generate_json call failed",
+                    original_exception=RuntimeError("503 UNAVAILABLE The service is currently unavailable."),
+                )
+            async def judge_response(self, payload: dict[str, Any], rubric: dict[str, Any], **kwargs: Any) -> JudgeResult:
+                return JudgeResult(provider=self.provider_name, model="m", score=1, passed=True, status="full", confidence=1)
+
+        p1 = _Gemini503Provider()
+        p2 = _FakeModelProvider(name="fallback-model")
+        wrapper = ModelProviderFallbackWrapper([p1, p2])
+        result = await wrapper.generate_text("test")
+        assert result.provider == "fallback-model"
+
+    async def test_all_providers_failed_exposes_transient_flag(self) -> None:
+        """AllProvidersFailedError exposes is_transient and is_retryable properties."""
+        p1 = _FakeModelProvider(name="failing-p1", fail_generate_text=True)
+        p2 = _FakeModelProvider(name="failing-p2", fail_generate_text=True)
+        wrapper = ModelProviderFallbackWrapper([p1, p2])
+        with pytest.raises(AllProvidersFailedError) as exc_info:
+            await wrapper.generate_text("test")
+        assert exc_info.value.is_transient is True
+        assert exc_info.value.is_retryable is True
+
+    async def test_all_providers_failed_non_transient(self) -> None:
+        """AllProvidersFailedError with non-transient failures."""
+        p1 = _FakeModelProvider(name="config-error", fail_generate_text=True, non_transient=True)
+        wrapper = ModelProviderFallbackWrapper([p1])
+        with pytest.raises(AllProvidersFailedError) as exc_info:
+            await wrapper.generate_text("test")
+        assert exc_info.value.is_transient is False
+        assert exc_info.value.is_retryable is False
+
+    async def test_fallback_metadata_includes_typed_fields(self) -> None:
+        """Fallback metadata recorded in context includes typed failure fields."""
+        clear_provider_fallbacks()
+        p1 = _FakeModelProvider(name="typed-p1", fail_generate_text=True)
+        p2 = _FakeModelProvider(name="typed-p2")
+        wrapper = ModelProviderFallbackWrapper([p1, p2])
+        result = await wrapper.generate_text("test")
+        assert result.provider == "typed-p2"
+        fallbacks = get_provider_fallbacks()
+        assert len(fallbacks) == 1
+        attempts = fallbacks[0]["attempted_providers"]
+        failed_attempt = next(a for a in attempts if a["provider"] == "typed-p1")
+        assert failed_attempt["attempt_index"] == 0
+        assert failed_attempt["transient"] is True
+        assert failed_attempt["retryable"] is True
+        assert failed_attempt["failure_category"] == "service_unavailable"

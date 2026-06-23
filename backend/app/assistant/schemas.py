@@ -62,3 +62,24 @@ class AssistantChatResponse(ApiSchema):
     reminder_suggestion: AssistantReminderSuggestion | None = None
     tool_failures: list[str] = []
     diagnostics: AssistantCareDiagnostics | None = None
+
+
+class ProviderFailureDetail(ApiSchema):
+    provider: str = ""
+    role: str = ""
+    operation: str = ""
+    failure_category: str | None = None
+    retryable: bool = False
+    transient: bool = False
+    status_code: int | None = None
+    cause_type: str | None = None
+    attempt_index: int | None = None
+
+
+class AssistantRetryableError(ApiSchema):
+    retryable: bool = True
+    error_type: str = "total_generation_failure"
+    detail: str = "No model-generated assistant response could be produced. Please retry."
+    failure_category: str | None = None
+    provider_failures: list[ProviderFailureDetail] = []
+    conversation_id: UUID | None = None

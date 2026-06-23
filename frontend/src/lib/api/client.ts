@@ -26,6 +26,7 @@ export type AssistantMessage = components["schemas"]["AssistantMessage"];
 export type AssistantReminderSuggestion = components["schemas"]["AssistantReminderSuggestion"];
 export type AssistantChatRequest = components["schemas"]["AssistantChatRequest"];
 export type AssistantChatResponse = components["schemas"]["AssistantChatResponse"];
+export type AssistantRetryableError = components["schemas"]["AssistantRetryableError"];
 
 type ErrorPayload = {
   detail?: string;
@@ -120,7 +121,7 @@ export const apiClient = {
     );
   },
   sendAssistantMessage(body: AssistantChatRequest) {
-    return frontendRequest<AssistantChatResponse>("/api/assistant/chat", {
+    return frontendRequest<AssistantChatResponse | AssistantRetryableError>("/api/assistant/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

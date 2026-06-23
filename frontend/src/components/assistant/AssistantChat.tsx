@@ -6,6 +6,7 @@ import {
   apiClient,
   type AssistantMessage,
   type AssistantReminderSuggestion,
+  type AssistantRetryableError,
   type AssistantSource,
   type ReminderCreate,
 } from "@/lib/api/client";
@@ -59,17 +60,26 @@ export function AssistantChat() {
         plant_binomial_name: binomial,
         plant_scientific_name: scientific,
       });
-      setConversationId(response.conversation_id);
+      if ("retryable" in response && (response as AssistantRetryableError).retryable) {
+        const retryableError = response as AssistantRetryableError;
+        if (retryableError.conversation_id) {
+          setConversationId(retryableError.conversation_id);
+        }
+        setError(retryableError.detail || "No se pudo generar una respuesta. Intenta de nuevo.");
+        return;
+      }
+      const chatResponse = response as import("@/lib/api/client").AssistantChatResponse;
+      setConversationId(chatResponse.conversation_id);
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
-          content: response.message.content,
-          contentFormat: response.message.content_format,
-          reminderSuggestion: response.reminder_suggestion,
+          content: chatResponse.message.content,
+          contentFormat: chatResponse.message.content_format,
+          reminderSuggestion: chatResponse.reminder_suggestion,
         },
       ]);
-      setSources(response.sources);
+      setSources(chatResponse.sources);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "No pudimos contactar al asistente.";
       setError(detail);

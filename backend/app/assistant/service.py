@@ -12,7 +12,9 @@ from app.assistant.schemas import (
     AssistantChatResponse,
     AssistantCareDiagnostics,
     AssistantMessage,
+    AssistantRetryableError,
     AssistantSource,
+    ProviderFailureDetail,
 )
 from app.assistant.tools import AssistantTools
 from app.db.session import AsyncSessionLocal
@@ -27,7 +29,9 @@ class AssistantService:
         self.tools = AssistantTools(self.repository, KnowledgeRepository(session))
         self.graph = AssistantGraph(self.tools)
 
-    async def chat(self, *, user_id: UUID, payload: AssistantChatRequest) -> AssistantChatResponse:
+    async def chat(
+        self, *, user_id: UUID, payload: AssistantChatRequest
+    ) -> AssistantChatResponse | AssistantRetryableError:
         operation_name = operational_plant_name(
             plant=payload.plant,
             plant_binomial_name=payload.plant_binomial_name,
@@ -67,7 +71,38 @@ class AssistantService:
             plant_binomial_name=payload.plant_binomial_name,
             plant_scientific_name=payload.plant_scientific_name,
         )
-        answer = state.get("answer") or "No pude generar una respuesta segura. Intenta con mas detalles."
+        if state.get("total_generation_failure") and not state.get("answer"):
+            tool_failures = state.get("tool_failures", [])
+            if tool_failures:
+                logger.warning(
+                    "assistant_total_generation_failure",
+                    extra={
+                        "conversation_id": str(conversation_id),
+                        "failures": tool_failures,
+                    },
+                )
+            gen_failure = state.get("generation_failure")
+            failure_category = gen_failure.failure_category if gen_failure else None
+            provider_failures = [
+                ProviderFailureDetail(
+                    provider=entry.provider,
+                    role=entry.role,
+                    operation=entry.operation,
+                    failure_category=entry.failure_category,
+                    retryable=entry.retryable,
+                    transient=entry.transient,
+                    status_code=entry.status_code,
+                    cause_type=entry.cause_type,
+                    attempt_index=entry.attempt_index,
+                )
+                for entry in (gen_failure.provider_failures if gen_failure else [])
+            ]
+            return AssistantRetryableError(
+                failure_category=failure_category,
+                provider_failures=provider_failures[:5],
+                conversation_id=conversation_id,
+            )
+        answer = state.get("answer") or ""
         diagnostics = state.get("diagnostics") or _diagnostics(state)
         if state.get("tool_failures"):
             logger.warning(

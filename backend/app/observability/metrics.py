@@ -12,6 +12,7 @@ class MetricsRegistry:
     fallback_attempts_total: int = 0
     fallback_successes_total: int = 0
     provider_failures_total: int = 0
+    provider_failure_counts: dict[tuple[str, str, str, str], int] = field(default_factory=dict)
     skipped_unhealthy_providers_total: int = 0
     circuit_breaker_opens_total: int = 0
 
@@ -21,10 +22,34 @@ class MetricsRegistry:
         if failed:
             self.requests_failed += 1
 
+    def record_provider_failure(
+        self,
+        *,
+        role: str,
+        provider: str,
+        operation: str,
+        failure_category: str,
+    ) -> None:
+        self.provider_failures_total += 1
+        key = (role, provider, operation, failure_category)
+        self.provider_failure_counts[key] = self.provider_failure_counts.get(key, 0) + 1
+
     def to_prometheus(self) -> str:
         average_latency = 0.0
         if self.request_latency_seconds:
             average_latency = sum(self.request_latency_seconds) / len(self.request_latency_seconds)
+
+        provider_failure_lines = [
+            (
+                "fotosintesis_provider_failures_total"
+                f'{{role="{_escape_prometheus_label_value(role)}",'
+                f'provider="{_escape_prometheus_label_value(provider)}",'
+                f'operation="{_escape_prometheus_label_value(operation)}",'
+                f'failure_category="{_escape_prometheus_label_value(failure_category)}"}} {count}'
+            )
+            for (role, provider, operation, failure_category), count
+            in sorted(self.provider_failure_counts.items())
+        ]
 
         return "\n".join(
             [
@@ -52,6 +77,7 @@ class MetricsRegistry:
                 "# HELP fotosintesis_provider_failures_total Total provider failures.",
                 "# TYPE fotosintesis_provider_failures_total counter",
                 f"fotosintesis_provider_failures_total {self.provider_failures_total}",
+                *provider_failure_lines,
                 "# HELP fotosintesis_skipped_unhealthy_providers_total Total skipped unhealthy providers.",
                 "# TYPE fotosintesis_skipped_unhealthy_providers_total counter",
                 f"fotosintesis_skipped_unhealthy_providers_total {self.skipped_unhealthy_providers_total}",
@@ -61,6 +87,10 @@ class MetricsRegistry:
                 "",
             ]
         )
+
+
+def _escape_prometheus_label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 metrics_registry = MetricsRegistry()
