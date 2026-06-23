@@ -15,6 +15,7 @@ class MetricsRegistry:
     provider_failure_counts: dict[tuple[str, str, str, str], int] = field(default_factory=dict)
     skipped_unhealthy_providers_total: int = 0
     circuit_breaker_opens_total: int = 0
+    classifier_invalid_output_total: int = 0
 
     def record_request(self, latency_seconds: float, failed: bool) -> None:
         self.requests_total += 1
@@ -84,6 +85,9 @@ class MetricsRegistry:
                 "# HELP fotosintesis_circuit_breaker_opens_total Total circuit breaker opens.",
                 "# TYPE fotosintesis_circuit_breaker_opens_total counter",
                 f"fotosintesis_circuit_breaker_opens_total {self.circuit_breaker_opens_total}",
+                "# HELP fotosintesis_classifier_invalid_output_total Total classifier invalid output events.",
+                "# TYPE fotosintesis_classifier_invalid_output_total counter",
+                f"fotosintesis_classifier_invalid_output_total {self.classifier_invalid_output_total}",
                 "",
             ]
         )

@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from app.observability.logging import get_logger
 from app.observability.provider_logging import log_provider_call
 from app.providers.interfaces import (
     EmbeddingProvider,
@@ -22,6 +23,9 @@ from app.providers.types import (
     SearchResult,
     TextGenerationResult,
 )
+
+
+logger = get_logger(__name__)
 
 
 class OpenAIProviderError(RuntimeError):
@@ -62,6 +66,246 @@ async def _logged(
     call: Callable[[], Awaitable[Any]],
 ) -> Any:
     return await log_provider_call(provider, operation, call, role=role)
+
+
+_STRICT_UNSUPPORTED_KEYS = frozenset({
+    "$ref",
+    "$dynamicRef",
+    "$anchor",
+    "$id",
+    "$schema",
+    "oneOf",
+    "allOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    "dependencies",
+    "dependentSchemas",
+    "dependentRequired",
+    "patternProperties",
+    "additionalItems",
+    "unevaluatedProperties",
+    "unevaluatedItems",
+})
+
+_STRICT_SCALAR_TYPES = frozenset({"string", "number", "integer", "boolean"})
+
+
+def _to_openai_strict_schema(schema: Any) -> dict[str, Any] | None:
+    """Convert a JSON Schema fragment into an OpenAI strict-mode compatible form.
+
+    Returns a sanitized copy with the following transformations:
+
+    - All object schemas have ``additionalProperties: false`` and a complete
+      ``required`` list (every property is marked as required, matching the
+      strict-mode requirement that all properties be present in every
+      response).
+    - ``description`` and ``enum`` values are preserved.
+    - Nullable scalar fields written as ``{"type": ["string", "null"]}`` are
+      preserved verbatim because OpenAI strict mode accepts that list-of-types
+      form.
+    - Nested object, array, and scalar subschemas are normalized recursively.
+
+    Returns ``None`` when the schema contains any construct that strict mode
+    does not accept (e.g. ``$ref``, ``oneOf``, ``allOf``, ``patternProperties``)
+    or when the input is not a JSON-Schema-shaped object. The caller is
+    expected to fall back to JSON object mode whenever ``None`` is returned.
+    """
+
+    try:
+        normalized = _sanitize_strict_node(schema)
+    except _StrictSchemaUnsupported:
+        return None
+    if not isinstance(normalized, dict):
+        return None
+    if normalized.get("type") != "object":
+        return None
+    return normalized
+
+
+def _sanitize_strict_node(node: Any) -> Any:
+    if node is None:
+        return None
+    if not isinstance(node, dict):
+        raise _StrictSchemaUnsupported()
+    for key in node:
+        if key in _STRICT_UNSUPPORTED_KEYS:
+            raise _StrictSchemaUnsupported()
+    raw_type = node.get("type")
+    if isinstance(raw_type, list):
+        return _sanitize_union_type(node, raw_type)
+    if raw_type is None:
+        if "enum" in node:
+            return _sanitize_enum_node(node)
+        if "properties" in node or "additionalProperties" in node:
+            return _sanitize_object_node(node)
+        if "items" in node:
+            return _sanitize_array_node(node)
+        return _sanitize_scalar_node(node)
+    if raw_type in _STRICT_SCALAR_TYPES:
+        return _sanitize_scalar_node(node)
+    if raw_type == "array":
+        return _sanitize_array_node(node)
+    if raw_type == "object":
+        return _sanitize_object_node(node)
+    if raw_type == "null":
+        return {"type": "null"}
+    raise _StrictSchemaUnsupported()
+
+
+def _sanitize_union_type(node: dict[str, Any], types: list[Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "type":
+            continue
+        sanitized[key] = _copy_passthrough(value)
+    normalized_types: list[Any] = []
+    for entry in types:
+        if not isinstance(entry, str):
+            raise _StrictSchemaUnsupported()
+        if entry == "null":
+            normalized_types.append("null")
+            continue
+        if entry in _STRICT_SCALAR_TYPES or entry in {"array", "object"}:
+            normalized_types.append(entry)
+            continue
+        raise _StrictSchemaUnsupported()
+    if not normalized_types:
+        raise _StrictSchemaUnsupported()
+    sanitized["type"] = normalized_types
+    return sanitized
+
+
+def _sanitize_scalar_node(node: dict[str, Any]) -> dict[str, Any]:
+    raw_type = node.get("type")
+    if isinstance(raw_type, list):
+        return _sanitize_union_type(node, raw_type)
+    if raw_type not in _STRICT_SCALAR_TYPES:
+        raise _StrictSchemaUnsupported()
+    sanitized: dict[str, Any] = {"type": raw_type}
+    if "enum" in node and isinstance(node["enum"], list):
+        sanitized["enum"] = [_enum_value(value) for value in node["enum"]]
+    if "description" in node and isinstance(node["description"], str):
+        sanitized["description"] = node["description"]
+    if "minimum" in node and isinstance(node["minimum"], (int, float)):
+        sanitized["minimum"] = node["minimum"]
+    if "maximum" in node and isinstance(node["maximum"], (int, float)):
+        sanitized["maximum"] = node["maximum"]
+    return sanitized
+
+
+def _sanitize_enum_node(node: dict[str, Any]) -> dict[str, Any]:
+    values = node.get("enum")
+    if not isinstance(values, list) or not values:
+        raise _StrictSchemaUnsupported()
+    sanitized: dict[str, Any] = {"enum": [_enum_value(value) for value in values]}
+    raw_type = node.get("type")
+    if isinstance(raw_type, str) and raw_type in _STRICT_SCALAR_TYPES:
+        sanitized["type"] = raw_type
+    if "description" in node and isinstance(node["description"], str):
+        sanitized["description"] = node["description"]
+    return sanitized
+
+
+def _sanitize_array_node(node: dict[str, Any]) -> dict[str, Any]:
+    items = node.get("items")
+    if items is None:
+        raise _StrictSchemaUnsupported()
+    sanitized: dict[str, Any] = {"type": "array", "items": _sanitize_strict_node(items)}
+    if "description" in node and isinstance(node["description"], str):
+        sanitized["description"] = node["description"]
+    if "minItems" in node and isinstance(node["minItems"], int):
+        sanitized["minItems"] = node["minItems"]
+    if "maxItems" in node and isinstance(node["maxItems"], int):
+        sanitized["maxItems"] = node["maxItems"]
+    return sanitized
+
+
+def _sanitize_object_node(node: dict[str, Any]) -> dict[str, Any]:
+    properties = node.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        raise _StrictSchemaUnsupported()
+    sanitized_properties: dict[str, Any] = {}
+    for name, value in properties.items():
+        if not isinstance(name, str) or not name:
+            raise _StrictSchemaUnsupported()
+        sanitized_properties[name] = _sanitize_strict_node(value)
+    required = list(sanitized_properties.keys())
+    sanitized: dict[str, Any] = {
+        "type": "object",
+        "properties": sanitized_properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+    if "description" in node and isinstance(node["description"], str):
+        sanitized["description"] = node["description"]
+    return sanitized
+
+
+def _copy_passthrough(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _copy_passthrough(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_passthrough(item) for item in value]
+    return value
+
+
+def _enum_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _log_provider_json_schema_fallback(
+    *,
+    provider: str,
+    role: str,
+    operation: str,
+    schema_name: str | None,
+    reason: str,
+) -> None:
+    logger.info(
+        "provider json schema fallback",
+        extra={
+            "ctx_event": "provider_json_schema_fallback",
+            "ctx_provider": provider,
+            "ctx_role": role,
+            "ctx_operation": operation,
+            "ctx_schema_name": schema_name,
+            "ctx_reason": reason,
+        },
+    )
+
+
+def _build_strict_text_format(
+    *,
+    schema: Any,
+    name: str,
+    provider: str,
+    role: str,
+    operation: str,
+) -> dict[str, Any] | None:
+    sanitized = _to_openai_strict_schema(schema)
+    if sanitized is None:
+        _log_provider_json_schema_fallback(
+            provider=provider,
+            role=role,
+            operation=operation,
+            schema_name=name,
+            reason="schema cannot be safely sanitized for strict mode",
+        )
+        return None
+    return {
+        "type": "json_schema",
+        "name": name,
+        "schema": sanitized,
+        "strict": True,
+    }
+
+
+class _StrictSchemaUnsupported(Exception):
+    pass
 
 
 class OpenAIModelProvider(ModelProvider):
@@ -105,6 +349,17 @@ class OpenAIModelProvider(ModelProvider):
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
     ) -> JsonGenerationResult:
         selected_model = self._resolve_model(kwargs)
+        text_format = _build_strict_text_format(
+            schema=schema,
+            name="care_classifier",
+            provider=self.provider_name,
+            role="model",
+            operation="generate_json",
+        )
+        if text_format is None:
+            text_format = {"format": {"type": "json_object"}}
+        else:
+            text_format = {"format": text_format}
         response = await _logged(
             provider=self.provider_name,
             role="model",
@@ -112,7 +367,7 @@ class OpenAIModelProvider(ModelProvider):
             call=lambda: self._client.responses.create(
                 model=selected_model,
                 input=prompt,
-                text={"format": {"type": "json_object"}},
+                text=text_format,
                 **kwargs,
             ),
         )
@@ -144,6 +399,16 @@ class OpenAIVisionProvider(ImageAnalysisProvider):
         model = kwargs.pop("model", self.model)
         image_url = f"data:{mime_type};base64,{base64.b64encode(image).decode('ascii')}"
         prompt_text = _vision_prompt(prompt)
+        text_format = _build_strict_text_format(
+            schema=_VISION_SCHEMA,
+            name="plant_image_analysis",
+            provider=self.provider_name,
+            role="vision",
+            operation="analyze_image",
+        )
+        text_kwargs = (
+            {"format": text_format} if text_format is not None else {"format": {"type": "json_object"}}
+        )
         response = await _logged(
             provider=self.provider_name,
             role="vision",
@@ -162,7 +427,7 @@ class OpenAIVisionProvider(ImageAnalysisProvider):
                         ],
                     }
                 ],
-                text={"format": {"type": "json_object"}},
+                text=text_kwargs,
                 **kwargs,
             ),
         )
@@ -256,6 +521,17 @@ class OpenAIJudgeProvider(JudgeEvaluationProvider):
     async def judge_response(
         self, payload: dict[str, Any], rubric: dict[str, Any], **kwargs: Any
     ) -> JudgeResult:
+        strict_schema = _rubric_judge_schema(rubric)
+        text_format = _build_strict_text_format(
+            schema=strict_schema,
+            name="judge_response",
+            provider=self.provider_name,
+            role="judge",
+            operation="judge_response",
+        )
+        text_kwargs = (
+            {"format": text_format} if text_format is not None else {"format": {"type": "json_object"}}
+        )
         response = await _logged(
             provider=self.provider_name,
             role="judge",
@@ -263,7 +539,7 @@ class OpenAIJudgeProvider(JudgeEvaluationProvider):
             call=lambda: self._client.responses.create(
                 model=kwargs.pop("model", self.model),
                 input=_judge_prompt(payload, rubric),
-                text={"format": {"type": "json_object"}},
+                text=text_kwargs,
                 **kwargs,
             ),
         )
@@ -449,3 +725,183 @@ _VISION_PROMPT = """
 Analyze this plant image. Return JSON with description and candidates. Each candidate must include
 scientific_name, common_name, confidence_label, confidence_score and visible_traits.
 """.strip()
+
+
+_JUDGE_DEFAULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["full", "partial", "insufficient", "contradictory"],
+            "description": "Answerability status assigned by the judge.",
+        },
+        "covered_aspects": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Requested domain-qualified aspects directly supported by evidence.",
+        },
+        "missing_aspects": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Requested domain-qualified aspects not directly supported by evidence.",
+        },
+        "source_support": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {
+                        "type": "string",
+                        "description": "Specific claim that the evidence supports.",
+                    },
+                    "source_urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Source URLs that support the claim.",
+                    },
+                    "covered_aspects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Aspects supported by this claim.",
+                    },
+                    "evidence_quote": {
+                        "type": ["string", "null"],
+                        "description": "Verbatim evidence supporting the claim, or null.",
+                    },
+                    "confidence": {
+                        "type": ["number", "null"],
+                        "description": "Confidence score for this claim, or null.",
+                    },
+                },
+                "required": [
+                    "claim",
+                    "source_urls",
+                    "covered_aspects",
+                    "evidence_quote",
+                    "confidence",
+                ],
+                "additionalProperties": False,
+            },
+            "description": "Per-claim source support evidence.",
+        },
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_a": {
+                        "type": "string",
+                        "description": "First conflicting claim.",
+                    },
+                    "claim_b": {
+                        "type": "string",
+                        "description": "Second conflicting claim.",
+                    },
+                    "source_a_urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Source URLs supporting claim_a.",
+                    },
+                    "source_b_urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Source URLs supporting claim_b.",
+                    },
+                },
+                "required": ["claim_a", "claim_b", "source_a_urls", "source_b_urls"],
+                "additionalProperties": False,
+            },
+            "description": "Contradictory claims detected across sources.",
+        },
+        "confidence": {
+            "type": "number",
+            "description": "Numeric confidence score between 0 and 1.",
+        },
+        "score": {
+            "type": "number",
+            "description": "Numeric score kept aligned with confidence for compatibility.",
+        },
+        "passed": {
+            "type": "boolean",
+            "description": "True only when status is full.",
+        },
+        "reasons": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Short explanations for the status decision.",
+        },
+    },
+    "required": [
+        "status",
+        "covered_aspects",
+        "missing_aspects",
+        "source_support",
+        "contradictions",
+        "confidence",
+        "score",
+        "passed",
+        "reasons",
+    ],
+    "additionalProperties": False,
+}
+
+
+def _rubric_judge_schema(rubric: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(rubric, dict):
+        return _JUDGE_DEFAULT_SCHEMA
+    explicit = rubric.get("output_schema") or rubric.get("response_schema")
+    if isinstance(explicit, dict):
+        return explicit
+    return _JUDGE_DEFAULT_SCHEMA
+
+
+_VISION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "description": {
+            "type": "string",
+            "description": "Concise textual description of the plant image.",
+        },
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scientific_name": {
+                        "type": "string",
+                        "description": "Scientific name of the candidate plant.",
+                    },
+                    "common_name": {
+                        "type": ["string", "null"],
+                        "description": "Common name of the candidate plant, or null when unknown.",
+                    },
+                    "confidence_label": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low", "inconclusive"],
+                        "description": "Confidence bucket for this candidate.",
+                    },
+                    "confidence_score": {
+                        "type": ["number", "null"],
+                        "description": "Numeric confidence score, or null when unavailable.",
+                    },
+                    "visible_traits": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Visible plant traits supporting the candidate.",
+                    },
+                },
+                "required": [
+                    "scientific_name",
+                    "common_name",
+                    "confidence_label",
+                    "confidence_score",
+                    "visible_traits",
+                ],
+                "additionalProperties": False,
+            },
+            "description": "Ranked list of candidate plant identifications.",
+        },
+    },
+    "required": ["description", "candidates"],
+    "additionalProperties": False,
+}

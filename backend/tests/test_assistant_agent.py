@@ -1108,6 +1108,280 @@ def test_classifier_schema_requires_confidence_and_care_classification_fields() 
 
 
 @pytest.mark.asyncio
+async def test_missing_intent_repaired_by_retry_uses_llm_classification() -> None:
+    """Regression: when the first classifier response omits a required field
+    such as `intent`, the repair retry must succeed and the assistant MUST
+    use the LLM classifier output for routing rather than fall back to minimal
+    deterministic routing."""
+
+    class _MissingIntentRetryTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self._classifier_call_count = 0
+            self.repair_prompts: list[str] = []
+
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            self._classifier_call_count += 1
+            if self._classifier_call_count == 1:
+                self.repair_prompts.append(prompt)
+                return ToolResult(
+                    ok=True,
+                    data={
+                        "language": "es",
+                        "answer_language": "es",
+                        "topic": "watering",
+                        "required_aspects": ["watering_frequency_or_trigger"],
+                        "plant_reference": "Pata",
+                        "confidence": 0.9,
+                        "needs_retrieval": True,
+                    },
+                )
+            self.repair_prompts.append(prompt)
+            return await super().generate_json(prompt, schema, **kwargs)
+
+    tools = _MissingIntentRetryTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert tools._classifier_call_count == 2, "missing-field repair retry should run once"
+    assert result["intent"] == "botanical"
+    assert result["required_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["topic"] == "watering"
+    assert result.get("care_classification") is not None
+    assert result["care_classification"].source == "llm"
+    assert not any("invalid output" in f for f in result.get("tool_failures", []))
+    assert "intent" in tools.repair_prompts[1], (
+        "repair prompt must explicitly list the missing `intent` field"
+    )
+
+
+def test_care_classifier_repair_prompt_includes_missing_fields_and_template() -> None:
+    """The repair prompt must list missing required field names explicitly and
+    include a complete schema-shaped JSON template so the model can repair the
+    previous response without guessing the structure."""
+    from app.assistant.graph import _care_classifier_repair_prompt
+
+    state: dict = {
+        "message": "How often should I water my Pata?",
+        "plant_hint": "Pata",
+        "plant_binomial_name": "Cotyledon tomentosa",
+    }
+    prompt = _care_classifier_repair_prompt(
+        state,
+        original_error="1 validation error for CareClassification\nintent\n  Field required",
+        missing_fields=["intent"],
+        previous_response={
+            "language": "en",
+            "answer_language": "en",
+            "topic": "watering",
+            "plant_reference": "Pata",
+        },
+    )
+
+    assert "Missing required fields" in prompt
+    assert "intent" in prompt
+    assert "Return the response using exactly this JSON template" in prompt
+    for required_field in (
+        "language",
+        "answer_language",
+        "intent",
+        "topic",
+        "required_aspects",
+        "plant_reference",
+        "confidence",
+        "needs_retrieval",
+    ):
+        assert f'"{required_field}"' in prompt, (
+            f"repair prompt template must include {required_field!r}"
+        )
+    assert "Your previous response already contained" in prompt
+    assert "KEEP them" in prompt
+
+
+def test_care_classifier_repair_prompt_falls_back_to_error_text_scan() -> None:
+    """When the caller does not pre-compute missing fields, the repair prompt
+    builder must still recover them by scanning the error text against the
+    known schema field names."""
+    from pydantic import ValidationError
+
+    from app.assistant.care_contracts import CareClassification
+    from app.assistant.graph import (
+        CARE_CLASSIFIER_SCHEMA,
+        _care_classifier_repair_prompt,
+        _extract_missing_field_names,
+    )
+
+    state: dict = {
+        "message": "How often should I water my Pata?",
+        "plant_hint": "Pata",
+    }
+    try:
+        CareClassification.model_validate({"topic": "watering", "language": "es"})
+    except ValidationError as exc:
+        extracted = _extract_missing_field_names(exc, schema=CARE_CLASSIFIER_SCHEMA)
+    else:
+        extracted = []
+
+    assert "intent" in extracted
+    assert "confidence" in extracted
+
+    prompt = _care_classifier_repair_prompt(
+        state, original_error="missing intent and confidence", missing_fields=None
+    )
+    assert "Missing required fields" in prompt
+    assert "intent" in prompt
+    assert "confidence" in prompt
+
+
+@pytest.mark.asyncio
+async def test_classifier_invalid_output_metric_increments_on_invalid_first_response() -> None:
+    """The classifier_invalid_output_total counter must increment and appear
+    in the prometheus output when the LLM classifier returns a structurally
+    invalid object that cannot be repaired."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import app
+    from app.observability.metrics import metrics_registry
+
+    baseline = metrics_registry.classifier_invalid_output_total
+    tools = FakeTools(
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "not_a_valid_intent",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger"],
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        }
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert result["intent"] == "botanical"
+    assert metrics_registry.classifier_invalid_output_total >= baseline + 1
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "fotosintesis_classifier_invalid_output_total" in response.text
+    assert (
+        f"fotosintesis_classifier_invalid_output_total {metrics_registry.classifier_invalid_output_total}"
+        in response.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_classifier_invalid_output_metric_increments_on_missing_required_field() -> None:
+    """The classifier_invalid_output_total counter must increment when the
+    first response is missing a required field (e.g. intent) even if the
+    repair retry eventually succeeds."""
+    from app.observability.metrics import metrics_registry
+
+    baseline = metrics_registry.classifier_invalid_output_total
+
+    class _MissingFieldRetryTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self._classifier_call_count = 0
+
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            self._classifier_call_count += 1
+            if self._classifier_call_count == 1:
+                return ToolResult(
+                    ok=True,
+                    data={
+                        "language": "es",
+                        "answer_language": "es",
+                        "topic": "watering",
+                        "required_aspects": ["watering_frequency_or_trigger"],
+                        "plant_reference": "Pata",
+                        "confidence": 0.9,
+                        "needs_retrieval": True,
+                    },
+                )
+            return await super().generate_json(prompt, schema, **kwargs)
+
+    tools = _MissingFieldRetryTools()
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+    )
+
+    assert tools._classifier_call_count == 2
+    assert result["intent"] == "botanical"
+    assert metrics_registry.classifier_invalid_output_total >= baseline + 1
+
+
+@pytest.mark.asyncio
+async def test_classifier_invalid_output_log_payload_structure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The classifier_invalid_output log event must emit a payload with
+    ctx_event='classifier_invalid_output', bounded ctx_missing_field_count,
+    and a truncated ctx_error; no raw model output or secrets."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="app.assistant.graph")
+
+    class _MissingIntentTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self._classifier_call_count = 0
+
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            self._classifier_call_count += 1
+            if self._classifier_call_count == 1:
+                return ToolResult(
+                    ok=True,
+                    data={
+                        "language": "es",
+                        "answer_language": "es",
+                        "topic": "watering",
+                        "required_aspects": ["watering_frequency_or_trigger"],
+                        "plant_reference": "Pata",
+                        "confidence": 0.9,
+                        "needs_retrieval": True,
+                    },
+                )
+            return await super().generate_json(prompt, schema, **kwargs)
+
+    await AssistantGraph(_MissingIntentTools()).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Monstera?",
+        plant_hint=None,
+    )
+
+    log_record = next(
+        (r for r in caplog.records if r.message == "classifier invalid output"),
+        None,
+    )
+    assert log_record is not None, "classifier_invalid_output log event not emitted"
+
+    record_dict = log_record.__dict__
+    assert record_dict.get("ctx_event") == "classifier_invalid_output"
+    assert record_dict.get("ctx_stage") == "before_repair"
+    missing_fields = record_dict.get("ctx_missing_fields", [])
+    assert isinstance(missing_fields, list)
+    assert record_dict.get("ctx_missing_field_count") == len(missing_fields)
+    assert record_dict.get("ctx_missing_field_count", 0) <= 10
+    assert "intent" in missing_fields
+    error_val = record_dict.get("ctx_error", "")
+    assert isinstance(error_val, str)
+    assert len(error_val) <= 240
+    assert record_dict.get("ctx_trace_id") is not None
+
+
+@pytest.mark.asyncio
 async def test_classifier_call_uses_model_purpose_signal_not_provider_specific_model_id() -> None:
     """The classifier call must signal `model_purpose='classifier'` and never
     forward a provider-specific model id (like 'gemini-2.5-flash-lite' or

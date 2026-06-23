@@ -135,7 +135,7 @@ The assistant plant-care answer pipeline SHALL classify user input before retrie
 
 ### Requirement: Classifier fallback handling
 
-The assistant SHALL fall back to minimal deterministic routing or clarification when the multilingual classifier fails, times out, all classifier provider attempts fail, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative. The fallback path MUST NOT infer detailed botanical `topic` or domain-qualified `required_aspects` values from deterministic keyword rules.
+The assistant SHALL fall back to minimal deterministic routing or clarification when the multilingual classifier fails, times out, all classifier provider attempts fail, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative. The fallback path MUST NOT infer detailed botanical `topic` or domain-qualified `required_aspects` values from deterministic keyword rules. When classifier validation identifies missing required fields, the repair retry SHALL receive those missing field names explicitly and SHALL preserve any valid fields from the previous classifier response.
 
 #### Scenario: Invalid classifier output is retried once
 
@@ -145,8 +145,8 @@ The assistant SHALL fall back to minimal deterministic routing or clarification 
 
 #### Scenario: Retry repairs missing required classifier field
 
-- **WHEN** the first classifier response omits a required field such as `confidence`
-- **AND** the repair retry returns schema-valid classifier output
+- **WHEN** the first classifier response omits a required field such as `intent` or `confidence`
+- **AND** the repair retry receives explicit missing-field context and returns schema-valid classifier output
 - **THEN** the assistant uses the repaired LLM classifier output for routing
 - **AND** the assistant does not fall back to minimal deterministic routing for that request
 
@@ -154,7 +154,7 @@ The assistant SHALL fall back to minimal deterministic routing or clarification 
 
 - **WHEN** the classifier output remains invalid after one repair retry
 - **THEN** the assistant ignores the classifier output and uses minimal deterministic routing or asks for clarification
-- **AND** the assistant records `llm_classifier_invalid_output` and `minimal_routing_fallback_used` through bounded failure or diagnostic metadata
+- **AND** the assistant records `llm_classifier_invalid_output`, `classifier_invalid_output`, any extractable missing required field names, and `minimal_routing_fallback_used` through bounded failure or diagnostic metadata
 
 #### Scenario: Low-confidence classifier output remains authoritative when valid
 
