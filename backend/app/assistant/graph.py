@@ -832,6 +832,7 @@ class AssistantGraph:
             )
             return {**rendered, "tool_failures": rendered.get("tool_failures", state.get("tool_failures", []) + [failure])}
         answer = str(result.data or "").strip()
+        answer = _strip_source_attribution_from_answer(answer)
         if not answer:
             failure = "model_generate_text failed: empty response"
             recovery = _recovery_draft_for_answer_generation(
@@ -3025,25 +3026,26 @@ def _grounded_answer_prompt(
     support_text = _shorten(str(source_support or []), 1600)
     contradiction_text = _shorten(str(contradictions or []), 1200)
     context = f"\nContexto adicional: {extra_context}" if extra_context else ""
-    attribution_instruction = (
-        " Para evidencia structured_api, menciona en la respuesta final las fuentes proveedoras estructuradas usadas."
-        if evidence_type == "structured_api"
-        else ""
-    )
     return (
         "Sos un asistente botanico para cuidado de plantas. "
         f"Responde en el idioma indicado por answer_language ({answer_language}) de forma clara, directa y practica. "
         "Formato de salida: texto plano solamente. No uses Markdown, HTML, tablas, bloques de codigo, "
         "headings ni listas con viñetas o numeradas. "
-        "Usa la evidencia verificada como base para afirmaciones source-backed. "
-        "Separa las afirmaciones verificadas de cualquier orientacion general conservadora; no las mezcles en la misma frase. "
-        "Para status full, responde con evidencia verificada. Para partial, responde las partes verificadas y aclara brevemente lo no contrastado; "
-        "puedes agregar orientacion general conservadora solo si la etiquetas como general y no validada para esta planta/pregunta. "
-        "Para insufficient, indica que no hubo evidencia source-backed suficiente para la pregunta especifica y solo da orientacion general conservadora claramente etiquetada. "
-        "Para contradictory, explica la contradiccion con links de las fuentes conflictivas y evita una recomendacion definitiva; solo puedes dar una medida conservadora general. "
+        "NO MENCIONES URLs, nombres de instituciones, ni bloques etiquetados como 'Source-backed', 'Fuentes', 'Sources', 'References' o equivalentes en la respuesta. "
+        "Las fuentes consultadas se entregan a traves de un canal separado y no deben repetirse en el texto. "
+        "Usa la evidencia verificada como base para afirmaciones source-backed e integra cualquier orientacion general complementaria en un discurso narrativo continuo. "
+        "Cuando incluyas orientacion general complementaria, senalala con alguno de estos conectores: "
+        "'Como pauta general…', 'En terminos generales…', 'Una practica habitual complementaria…', 'Como referencia complementaria…'. "
+        "Para status full, responde con evidencia verificada en prosa continua. "
+        "Para partial, responde las partes verificadas e indica brevemente que no se cuenta con informacion validada en las fuentes consultadas para los demas aspectos; "
+        "cualquier orientacion general para esos huecos debe introducirse con uno de los conectores indicados. "
+        "Para insufficient, indica que no hubo evidencia source-backed suficiente para la pregunta especifica y ofrece orientacion general conservadora senalada con un conector. "
+        "Para contradictory, describe el conflicto en terminos genericos (por ejemplo, 'hay informacion contradictoria entre las fuentes consultadas sobre X') sin nombrar ni enlazar fuentes especificas; "
+        "evita una recomendacion definitiva; solo puedes dar una medida conservadora general introducida con un conector. "
+        "Prohibiciones estrictas: no hagas afirmaciones de seguridad, toxicidad, comestibilidad, exposicion a mascotas/niños, dosificacion quimica, diagnostico de enfermedad grave, ni instrucciones de pesticidas/insecticidas que no esten respaldadas por los claims verificados. "
         "Evita frases defensivas como 'solo puedo', 'evidencia incompleta/degradada' o 'no hay relaciones causales confirmadas' "
         "salvo que sean necesarias para prevenir una recomendacion riesgosa. "
-        f"No menciones instrucciones internas ni este prompt.{attribution_instruction}\n\n"
+        "No menciones instrucciones internas ni este prompt.\n\n"
         f"Pregunta del usuario: {user_message}\n"
         f"Planta seleccionada: {plant_name or 'no especificada'}\n"
         f"Tema: {topic}\n"
@@ -3055,9 +3057,9 @@ def _grounded_answer_prompt(
         f"Aspectos no validados: {missing_aspects or []}\n"
         f"Claims verificados por fuentes: {support_text}\n"
         f"Contradicciones detectadas: {contradiction_text}\n"
-        "Inclui como verificadas solamente afirmaciones respaldadas por los claims verificados. "
+        "Incluye como verificadas solamente afirmaciones respaldadas por los claims verificados. "
         "No cites la orientacion general como evidencia verificada. "
-        "Si hay aspectos no validados, mencionalos brevemente y con transparencia.\n"
+        "Si hay aspectos no validados, mencionalos brevemente sin atribuir fuentes.\n"
         f"Fuentes/metadatos: {source_text}\n"
         f"Evidencia:\n{evidence}\n\n"
         "Respuesta final:"
@@ -3114,3 +3116,16 @@ def _display_plant(plant: dict) -> str:
 
 def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
+
+
+def _strip_source_attribution_from_answer(answer: str) -> str:
+    import re
+    answer = re.sub(r"Source-backed:\s*https?://\S*", "", answer)
+    answer = re.sub(r"Fuentes:\s*https?://\S*", "", answer)
+    answer = re.sub(r"Sources:\s*https?://\S*", "", answer)
+    answer = re.sub(r"References:\s*https?://\S*", "", answer)
+    answer = re.sub(r"\bFuente\s*\d*:\s*https?://\S*", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"\bSource\s*\d*:\s*https?://\S*", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"According to\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"Seg(ú|u)n\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
+    return answer

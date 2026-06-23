@@ -6736,3 +6736,314 @@ async def test_pesticide_instruction_request_does_not_return_chemical_advice() -
         assert forbidden not in answer_text
 
     assert result["diagnostics"]["llm_general_guidance_used"] is False
+
+
+# =============================================================================
+# Grounded answer prompt tests - no attribution in prose
+# =============================================================================
+
+
+def test_grounded_prompt_prohibits_urls_and_source_labels() -> None:
+    """Prompt builder must prohibit URLs, institution names, and source-label blocks."""
+    from app.assistant.graph import _grounded_answer_prompt
+
+    prompt = _grounded_answer_prompt(
+        user_message="Como cuido mi Neon Pothos?",
+        plant_name="Neon Pothos",
+        topic="care_instructions",
+        evidence_type="web_rag",
+        evidence="El Neon Pothos prospera en luz media a baja.",
+        limitations=[],
+        source_metadata=[{"url": "https://extension.illinois.edu/houseplants", "title": "Illinois Extension"}],
+        extra_context="",
+        answer_language="es",
+        required_aspects=["light_exposure", "watering_frequency_or_trigger"],
+        covered_aspects=["light_exposure"],
+        missing_aspects=["watering_frequency_or_trigger"],
+        answerability_status="partial",
+        source_support=[
+            {
+                "claim": "El Neon Pothos prospera en luz media a baja.",
+                "source_urls": ["https://extension.illinois.edu/houseplants"],
+                "covered_aspects": ["light_exposure"],
+                "evidence_quote": " prosp...",
+                "confidence": 0.85,
+            }
+        ],
+        contradictions=[],
+    )
+
+    assert "NO MENCIONES URLs" in prompt
+    assert "nombres de instituciones" in prompt
+    assert "'Source-backed'" in prompt
+    assert "Como pauta general" in prompt
+    assert "En terminos generales" in prompt
+    assert "Una practica habitual complementaria" in prompt
+    assert "Como referencia complementaria" in prompt
+    assert "answer_language (es)" in prompt
+    assert "toxicidad" in prompt
+    assert "comestibilidad" in prompt
+    assert "insecticidas" in prompt
+
+
+def test_grounded_prompt_prohibits_urls_and_source_labels_english() -> None:
+    """Prompt builder must preserve non-default answer_language."""
+    from app.assistant.graph import _grounded_answer_prompt
+
+    prompt = _grounded_answer_prompt(
+        user_message="How do I care for my Neon Pothos?",
+        plant_name="Neon Pothos",
+        topic="care_instructions",
+        evidence_type="web_rag",
+        evidence="Neon Pothos thrives in medium to low light.",
+        limitations=[],
+        source_metadata=[{"url": "https://extension.illinois.edu/houseplants", "title": "Illinois Extension"}],
+        extra_context="",
+        answer_language="en",
+        required_aspects=["light_exposure"],
+        covered_aspects=["light_exposure"],
+        missing_aspects=[],
+        answerability_status="full",
+        source_support=[
+            {
+                "claim": "Neon Pothos thrives in medium to low light.",
+                "source_urls": ["https://extension.illinois.edu/houseplants"],
+                "covered_aspects": ["light_exposure"],
+                "evidence_quote": "...",
+                "confidence": 0.85,
+            }
+        ],
+        contradictions=[],
+    )
+
+    assert "answer_language (en)" in prompt
+
+
+def test_grounded_prompt_structured_api_no_attribution_instruction() -> None:
+    """For structured_api evidence type, attribution_instruction must NOT appear."""
+    from app.assistant.graph import _grounded_answer_prompt
+
+    prompt = _grounded_answer_prompt(
+        user_message="Como cuido mi planta?",
+        plant_name="Planta",
+        topic="care_instructions",
+        evidence_type="structured_api",
+        evidence="La planta requiere riego moderado.",
+        limitations=[],
+        source_metadata=[{"url": "https://example.org", "title": "Example"}],
+        extra_context="",
+        answer_language="es",
+        required_aspects=["watering_frequency_or_trigger"],
+        covered_aspects=["watering_frequency_or_trigger"],
+        missing_aspects=[],
+        answerability_status="full",
+        source_support=[
+            {
+                "claim": "La planta requiere riego moderado.",
+                "source_urls": ["https://example.org"],
+                "covered_aspects": ["watering_frequency_or_trigger"],
+                "evidence_quote": "...",
+                "confidence": 0.85,
+            }
+        ],
+        contradictions=[],
+    )
+
+    assert "fuentes proveedoras estructuradas" not in prompt
+    assert "Tipo de evidencia: structured_api" in prompt
+
+
+# =============================================================================
+# Grounded answer end-to-end tests - response must not leak sources
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_does_not_leak_sources_to_text() -> None:
+    """Response content must not contain URLs or Source-backed labels even if model emits them."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "light",
+            "required_aspects": ["light_exposure"],
+            "plant_reference": "Neon Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="Para que tu Neon Pothos se sienta bien, colloidal给它 medium to low light. Source-backed: https://extension.illinois.edu/houseplants/varieties?utm_source=openai",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cuanta luz necesita mi Neon Pothos?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert "http" not in result["answer"]
+    assert "Source-backed:" not in result["answer"]
+    assert "extension.illinois.edu" not in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_single_url_leak_to_prose() -> None:
+    """When model emits a single URL in prose, it must not reach message.content."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "light",
+            "required_aspects": ["light_exposure"],
+            "plant_reference": "Neon Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="Tu Neon Pothos prefiere luz media a baja. Fuente: https://extension.illinois.edu/houseplants",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cuanta luz necesita mi Neon Pothos?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert "http" not in result["answer"]
+    assert "extension.illinois.edu" not in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_multiple_urls_leak_to_prose() -> None:
+    """When model emits two URLs in prose, neither must reach message.content."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "care_general",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="Tu planta necesita luz media y agua cuando la tierra este seca. Fuente 1: https://example.com/light. Fuente 2: https://example.com/water",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como cuido mi planta?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert "http" not in result["answer"]
+    assert "example.com" not in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_partial_with_general_guidance_connector() -> None:
+    """Partial answer must include a soft connector for general guidance."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "care_general",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="Tu Pothos puede vivir con luz media. Como pauta general, riega cuando la tierra este seca.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Como cuido mi Pothos?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    content = result["answer"]
+    assert "Como pauta general" in content
+    assert "http" not in content
+    assert "Source-backed:" not in content
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_contradictory_generic_phrasing() -> None:
+    """Contradictory evidence must use generic phrasing without source names."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger"],
+            "plant_reference": "Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="Hay informacion contradictoria entre las fuentes consultadas sobre cada cuanto regar tu planta. Una medida conservadora general es revisar la tierra antes de regar.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cada cuanto debo regar mi Pothos?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    content = result["answer"]
+    assert "hay informacion contradictoria" in content.lower() or "informacion contradictoria" in content.lower()
+    assert "http" not in content
+    assert "extension.illinois.edu" not in content
+
+
+@pytest.mark.asyncio
+async def test_grounded_response_institution_name_not_leaked() -> None:
+    """Institution names emitted by the model must not reach result['answer']."""
+    tools = FakeTools(
+        rag_answerable=True,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "light",
+            "required_aspects": ["light_exposure"],
+            "plant_reference": "Neon Pothos",
+            "confidence": 0.92,
+            "needs_retrieval": True,
+        },
+        model_response="According to Illinois Extension, your Neon Pothos prefers medium to low light.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Cuanta luz necesita mi Neon Pothos?",
+        plant_hint=None,
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert "Illinois Extension" not in result["answer"]
+    assert "http" not in result["answer"]
