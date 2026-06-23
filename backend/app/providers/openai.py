@@ -67,36 +67,50 @@ async def _logged(
 class OpenAIModelProvider(ModelProvider):
     provider_name = "openai-model"
 
-    def __init__(self, *, api_key: str, model: str) -> None:
+    def __init__(
+        self, *, api_key: str, model: str, classifier_model: str | None = None
+    ) -> None:
         self.model = model
+        self.classifier_model = classifier_model or model
         self._client = _client(api_key)
 
+    def _resolve_model(self, kwargs: dict[str, Any]) -> str:
+        explicit = kwargs.pop("model", None)
+        if explicit is not None:
+            return explicit
+        purpose = kwargs.pop("model_purpose", None)
+        if purpose == "classifier":
+            return self.classifier_model
+        return self.model
+
     async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
+        selected_model = self._resolve_model(kwargs)
         response = await _logged(
             provider=self.provider_name,
             role="model",
             operation="generate_text",
             call=lambda: self._client.responses.create(
-                model=kwargs.pop("model", self.model),
+                model=selected_model,
                 input=prompt,
                 **kwargs,
             ),
         )
         return TextGenerationResult(
             provider=self.provider_name,
-            model=self.model,
+            model=selected_model,
             text=_response_text(response),
         )
 
     async def generate_json(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
     ) -> JsonGenerationResult:
+        selected_model = self._resolve_model(kwargs)
         response = await _logged(
             provider=self.provider_name,
             role="model",
             operation="generate_json",
             call=lambda: self._client.responses.create(
-                model=kwargs.pop("model", self.model),
+                model=selected_model,
                 input=prompt,
                 text={"format": {"type": "json_object"}},
                 **kwargs,
@@ -104,7 +118,7 @@ class OpenAIModelProvider(ModelProvider):
         )
         return JsonGenerationResult(
             provider=self.provider_name,
-            model=self.model,
+            model=selected_model,
             data=_json_from_response(response),
             metadata={"schema_keys": sorted(schema.keys())},
         )

@@ -874,10 +874,11 @@ async def _classify_care_message(
     tools: AssistantTools, settings: Settings, state: AssistantState
 ) -> tuple[CareClassification, str | None, bool]:
     prompt = _care_classifier_prompt(state)
-    model = _classifier_model_for_settings(settings)
     try:
         result = await asyncio.wait_for(
-            tools.generate_json(prompt, CARE_CLASSIFIER_SCHEMA, model=model),
+            tools.generate_json(
+                prompt, CARE_CLASSIFIER_SCHEMA, model_purpose="classifier"
+            ),
             timeout=settings.assistant_classifier_timeout_seconds,
         )
     except TimeoutError:
@@ -896,7 +897,7 @@ async def _classify_care_message(
                 tools.generate_json(
                     _care_classifier_repair_prompt(state, retry_error),
                     CARE_CLASSIFIER_SCHEMA,
-                    model=model,
+                    model_purpose="classifier",
                 ),
                 timeout=settings.assistant_classifier_timeout_seconds,
             )
@@ -921,7 +922,7 @@ async def _classify_care_message(
                 tools.generate_json(
                     _care_classifier_repair_prompt(state, retry_error),
                     CARE_CLASSIFIER_SCHEMA,
-                    model=model,
+                    model_purpose="classifier",
                 ),
                 timeout=settings.assistant_classifier_timeout_seconds,
             )
@@ -937,15 +938,6 @@ async def _classify_care_message(
             classification = _deterministic_classification(state)
             return classification, f"llm_classifier_invalid_output after retry: {retry_error}", classification.source == "deterministic"
     return classification, None, False
-
-
-def _classifier_model_for_settings(settings: Settings) -> str | None:
-    provider = settings.model_provider.strip().lower()
-    if provider == "openai":
-        return settings.openai_classifier_model
-    if provider == "gemini":
-        return settings.gemini_classifier_model
-    return None
 
 
 def _care_classifier_prompt(state: AssistantState) -> str:

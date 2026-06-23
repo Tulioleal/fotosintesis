@@ -1457,3 +1457,212 @@ async def test_openai_search_parses_url_citation_annotations(
     assert results[0].snippet == "Kew bear paw succulent profile."
     assert results[0].source_domain == "powo.science.kew.org"
     assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Classifier model wiring through the factory
+# ---------------------------------------------------------------------------
+
+
+def test_factory_wires_openai_classifier_model(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_TEXT_MODEL", "gpt-text")
+    monkeypatch.setenv("OPENAI_CLASSIFIER_MODEL", "gpt-classifier")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.model, OpenAIModelProvider)
+    assert providers.model.model == "gpt-text"
+    assert providers.model.classifier_model == "gpt-classifier"
+
+
+def test_factory_wires_gemini_classifier_model(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_TEXT_MODEL", "gemini-text")
+    monkeypatch.setenv("GEMINI_CLASSIFIER_MODEL", "gemini-classifier")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    assert isinstance(providers.model, GeminiModelProvider)
+    assert providers.model.model == "gemini-text"
+    assert providers.model.classifier_model == "gemini-classifier"
+
+
+def test_factory_wires_classifier_model_for_each_provider_in_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_gemini_module: None,
+    fake_openai_module: None,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDERS", '["gemini", "openai"]')
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini")
+    monkeypatch.setenv("GEMINI_TEXT_MODEL", "gemini-text")
+    monkeypatch.setenv("GEMINI_CLASSIFIER_MODEL", "gemini-classifier")
+    monkeypatch.setenv("OPENAI_TEXT_MODEL", "openai-text")
+    monkeypatch.setenv("OPENAI_CLASSIFIER_MODEL", "openai-classifier")
+    get_settings.cache_clear()
+
+    providers = get_provider_registry()
+
+    from app.providers.wrappers import ModelProviderFallbackWrapper
+    assert isinstance(providers.model, ModelProviderFallbackWrapper)
+    chain = providers.model._providers
+    assert len(chain) == 2
+    assert isinstance(chain[0], GeminiModelProvider)
+    assert chain[0].classifier_model == "gemini-classifier"
+    assert isinstance(chain[1], OpenAIModelProvider)
+    assert chain[1].classifier_model == "openai-classifier"
+
+
+@pytest.mark.asyncio
+async def test_openai_classifier_purpose_routes_to_classifier_model(
+    fake_openai_module: None,
+) -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(output_text='{"ok": true}')
+
+    responses = FakeResponses()
+    provider = OpenAIModelProvider(
+        api_key="test-key",
+        model="gpt-text",
+        classifier_model="gpt-classifier",
+    )
+    provider._client = types.SimpleNamespace(responses=responses)
+
+    result = await provider.generate_json(
+        "classifier prompt", {"type": "object"}, model_purpose="classifier"
+    )
+
+    assert responses.kwargs is not None
+    assert responses.kwargs["model"] == "gpt-classifier"
+    assert result.model == "gpt-classifier"
+
+
+@pytest.mark.asyncio
+async def test_openai_default_text_call_does_not_use_classifier_model(
+    fake_openai_module: None,
+) -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(output_text="text answer")
+
+    responses = FakeResponses()
+    provider = OpenAIModelProvider(
+        api_key="test-key",
+        model="gpt-text",
+        classifier_model="gpt-classifier",
+    )
+    provider._client = types.SimpleNamespace(responses=responses)
+
+    result = await provider.generate_text("text prompt")
+
+    assert responses.kwargs is not None
+    assert responses.kwargs["model"] == "gpt-text"
+    assert result.model == "gpt-text"
+
+
+@pytest.mark.asyncio
+async def test_openai_explicit_model_override_wins_over_classifier_purpose(
+    fake_openai_module: None,
+) -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def create(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(output_text='{"ok": true}')
+
+    responses = FakeResponses()
+    provider = OpenAIModelProvider(
+        api_key="test-key",
+        model="gpt-text",
+        classifier_model="gpt-classifier",
+    )
+    provider._client = types.SimpleNamespace(responses=responses)
+
+    result = await provider.generate_json(
+        "prompt",
+        {"type": "object"},
+        model="gpt-experimental",
+        model_purpose="classifier",
+    )
+
+    assert responses.kwargs is not None
+    assert responses.kwargs["model"] == "gpt-experimental"
+    assert result.model == "gpt-experimental"
+
+
+@pytest.mark.asyncio
+async def test_gemini_classifier_purpose_routes_to_classifier_model(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(text='{"ok": true}')
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-text",
+        classifier_model="gemini-classifier",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    result = await provider.generate_json(
+        "classifier prompt", {"type": "object"}, model_purpose="classifier"
+    )
+
+    assert models.kwargs is not None
+    assert models.kwargs["model"] == "gemini-classifier"
+    assert result.model == "gemini-classifier"
+
+
+@pytest.mark.asyncio
+async def test_gemini_default_text_call_does_not_use_classifier_model(
+    fake_gemini_module: None,
+) -> None:
+    class FakeModels:
+        def __init__(self) -> None:
+            self.kwargs: dict[str, object] | None = None
+
+        async def generate_content(self, **kwargs: object) -> object:
+            self.kwargs = kwargs
+            return types.SimpleNamespace(text="text answer")
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-text",
+        classifier_model="gemini-classifier",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    result = await provider.generate_text("text prompt")
+
+    assert models.kwargs is not None
+    assert models.kwargs["model"] == "gemini-text"
+    assert result.model == "gemini-text"

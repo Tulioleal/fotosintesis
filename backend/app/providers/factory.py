@@ -128,11 +128,13 @@ def _build_single_model_provider(provider: str, settings: Settings) -> ModelProv
             return OpenAIModelProvider(
                 api_key=_require_openai_api_key(settings.openai_api_key, role="model"),
                 model=settings.openai_text_model,
+                classifier_model=settings.openai_classifier_model,
             )
         case "gemini":
             return GeminiModelProvider(
                 api_key=_require_gemini_api_key(settings.gemini_api_key, role="model"),
                 model=settings.gemini_text_model,
+                classifier_model=settings.gemini_classifier_model,
             )
     raise ValueError(f"Unsupported model provider: {provider}")
 

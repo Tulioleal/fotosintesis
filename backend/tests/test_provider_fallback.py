@@ -1235,3 +1235,210 @@ class TestTypedFailureMetadata:
         assert failed_attempt["transient"] is True
         assert failed_attempt["retryable"] is True
         assert failed_attempt["failure_category"] == "service_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# 8.10 Classifier model routing across provider fallback chains
+# ---------------------------------------------------------------------------
+
+
+class _RecordingModelProvider(ModelProvider):
+    """Records every model id used by ``generate_json`` calls."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        model: str,
+        classifier_model: str | None = None,
+        fail_first_attempts: int = 0,
+    ) -> None:
+        self.provider_name = name
+        self.model = model
+        self.classifier_model = classifier_model or model
+        self._fail_first_attempts = fail_first_attempts
+        self._attempt_count = 0
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
+        return TextGenerationResult(
+            provider=self.provider_name, model=self.model, text="ok"
+        )
+
+    async def generate_json(
+        self, prompt: str, schema: dict[str, Any], **kwargs: Any
+    ) -> JsonGenerationResult:
+        self._attempt_count += 1
+        recorded = {
+            "model": kwargs.get("model"),
+            "model_purpose": kwargs.get("model_purpose"),
+        }
+        if recorded["model"] is not None:
+            recorded_model = recorded["model"]
+        elif recorded["model_purpose"] == "classifier":
+            recorded_model = self.classifier_model
+        else:
+            recorded_model = self.model
+        recorded["resolved_model"] = recorded_model
+        self.calls.append(recorded)
+        if self._fail_first_attempts >= self._attempt_count:
+            raise GeminiProviderError(
+                "transient service unavailable",
+                original_exception=RuntimeError("503 UNAVAILABLE"),
+            )
+        return JsonGenerationResult(
+            provider=self.provider_name,
+            model=recorded_model,
+            data={"prompt": prompt[:40]},
+        )
+
+    async def judge_response(
+        self, payload: dict[str, Any], rubric: dict[str, Any], **kwargs: Any
+    ) -> JudgeResult:
+        return JudgeResult(
+            provider=self.provider_name,
+            model=self.model,
+            score=1.0,
+            passed=True,
+            status="full",
+            confidence=1.0,
+        )
+
+
+class TestClassifierModelRoutingAcrossFallbackChain:
+    async def test_gemini_primary_openai_fallback_does_not_leak_gemini_model_id_to_openai(
+        self,
+    ) -> None:
+        """When MODEL_PROVIDERS=['gemini','openai'] and Gemini fails transiently,
+        the OpenAI fallback must resolve its own classifier model id, not inherit
+        the Gemini classifier id from the caller."""
+        circuit_breaker.clear()
+        clear_provider_fallbacks()
+        gemini = _RecordingModelProvider(
+            name="gemini-model",
+            model="gemini-2.5-flash",
+            classifier_model="gemini-2.5-flash-lite",
+            fail_first_attempts=1,
+        )
+        openai = _RecordingModelProvider(
+            name="openai-model",
+            model="gpt-5.4",
+            classifier_model="gpt-5.4-mini",
+        )
+        wrapper = ModelProviderFallbackWrapper([gemini, openai])
+
+        result = await wrapper.generate_json(
+            "care prompt", {"type": "object"}, model_purpose="classifier"
+        )
+
+        assert result.provider == "openai-model"
+        assert len(gemini.calls) == 1
+        assert gemini.calls[0]["resolved_model"] == "gemini-2.5-flash-lite"
+        assert len(openai.calls) == 1
+        openai_recorded_model = openai.calls[0]["resolved_model"]
+        assert "gemini" not in openai_recorded_model.lower()
+        assert openai_recorded_model == "gpt-5.4-mini"
+
+    async def test_openai_primary_gemini_fallback_does_not_leak_openai_model_id_to_gemini(
+        self,
+    ) -> None:
+        """When MODEL_PROVIDERS=['openai','gemini'] and OpenAI fails transiently,
+        the Gemini fallback must resolve its own classifier model id, not inherit
+        the OpenAI classifier id from the caller."""
+        circuit_breaker.clear()
+        clear_provider_fallbacks()
+        openai = _RecordingModelProvider(
+            name="openai-model",
+            model="gpt-5.4",
+            classifier_model="gpt-5.4-mini",
+            fail_first_attempts=1,
+        )
+        gemini = _RecordingModelProvider(
+            name="gemini-model",
+            model="gemini-2.5-flash",
+            classifier_model="gemini-2.5-flash-lite",
+        )
+        wrapper = ModelProviderFallbackWrapper([openai, gemini])
+
+        result = await wrapper.generate_json(
+            "care prompt", {"type": "object"}, model_purpose="classifier"
+        )
+
+        assert result.provider == "gemini-model"
+        assert len(openai.calls) == 1
+        assert openai.calls[0]["resolved_model"] == "gpt-5.4-mini"
+        assert len(gemini.calls) == 1
+        gemini_recorded_model = gemini.calls[0]["resolved_model"]
+        assert "gpt" not in gemini_recorded_model.lower()
+        assert gemini_recorded_model == "gemini-2.5-flash-lite"
+
+    async def test_openai_only_single_provider_uses_classifier_model(self) -> None:
+        """Single OpenAI provider resolves to OPENAI_CLASSIFIER_MODEL for classifier calls."""
+        openai = _RecordingModelProvider(
+            name="openai-model",
+            model="gpt-5.4",
+            classifier_model="gpt-5.4-mini",
+        )
+        wrapper = ModelProviderFallbackWrapper([openai])
+
+        result = await wrapper.generate_json(
+            "care prompt", {"type": "object"}, model_purpose="classifier"
+        )
+
+        assert result.provider == "openai-model"
+        assert result.model == "gpt-5.4-mini"
+        assert len(openai.calls) == 1
+        assert openai.calls[0]["resolved_model"] == "gpt-5.4-mini"
+
+    async def test_gemini_only_single_provider_uses_classifier_model(self) -> None:
+        """Single Gemini provider resolves to GEMINI_CLASSIFIER_MODEL for classifier calls."""
+        gemini = _RecordingModelProvider(
+            name="gemini-model",
+            model="gemini-2.5-flash",
+            classifier_model="gemini-2.5-flash-lite",
+        )
+        wrapper = ModelProviderFallbackWrapper([gemini])
+
+        result = await wrapper.generate_json(
+            "care prompt", {"type": "object"}, model_purpose="classifier"
+        )
+
+        assert result.provider == "gemini-model"
+        assert result.model == "gemini-2.5-flash-lite"
+        assert len(gemini.calls) == 1
+        assert gemini.calls[0]["resolved_model"] == "gemini-2.5-flash-lite"
+
+    async def test_model_kwarg_override_still_wins_over_classifier_purpose(self) -> None:
+        """If the caller passes model=... explicitly, it overrides classifier resolution."""
+        openai = _RecordingModelProvider(
+            name="openai-model",
+            model="gpt-5.4",
+            classifier_model="gpt-5.4-mini",
+        )
+        wrapper = ModelProviderFallbackWrapper([openai])
+
+        result = await wrapper.generate_json(
+            "care prompt",
+            {"type": "object"},
+            model="gpt-5.4-experimental",
+            model_purpose="classifier",
+        )
+
+        assert result.model == "gpt-5.4-experimental"
+        assert openai.calls[0]["resolved_model"] == "gpt-5.4-experimental"
+
+    async def test_classifier_call_uses_default_text_model_when_classifier_model_not_set(
+        self,
+    ) -> None:
+        """When no classifier_model is configured, the provider falls back to its text model."""
+        openai = _RecordingModelProvider(
+            name="openai-model", model="gpt-5.4", classifier_model=None
+        )
+        wrapper = ModelProviderFallbackWrapper([openai])
+
+        result = await wrapper.generate_json(
+            "care prompt", {"type": "object"}, model_purpose="classifier"
+        )
+
+        assert result.model == "gpt-5.4"
+        assert openai.calls[0]["resolved_model"] == "gpt-5.4"

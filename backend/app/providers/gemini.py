@@ -65,43 +65,64 @@ async def _logged(
 class GeminiModelProvider(ModelProvider):
     provider_name = "gemini-model"
 
-    def __init__(self, *, api_key: str, model: str, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        classifier_model: str | None = None,
+        client: Any | None = None,
+    ) -> None:
         self.model = model
+        self.classifier_model = classifier_model or model
         self._client = client or _client(api_key)
 
+    def _resolve_model(self, kwargs: dict[str, Any]) -> str:
+        explicit = kwargs.pop("model", None)
+        if explicit is not None:
+            return explicit
+        purpose = kwargs.pop("model_purpose", None)
+        if purpose == "classifier":
+            return self.classifier_model
+        return self.model
+
     async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
-        model = kwargs.pop("model", self.model)
+        selected_model = self._resolve_model(kwargs)
         response = await _logged(
             provider=self.provider_name,
             role="model",
             operation="generate_text",
             call=lambda: _generate_content(
                 self._client,
-                model=model,
+                model=selected_model,
                 contents=prompt,
                 config=_generation_config(**kwargs),
             ),
         )
-        return TextGenerationResult(provider=self.provider_name, model=model, text=_response_text(response))
+        return TextGenerationResult(
+            provider=self.provider_name,
+            model=selected_model,
+            text=_response_text(response),
+        )
 
     async def generate_json(
         self, prompt: str, schema: dict[str, Any], **kwargs: Any
     ) -> JsonGenerationResult:
-        model = kwargs.pop("model", self.model)
+        selected_model = self._resolve_model(kwargs)
         response = await _logged(
             provider=self.provider_name,
             role="model",
             operation="generate_json",
             call=lambda: _generate_content(
                 self._client,
-                model=model,
+                model=selected_model,
                 contents=prompt,
                 config=_json_generation_config(schema=schema, **kwargs),
             ),
         )
         return JsonGenerationResult(
             provider=self.provider_name,
-            model=model,
+            model=selected_model,
             data=_json_from_response(response),
             metadata={"schema_keys": sorted(schema.keys())},
         )

@@ -1093,6 +1093,39 @@ def test_classifier_schema_requires_confidence_and_care_classification_fields() 
 
 
 @pytest.mark.asyncio
+async def test_classifier_call_uses_model_purpose_signal_not_provider_specific_model_id() -> None:
+    """The classifier call must signal `model_purpose='classifier'` and never
+    forward a provider-specific model id (like 'gemini-2.5-flash-lite' or
+    'gpt-5.4-mini') into the provider chain. Otherwise, when MODEL_PROVIDERS
+    triggers a runtime fallback, the fallback provider would receive the
+    primary provider's classifier id."""
+    captured_kwargs: list[dict] = []
+
+    class _KwargsCapturingTools(FakeTools):
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            captured_kwargs.append(dict(kwargs))
+            return await super().generate_json(prompt, schema, **kwargs)
+
+    await AssistantGraph(_KwargsCapturingTools()).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert captured_kwargs, "classifier should have invoked generate_json"
+    for kwargs in captured_kwargs:
+        assert "model" not in kwargs, (
+            "Classifier call must not forward a provider-specific model id; "
+            f"got kwargs={kwargs!r}"
+        )
+        assert kwargs.get("model_purpose") == "classifier", (
+            "Classifier call must signal model_purpose='classifier'; "
+            f"got kwargs={kwargs!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_llm_classifier_success_preserves_detailed_topic_and_aspects() -> None:
     tools = FakeTools(
         classifier_data={
