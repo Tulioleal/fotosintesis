@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 import logging
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -39,6 +40,20 @@ from app.providers.types import JudgeResult, SearchResult
 
 
 CONFIRMED_BINOMIAL = "Cotyledon tomentosa"
+
+
+def test_classify_care_message_no_longer_references_classifier_model_helper() -> None:
+    """The graph must not use a helper that picks a provider-specific model id
+    based on MODEL_PROVIDER; the provider layer resolves classifier models
+    locally via `model_purpose='classifier'`."""
+    from pathlib import Path
+
+    graph_source = Path(__file__).resolve().parents[1] / "app" / "assistant" / "graph.py"
+    text = graph_source.read_text(encoding="utf-8")
+    assert "_classifier_model_for_settings" not in text, (
+        "_classifier_model_for_settings must be removed from graph.py; "
+        "use model_purpose='classifier' so each provider resolves its own model id"
+    )
 
 
 def test_answerability_mapping_preserves_explicit_judge_contract() -> None:
@@ -1123,6 +1138,139 @@ async def test_classifier_call_uses_model_purpose_signal_not_provider_specific_m
             "Classifier call must signal model_purpose='classifier'; "
             f"got kwargs={kwargs!r}"
         )
+
+
+@pytest.mark.asyncio
+async def test_classifier_gemini_503_falls_back_to_openai_with_openai_shaped_model_id() -> None:
+    """End-to-end regression: when the primary Gemini provider raises 503
+    during the classifier call, the OpenAI fallback must receive an
+    OpenAI-shaped model id, never a Gemini one."""
+    from app.providers.fallback import circuit_breaker
+    from app.providers.fallback_context import clear_provider_fallbacks
+    from app.providers.gemini import GeminiProviderError
+    from app.providers.interfaces import ModelProvider
+    from app.providers.types import JsonGenerationResult
+    from app.providers.wrappers import ModelProviderFallbackWrapper
+
+    circuit_breaker.clear()
+    clear_provider_fallbacks()
+
+    openai_calls: list[dict] = []
+
+    class _FailFirstGeminiProvider(ModelProvider):
+        provider_name = "gemini-model-test"
+
+        def __init__(self, *, fail_first: int) -> None:
+            self.model = "gemini-2.5-flash"
+            self.classifier_model = "gemini-2.5-flash-lite"
+            self._fail_first = fail_first
+            self._attempt_count = 0
+
+        async def generate_text(self, prompt: str, **kwargs):
+            self._attempt_count += 1
+            raise GeminiProviderError(
+                "503 UNAVAILABLE",
+                original_exception=RuntimeError("simulated 503"),
+            )
+
+        async def generate_json(self, prompt, schema, **kwargs):
+            self._attempt_count += 1
+            if self._attempt_count <= self._fail_first:
+                raise GeminiProviderError(
+                    "503 UNAVAILABLE",
+                    original_exception=RuntimeError("simulated 503"),
+                )
+            return JsonGenerationResult(
+                provider=self.provider_name,
+                model=self.classifier_model,
+                data={"ok": True},
+            )
+
+        async def judge_response(self, payload, rubric, **kwargs):
+            raise NotImplementedError
+
+    class _RecordingOpenAIProvider(ModelProvider):
+        provider_name = "openai-model-test"
+
+        def __init__(self) -> None:
+            self.model = "gpt-5.4"
+            self.classifier_model = "gpt-5.4-mini"
+
+        def _resolve(self, kwargs: dict) -> str:
+            explicit = kwargs.pop("model", None)
+            if explicit is not None:
+                return explicit
+            purpose = kwargs.pop("model_purpose", None)
+            if purpose == "classifier":
+                return self.classifier_model
+            return self.model
+
+        async def generate_text(self, prompt: str, **kwargs):
+            selected = self._resolve(kwargs)
+            openai_calls.append({"op": "generate_text", "kwargs": kwargs})
+            from app.providers.types import TextGenerationResult
+            return TextGenerationResult(
+                provider=self.provider_name, model=selected, text="ok"
+            )
+
+        async def generate_json(self, prompt, schema, **kwargs):
+            selected = self._resolve(kwargs)
+            openai_calls.append({"op": "generate_json", "kwargs": kwargs})
+            return JsonGenerationResult(
+                provider=self.provider_name,
+                model=selected,
+                data={"language": "es", "answer_language": "es",
+                      "intent": "plant_care_question", "topic": "watering",
+                      "required_aspects": ["watering_frequency_or_trigger"],
+                      "plant_reference": "Pata", "confidence": 0.9,
+                      "needs_retrieval": True},
+            )
+
+        async def judge_response(self, payload, rubric, **kwargs):
+            raise NotImplementedError
+
+    gemini = _FailFirstGeminiProvider(fail_first=1)
+    openai = _RecordingOpenAIProvider()
+    wrapper = ModelProviderFallbackWrapper([gemini, openai])
+
+    class _ClassifierOnlyTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self.providers = SimpleNamespace(
+                model=wrapper,
+                embeddings=object(),
+                trefle=object(),
+                perenual=object(),
+            )
+
+        async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
+            try:
+                result = await wrapper.generate_json(prompt, schema, **kwargs)
+                return ToolResult(ok=True, data=result.data)
+            except Exception as exc:
+                return ToolResult(ok=False, error=str(exc))
+
+    result = await AssistantGraph(_ClassifierOnlyTools()).run(
+        user_id=uuid4(),
+        message="¿Cada cuánto riego mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert openai_calls, "OpenAI fallback should have been called after Gemini 503"
+    for call in openai_calls:
+        kwargs = call["kwargs"]
+        assert "model" not in kwargs, (
+            "OpenAI fallback must not receive a provider-specific model id from the caller; "
+            f"got kwargs={kwargs!r}"
+        )
+        assert "model_purpose" not in kwargs, (
+            "OpenAI fallback must not receive model_purpose as an unknown SDK argument; "
+            f"got kwargs={kwargs!r}"
+        )
+
+    assert result["intent"] == "botanical"
+    assert result["topic"] == "watering"
 
 
 @pytest.mark.asyncio
@@ -5298,8 +5446,13 @@ async def test_total_generation_failure_does_not_assign_answer() -> None:
 
 @pytest.mark.asyncio
 async def test_model_recovery_attempt_uses_structured_draft() -> None:
-    """Fallback rendering uses structured draft with allowed facts and answer_language."""
-    tools = FakeTools(rag_answerable=False, plant_data=None, web_results=[])
+    """When retrieval is degraded, fallback rendering uses the structured draft."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        degraded_knowledge=True,
+    )
 
     result = await AssistantGraph(tools).run(
         user_id=uuid4(),
@@ -5624,3 +5777,688 @@ async def test_assistant_tools_generate_text_returns_metadata_for_empty_error() 
     assert result.failure_metadata is not None
     assert result.failure_metadata.failure_category in ("unknown", "service_unavailable")
     assert result.failure_metadata.provider_failures[0].provider == "gemini"
+
+
+# ---------------------------------------------------------------------------
+# Disclaimed LLM guidance tests (insufficient evidence, non-safety)
+# ---------------------------------------------------------------------------
+
+
+PEST_CLASSIFIER = {
+    "language": "es",
+    "answer_language": "es",
+    "intent": "plant_care_question",
+    "topic": "pests",
+    "required_aspects": [
+        "pest_identification",
+        "pest_isolation_steps",
+        "pest_prevention_steps",
+    ],
+    "plant_reference": "Pata",
+    "confidence": 0.9,
+    "needs_retrieval": True,
+}
+
+
+SAFETY_PET_CLASSIFIER = {
+    "language": "es",
+    "answer_language": "es",
+    "intent": "plant_care_question",
+    "topic": "toxicity_safety",
+    "required_aspects": ["toxicity_pet_safety"],
+    "plant_reference": "Pata",
+    "confidence": 0.92,
+    "needs_retrieval": True,
+}
+
+
+def test_general_guidance_prompt_requires_separation_and_safety_prohibitions() -> None:
+    """Prompt builder must enforce separation, language, and safety prohibitions."""
+    from app.assistant.graph import _general_guidance_with_disclaimer_prompt
+
+    prompt = _general_guidance_with_disclaimer_prompt(
+        user_message="Veo unos insectos blancos pequenos debajo de las hojas",
+        plant_name="Pata",
+        topic="pests",
+        answer_language="es",
+        required_aspects=["pest_identification", "pest_isolation_steps"],
+        covered_aspects=[],
+        missing_aspects=["pest_identification", "pest_isolation_steps"],
+        source_support=[],
+        source_metadata=[],
+    )
+
+    assert "answer_language (es)" in prompt
+    assert "texto plano solamente" in prompt
+    assert "Que validaron las fuentes" in prompt
+    assert "Que no validaron las fuentes" in prompt
+    assert "Orientacion general no validada" in prompt
+    assert "Detalles que ayudarian" in prompt
+    assert "no cites ninguna fuente" in prompt
+    assert "insecticidas" in prompt
+    assert "toxicidad" in prompt
+    assert "comestibilidad" in prompt
+    assert "Estado de answerability: insufficient" in prompt
+
+
+def test_general_guidance_prompt_preserves_non_default_answer_language() -> None:
+    """Prompt builder must preserve a non-default answer_language."""
+    from app.assistant.graph import _general_guidance_with_disclaimer_prompt
+
+    prompt = _general_guidance_with_disclaimer_prompt(
+        user_message="I see tiny white bugs under the leaves",
+        plant_name="Pata",
+        topic="pests",
+        answer_language="en",
+        required_aspects=["pest_identification"],
+        covered_aspects=[],
+        missing_aspects=["pest_identification"],
+        source_support=[],
+        source_metadata=[],
+    )
+
+    assert "answer_language (en)" in prompt
+
+
+def test_is_disclaimed_guidance_eligible_requires_insufficient_and_relevance() -> None:
+    """Eligibility requires insufficient + relevance + no missing safety aspect."""
+    from app.assistant.graph import _is_disclaimed_guidance_eligible
+
+    insufficient_with_chunks = {
+        "sufficient": False,
+        "retrieval": SimpleNamespace(chunks=["some chunk"], limitations=[]),
+        "missing_aspects": ["pest_identification"],
+        "required_aspects": ["pest_identification"],
+    }
+    assert _is_disclaimed_guidance_eligible(insufficient_with_chunks) is True
+
+    sufficient = {**insufficient_with_chunks, "sufficient": True}
+    assert _is_disclaimed_guidance_eligible(sufficient) is False
+
+    insufficient_no_context = {
+        "sufficient": False,
+        "retrieval": None,
+        "missing_aspects": ["pest_identification"],
+        "required_aspects": ["pest_identification"],
+    }
+    assert _is_disclaimed_guidance_eligible(insufficient_no_context) is False
+
+    insufficient_with_safety = {
+        "sufficient": False,
+        "retrieval": SimpleNamespace(chunks=["x"], limitations=[]),
+        "missing_aspects": ["toxicity_pet_safety"],
+        "required_aspects": ["toxicity_pet_safety"],
+    }
+    assert _is_disclaimed_guidance_eligible(insufficient_with_safety) is False
+
+
+def test_diagnostics_carry_llm_general_guidance_used_flag() -> None:
+    """The diagnostics builder must reflect the runtime-only guidance flag."""
+    from app.assistant.graph import _diagnostics
+
+    state = {
+        "topic": "pests",
+        "required_aspects": ["pest_identification"],
+        "covered_aspects": [],
+        "missing_aspects": ["pest_identification"],
+        "evidence_path": ["rag"],
+        "answer_language": "es",
+        "answerability_status": "insufficient",
+        "contradictions": [],
+        "llm_general_guidance_used": True,
+    }
+    diagnostics = _diagnostics(state)
+    assert diagnostics["llm_general_guidance_used"] is True
+
+    state_off = {**state, "llm_general_guidance_used": False}
+    diagnostics_off = _diagnostics(state_off)
+    assert diagnostics_off["llm_general_guidance_used"] is False
+
+
+def test_care_diagnostics_and_api_schema_expose_new_flag() -> None:
+    """Both the internal Pydantic model and the public API schema must expose the flag."""
+    from app.assistant.care_contracts import CareDiagnostics
+    from app.assistant.schemas import AssistantCareDiagnostics
+
+    internal = CareDiagnostics()
+    assert internal.llm_general_guidance_used is False
+
+    public = AssistantCareDiagnostics()
+    assert public.llm_general_guidance_used is False
+
+
+@pytest.mark.asyncio
+async def test_pest_question_with_relevant_context_routes_to_disclaimed_guidance() -> None:
+    """4.1 - Pest question with relevant context but insufficient evidence uses disclaimed guidance."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=PEST_CLASSIFIER,
+        model_response=(
+            "Que validaron las fuentes: ninguna parte fue validada por fuentes recuperadas. "
+            "Que no validaron las fuentes: identificacion del insecto y pasos de aislamiento. "
+            "Orientacion general no validada: revisar el enves de las hojas, aislar la planta, "
+            "retirar manualmente con agua o un pano humedo. "
+            "Detalles que ayudarian: una foto cercana del insecto y sintomas observados."
+        ),
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Veo unos insectos blancos pequenos debajo de las hojas de mi Pata",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert result["answerability_status"] == "insufficient"
+    assert result["llm_general_guidance_used"] is True
+    assert "Que validaron las fuentes" in result["answer"]
+    assert "Detalles que ayudarian" in result["answer"]
+    assert result["diagnostics"]["llm_general_guidance_used"] is True
+    assert result["diagnostics"]["missing_aspects"] == ["pest_identification", "pest_isolation_steps", "pest_prevention_steps"]
+    assert result["diagnostics"]["covered_aspects"] == []
+    assert result["diagnostics"]["answerability_status"] == "insufficient"
+
+
+@pytest.mark.asyncio
+async def test_disclaimed_guidance_diagnostic_flag_and_no_prompt_leakage() -> None:
+    """4.2 - Diagnostics expose the flag and bounded metadata without prompt/evidence leakage."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=PEST_CLASSIFIER,
+        model_response=(
+            "Que validaron las fuentes: ninguna. "
+            "Que no validaron las fuentes: identificacion del insecto. "
+            "Orientacion general no validada: inspeccionar el enves y aislar la planta. "
+            "Detalles que ayudarian: foto cercana del insecto."
+        ),
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Veo unos insectos blancos pequenos debajo de las hojas",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    diagnostics = result["diagnostics"]
+    assert diagnostics["llm_general_guidance_used"] is True
+    assert "required_aspects" in diagnostics
+    assert "covered_aspects" in diagnostics
+    assert "missing_aspects" in diagnostics
+    assert diagnostics["missing_aspects"] == ["pest_identification", "pest_isolation_steps", "pest_prevention_steps"]
+
+    disclaimed_prompts = [
+        p for p in tools.model_prompts
+        if "Que validaron las fuentes" in p and "Orientacion general no validada" in p
+    ]
+    assert len(disclaimed_prompts) >= 1
+    full_prompt = disclaimed_prompts[0]
+    prompt_blob = full_prompt.lower()
+    assert "requiere riego moderado y sustrato" not in prompt_blob
+    assert "no cites ninguna fuente" in prompt_blob
+    assert "que validaron las fuentes" in prompt_blob
+    assert "orientacion general no validada" in prompt_blob
+    assert "Detalles que ayudarian" in full_prompt
+
+    diagnostics_blob = json.dumps(diagnostics, default=str)
+    assert "Que validaron las fuentes" not in diagnostics_blob
+    assert "Requiere riego moderado" not in diagnostics_blob
+
+
+@pytest.mark.asyncio
+async def test_disclaimed_guidance_emits_no_ingestion_claims() -> None:
+    """4.3 - Insufficient disclaimed-guidance answers must not emit ingestion claims."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=PEST_CLASSIFIER,
+        model_response=(
+            "Que validaron las fuentes: ninguna. "
+            "Que no validaron las fuentes: identificacion del insecto. "
+            "Orientacion general no validada: inspeccionar el enves. "
+            "Detalles que ayudarian: foto cercana."
+        ),
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Veo unos insectos blancos pequenos debajo de las hojas",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "insufficient"
+    assert result.get("ingestion_claims", []) == []
+    assert result.get("source_support", []) == []
+    assert result["llm_general_guidance_used"] is True
+    assert result["diagnostics"]["llm_general_guidance_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_partial_evidence_ingestion_uses_only_validated_source_support() -> None:
+    """4.4 - Partial answers persist ingestion only from validated source_support, not general guidance."""
+    partial_data = {
+        "status": "partial",
+        "covered_aspects": ["pest_identification"],
+        "missing_aspects": ["pest_treatment_action"],
+        "source_support": [
+            {
+                "claim": "Identificacion de la plaga validada por la ficha botanica.",
+                "source_urls": ["https://example.org/pests"],
+                "covered_aspects": ["pest_identification"],
+                "evidence_quote": "Las cochinillas aparecen como pequenos insectos blancos.",
+                "confidence": 0.88,
+            }
+        ],
+        "contradictions": [],
+        "confidence": 0.88,
+        "score": 0.88,
+        "passed": False,
+        "reasons": ["treatment_action is not directly supported"],
+    }
+
+    class PartialDisclaimedJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") in {"rag", "combined_rag_web"}:
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data=partial_data,
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = PartialDisclaimedJudgeTools(
+        web_results=[
+            SearchResult(
+                title="Trusted pest identification guide",
+                url="https://example.org/pests",
+                snippet="Las cochinillas aparecen como pequenos insectos blancos.",
+                source_domain="example.org",
+            ),
+            SearchResult(
+                title="Trusted pest treatment guide",
+                url="https://example.org/pests-treatment",
+                snippet="Para tratar cochinillas, aislar la planta y limpiar con un pano humedo.",
+                source_domain="example.org",
+            ),
+        ],
+        classifier_data={
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "pests",
+            "required_aspects": ["pest_identification", "pest_treatment_action"],
+            "plant_reference": "Pata",
+            "confidence": 0.9,
+            "needs_retrieval": True,
+        },
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Que insecto es este y como lo trato?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "partial"
+    assert result["covered_aspects"] == ["pest_identification"]
+    assert result["missing_aspects"] == ["pest_treatment_action"]
+    assert result.get("llm_general_guidance_used") is not True
+    ingestion_claims = result.get("ingestion_claims", [])
+    assert len(ingestion_claims) == 1
+    claim = ingestion_claims[0]
+    assert claim["covered_aspects"] == ["pest_identification"]
+    assert claim["source_url"] == "https://example.org/pests"
+    assert "pest_treatment_action" not in claim["covered_aspects"]
+
+
+@pytest.mark.asyncio
+async def test_safety_sensitive_missing_aspect_keeps_conservative_fallback() -> None:
+    """4.5 - Unsupported safety-sensitive claims stay on the conservative fallback path."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=SAFETY_PET_CLASSIFIER,
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Es segura para mascotas mi Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("llm_general_guidance_used") is not True
+    assert "conservative_safety_fallback" in result["fallback_reasons"]
+    assert "No encontre evidencia directa y confiable" in result["answer"]
+    assert "fuera del alcance de mascotas" in result["answer"]
+    assert result["diagnostics"]["llm_general_guidance_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_multilingual_pest_question_routes_by_schema_state_not_keywords() -> None:
+    """4.6 - Multilingual paraphrased pest question uses schema-validated state, not keywords."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data={
+            "language": "it",
+            "answer_language": "it",
+            "intent": "plant_care_question",
+            "topic": "pests",
+            "required_aspects": ["pest_identification", "pest_isolation_steps"],
+            "plant_reference": "Pata",
+            "confidence": 0.9,
+            "needs_retrieval": True,
+        },
+        model_response=(
+            "Cosa hanno convalidato le fonti: nulla. "
+            "Cosa non hanno convalidato le fonti: identificazione dell'insetto. "
+            "Orientamento generale non convalidato: ispezionare la pagina inferiore delle foglie. "
+            "Dettagli che aiuterebbero: una foto ravvicinata dell'insetto."
+        ),
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Vedo dei piccoli insetti bianchi sotto le foglie della mia Pata",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert result["answerability_status"] == "insufficient"
+    assert result["llm_general_guidance_used"] is True
+    assert result["diagnostics"]["answer_language"] == "it"
+    assert result["diagnostics"]["llm_general_guidance_used"] is True
+    assert result["diagnostics"]["missing_aspects"] == ["pest_identification", "pest_isolation_steps"]
+
+    disclaimed_prompts = [
+        p for p in tools.model_prompts
+        if "Que validaron las fuentes" in p and "Orientacion general no validada" in p
+    ]
+    assert len(disclaimed_prompts) >= 1
+    assert "answer_language (it)" in disclaimed_prompts[0]
+    assert "Vedo dei piccoli insetti bianchi" in disclaimed_prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# Combined RAG+web insufficient-evidence coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_combined_rag_web_insufficient_routes_to_disclaimed_guidance() -> None:
+    """RAG insufficient + web insufficient (combined judge) -> disclaimed guidance, no ingestion."""
+    insufficient_combined_data = {
+        "status": "insufficient",
+        "covered_aspects": [],
+        "missing_aspects": [
+            "pest_identification",
+            "pest_isolation_steps",
+            "pest_prevention_steps",
+        ],
+        "source_support": [],
+        "contradictions": [],
+        "confidence": 0.32,
+        "score": 0.32,
+        "passed": False,
+        "reasons": ["combined RAG+web evidence does not directly answer pest identification"],
+    }
+
+    class CombinedInsufficientJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") in {"rag", "combined_rag_web"}:
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data=insufficient_combined_data,
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = CombinedInsufficientJudgeTools(
+        web_results=[
+            SearchResult(
+                title="Generic plant care article",
+                url="https://example.org/care",
+                snippet="This plant prefers bright light and well-drained soil.",
+                source_domain="example.org",
+            ),
+            SearchResult(
+                title="Vague pest overview",
+                url="https://example.org/pests",
+                snippet="Many houseplants can be affected by common pests; consult a local expert.",
+                source_domain="example.org",
+            ),
+        ],
+        classifier_data=PEST_CLASSIFIER,
+        model_response=(
+            "Que validaron las fuentes: ninguna parte fue validada. "
+            "Que no validaron las fuentes: identificacion del insecto, "
+            "pasos de aislamiento y prevencion. "
+            "Orientacion general no validada: revisar el enves de las hojas, "
+            "aislar la planta y retirar manualmente con agua o un pano humedo. "
+            "Detalles que ayudarian: una foto cercana del insecto y sintomas observados."
+        ),
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Veo unos insectos blancos pequenos debajo de las hojas de mi Pata",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sufficient"] is False
+    assert result["answerability_status"] == "insufficient"
+    assert result["llm_general_guidance_used"] is True
+    assert result.get("ingestion_claims", []) == []
+    assert result.get("source_support", []) == []
+
+    assert "Que validaron las fuentes" in result["answer"]
+    assert "Orientacion general no validada" in result["answer"]
+    assert "Detalles que ayudarian" in result["answer"]
+
+    assert "No encontre evidencia suficiente" not in result["answer"]
+    assert "conservative_safety_fallback" not in result["fallback_reasons"]
+
+    diagnostics = result["diagnostics"]
+    assert diagnostics["llm_general_guidance_used"] is True
+    assert diagnostics["missing_aspects"] == [
+        "pest_identification",
+        "pest_isolation_steps",
+        "pest_prevention_steps",
+    ]
+    assert diagnostics["covered_aspects"] == []
+    assert diagnostics["answerability_status"] == "insufficient"
+
+    combined_judge_calls = [
+        c for c in tools.judge_calls
+        if c["payload"].get("evidence_type") == "combined_rag_web"
+    ]
+    assert len(combined_judge_calls) >= 1
+
+    disclaimed_prompts = [
+        p for p in tools.model_prompts
+        if "Que validaron las fuentes" in p and "Orientacion general no validada" in p
+    ]
+    assert len(disclaimed_prompts) >= 1
+    assert "no cites ninguna fuente" in disclaimed_prompts[0]
+    assert "https://example.org/care" not in disclaimed_prompts[0]
+    assert "https://example.org/pests" not in disclaimed_prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# Broader safety-boundary coverage
+# ---------------------------------------------------------------------------
+
+
+CHEMICAL_TREATMENT_CLASSIFIER = {
+    "language": "es",
+    "answer_language": "es",
+    "intent": "plant_care_question",
+    "topic": "pests",
+    "required_aspects": [
+        "safety_chemical_treatment_precautions",
+        "pest_treatment_action",
+    ],
+    "plant_reference": "Pata",
+    "confidence": 0.9,
+    "needs_retrieval": True,
+}
+
+
+PESTICIDE_INSTRUCTION_CLASSIFIER = {
+    "language": "es",
+    "answer_language": "es",
+    "intent": "plant_care_question",
+    "topic": "pests",
+    "required_aspects": [
+        "safety_chemical_treatment_precautions",
+        "pest_treatment_action",
+    ],
+    "plant_reference": "Pata",
+    "confidence": 0.88,
+    "needs_retrieval": True,
+}
+
+
+SAFETY_BOUNDARY_CASES = [
+    pytest.param(
+        SAFETY_PET_CLASSIFIER,
+        "Es toxica para gatos mi Pata?",
+        id="pet_safety",
+    ),
+    pytest.param(
+        CHEMICAL_TREATMENT_CLASSIFIER,
+        "Que precauciones debo tomar al aplicar un tratamiento quimico a mi Pata?",
+        id="chemical_treatment_precautions",
+    ),
+    pytest.param(
+        {
+            "language": "es",
+            "answer_language": "es",
+            "intent": "plant_care_question",
+            "topic": "pests",
+            "required_aspects": [
+                "safety_disposal_precautions",
+                "pest_treatment_action",
+            ],
+            "plant_reference": "Pata",
+            "confidence": 0.9,
+            "needs_retrieval": True,
+        },
+        "Como desecho de forma segura los residuos del tratamiento de mi Pata?",
+        id="safety_disposal_precautions",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("classifier,message", SAFETY_BOUNDARY_CASES)
+async def test_unsupported_safety_missing_aspects_avoid_disclaimed_guidance(
+    classifier: dict,
+    message: str,
+) -> None:
+    """Safety-sensitive missing aspects must never route to the disclaimed branch."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=classifier,
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message=message,
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("llm_general_guidance_used") is not True
+    assert result.get("ingestion_claims", []) == []
+    assert result.get("source_support", []) == []
+
+    disclaimed_prompts = [
+        p for p in tools.model_prompts
+        if "Que validaron las fuentes" in p and "Orientacion general no validada" in p
+    ]
+    assert disclaimed_prompts == []
+
+    diagnostics = result["diagnostics"]
+    assert diagnostics["llm_general_guidance_used"] is False
+
+    assert "conservative_safety_fallback" in result["fallback_reasons"]
+    assert result["answer"] is not None
+    lowered_answer = result["answer"].casefold()
+    for forbidden in (
+        "insecticida",
+        "plaguicida",
+        "imidacloprid",
+        "malation",
+        "dosis",
+        "ml por litro",
+        "gramos por litro",
+    ):
+        assert forbidden not in lowered_answer
+
+
+@pytest.mark.asyncio
+async def test_pesticide_instruction_request_does_not_return_chemical_advice() -> None:
+    """Insecticide / pesticide instructions without source support stay on the conservative path."""
+    tools = FakeTools(
+        rag_answerable=False,
+        plant_data=None,
+        web_results=[],
+        classifier_data=PESTICIDE_INSTRUCTION_CLASSIFIER,
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Que insecticida o plaguicida aplico a mi Pata y en que dosis?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result.get("llm_general_guidance_used") is not True
+    assert result.get("ingestion_claims", []) == []
+    assert result.get("source_support", []) == []
+    assert "conservative_safety_fallback" in result["fallback_reasons"]
+
+    disclaimed_prompts = [
+        p for p in tools.model_prompts
+        if "Que validaron las fuentes" in p and "Orientacion general no validada" in p
+    ]
+    assert disclaimed_prompts == []
+
+    answer_text = (result.get("answer") or "").casefold()
+    for forbidden in (
+        "imidacloprid",
+        "malation",
+        "piretrina",
+        "neem",
+        "aceite de neem",
+        "1 ml",
+        "2 ml",
+        "5 ml",
+        "10 ml",
+        "gramos por litro",
+        "dosis recomendada",
+        "aplicar cada",
+    ):
+        assert forbidden not in answer_text
+
+    assert result["diagnostics"]["llm_general_guidance_used"] is False

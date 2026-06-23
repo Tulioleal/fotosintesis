@@ -1442,3 +1442,107 @@ class TestClassifierModelRoutingAcrossFallbackChain:
 
         assert result.model == "gpt-5.4"
         assert openai.calls[0]["resolved_model"] == "gpt-5.4"
+
+
+@pytest.mark.asyncio
+async def test_fallback_wrapper_does_not_forward_gemini_model_id_to_openai() -> None:
+    """Provider-level regression for the cross-provider model id leak.
+
+    Builds a ModelProviderFallbackWrapper with a fake Gemini provider that
+    raises 503 and a fake OpenAI provider that records every kwargs dict it
+    receives. Calls generate_json with model_purpose='classifier' and
+    asserts the OpenAI provider's recorded kwargs contain no Gemini model
+    id and no model_purpose leak.
+    """
+    from app.providers.gemini import GeminiProviderError
+
+    circuit_breaker.clear()
+    clear_provider_fallbacks()
+
+    received_kwargs: list[dict[str, Any]] = []
+
+    class _FailingGemini(ModelProvider):
+        provider_name = "gemini-fail"
+
+        def __init__(self) -> None:
+            self.model = "gemini-2.5-flash"
+            self.classifier_model = "gemini-2.5-flash-lite"
+
+        async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
+            raise GeminiProviderError(
+                "503 UNAVAILABLE",
+                original_exception=RuntimeError("simulated 503"),
+            )
+
+        async def generate_json(
+            self, prompt: str, schema: dict[str, Any], **kwargs: Any
+        ) -> JsonGenerationResult:
+            raise GeminiProviderError(
+                "503 UNAVAILABLE",
+                original_exception=RuntimeError("simulated 503"),
+            )
+
+        async def judge_response(
+            self, payload: dict[str, Any], rubric: dict[str, Any], **kwargs: Any
+        ) -> JudgeResult:
+            raise NotImplementedError
+
+    class _RecordingOpenAI(ModelProvider):
+        provider_name = "openai-record"
+
+        def __init__(self) -> None:
+            self.model = "gpt-5.4"
+            self.classifier_model = "gpt-5.4-mini"
+
+        def _resolve(self, kwargs: dict[str, Any]) -> str:
+            explicit = kwargs.pop("model", None)
+            if explicit is not None:
+                return explicit
+            purpose = kwargs.pop("model_purpose", None)
+            if purpose == "classifier":
+                return self.classifier_model
+            return self.model
+
+        async def generate_text(self, prompt: str, **kwargs: Any) -> TextGenerationResult:
+            selected = self._resolve(kwargs)
+            received_kwargs.append({"op": "generate_text", "kwargs": kwargs})
+            return TextGenerationResult(
+                provider=self.provider_name, model=selected, text="ok"
+            )
+
+        async def generate_json(
+            self, prompt: str, schema: dict[str, Any], **kwargs: Any
+        ) -> JsonGenerationResult:
+            selected = self._resolve(kwargs)
+            received_kwargs.append({"op": "generate_json", "kwargs": kwargs})
+            return JsonGenerationResult(
+                provider=self.provider_name,
+                model=selected,
+                data={"ok": True},
+            )
+
+        async def judge_response(
+            self, payload: dict[str, Any], rubric: dict[str, Any], **kwargs: Any
+        ) -> JudgeResult:
+            raise NotImplementedError
+
+    gemini = _FailingGemini()
+    openai = _RecordingOpenAI()
+    wrapper = ModelProviderFallbackWrapper([gemini, openai])
+
+    result = await wrapper.generate_json(
+        "care prompt", {"type": "object"}, model_purpose="classifier"
+    )
+
+    assert result.provider == "openai-record"
+    assert result.model == "gpt-5.4-mini"
+    assert received_kwargs, "OpenAI fallback should have been called"
+
+    for call in received_kwargs:
+        kwargs = {k: v for k, v in call.items() if k != "op"}
+        assert "model" not in kwargs, (
+            f"OpenAI must not receive a provider-specific model id; got kwargs={kwargs!r}"
+        )
+        assert "model_purpose" not in kwargs, (
+            f"model_purpose must not reach the OpenAI provider; got kwargs={kwargs!r}"
+        )

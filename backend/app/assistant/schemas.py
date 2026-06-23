@@ -35,6 +35,7 @@ class AssistantCareDiagnostics(ApiSchema):
     answerability_status: str | None = None
     contradictions: list[dict] = []
     provider_fallbacks: list[dict] | None = None
+    llm_general_guidance_used: bool = False
 
 
 class AssistantReminderSuggestion(ApiSchema):

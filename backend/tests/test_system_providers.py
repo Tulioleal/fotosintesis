@@ -30,6 +30,13 @@ from app.providers.types import SearchResult
 
 @pytest.fixture(autouse=True)
 def reset_provider_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    for chain_var in (
+        "MODEL_PROVIDERS",
+        "JUDGE_PROVIDERS",
+        "SEARCH_PROVIDERS",
+        "VISION_PROVIDERS",
+    ):
+        monkeypatch.setenv(chain_var, "[]")
     monkeypatch.setenv("MODEL_PROVIDER", "mock")
     monkeypatch.setenv("VISION_PROVIDER", "mock")
     monkeypatch.setenv("JUDGE_PROVIDER", "mock")
@@ -1666,3 +1673,62 @@ async def test_gemini_default_text_call_does_not_use_classifier_model(
     assert models.kwargs is not None
     assert models.kwargs["model"] == "gemini-text"
     assert result.model == "gemini-text"
+
+
+@pytest.mark.asyncio
+async def test_openai_classifier_purpose_does_not_forward_model_purpose_to_sdk(
+    fake_openai_module: None,
+) -> None:
+    """The OpenAI SDK must not receive `model_purpose` as an unknown argument."""
+    seen: list[dict[str, object]] = []
+
+    class FakeResponses:
+        async def create(self, **kwargs: object) -> object:
+            seen.append(dict(kwargs))
+            return types.SimpleNamespace(output_text='{"ok": true}')
+
+    provider = OpenAIModelProvider(
+        api_key="test-key",
+        model="gpt-text",
+        classifier_model="gpt-classifier",
+    )
+    provider._client = types.SimpleNamespace(responses=FakeResponses())
+
+    await provider.generate_json(
+        "classifier prompt", {"type": "object"}, model_purpose="classifier"
+    )
+
+    assert seen, "SDK should have been called"
+    assert "model_purpose" not in seen[0], (
+        f"model_purpose leaked to OpenAI SDK: kwargs={seen[0]!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_classifier_purpose_does_not_forward_model_purpose_to_sdk(
+    fake_gemini_module: None,
+) -> None:
+    """The Gemini SDK must not receive `model_purpose` as an unknown argument."""
+    seen: list[dict[str, object]] = []
+
+    class FakeModels:
+        async def generate_content(self, **kwargs: object) -> object:
+            seen.append(dict(kwargs))
+            return types.SimpleNamespace(text='{"ok": true}')
+
+    models = FakeModels()
+    provider = GeminiModelProvider(
+        api_key="test-key",
+        model="gemini-text",
+        classifier_model="gemini-classifier",
+        client=types.SimpleNamespace(aio=types.SimpleNamespace(models=models)),
+    )
+
+    await provider.generate_json(
+        "classifier prompt", {"type": "object"}, model_purpose="classifier"
+    )
+
+    assert seen, "SDK should have been called"
+    assert "model_purpose" not in seen[0], (
+        f"model_purpose leaked to Gemini SDK: kwargs={seen[0]!r}"
+    )

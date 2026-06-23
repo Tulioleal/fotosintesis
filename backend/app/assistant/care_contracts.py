@@ -169,3 +169,4 @@ class CareDiagnostics(BaseModel):
     missing_aspects: list[RequiredAspect] = Field(default_factory=list)
     evidence_path: list[str] = Field(default_factory=list)
     answer_language: str | None = None
+    llm_general_guidance_used: bool = False
