@@ -7047,3 +7047,256 @@ async def test_grounded_response_institution_name_not_leaked() -> None:
 
     assert "Illinois Extension" not in result["answer"]
     assert "http" not in result["answer"]
+
+
+def test_grounded_answer_prompt_uses_display_name_in_prose() -> None:
+    """Prompt builder must instruct the model to use the display name (nickname) in response prose."""
+    from app.assistant.graph import _grounded_answer_prompt
+
+    prompt = _grounded_answer_prompt(
+        user_message="Como debo regar mi Pata?",
+        plant_name="Pata",
+        topic="watering",
+        evidence_type="rag",
+        evidence="Riego moderado.",
+        limitations=[],
+        source_metadata=[{"url": "https://example.org", "title": "Example"}],
+        extra_context="",
+        answer_language="es",
+    )
+
+    assert "Planta seleccionada: Pata" in prompt
+    assert "Cuando te dirijas a la planta en la respuesta" in prompt
+    assert "usa siempre el nombre proporcionado como 'Planta seleccionada'" in prompt
+    assert "Nunca reemplaces ese nombre por el nombre comun" in prompt
+    assert "nombre cientifico" in prompt
+    assert "binomio" in prompt
+
+
+def test_general_guidance_prompt_uses_display_name_in_prose() -> None:
+    """Prompt builder must instruct the model to use the display name (nickname) in all four sections."""
+    from app.assistant.graph import _general_guidance_with_disclaimer_prompt
+
+    prompt = _general_guidance_with_disclaimer_prompt(
+        user_message="Que cuidados basicos necesita mi Pata?",
+        plant_name="Pata",
+        topic="care_instructions",
+        answer_language="es",
+        required_aspects=["watering", "light"],
+        covered_aspects=[],
+        missing_aspects=["watering", "light"],
+        source_support=[],
+        source_metadata=[],
+    )
+
+    assert "Planta seleccionada: Pata" in prompt
+    assert "Cuando te dirijas a la planta en la respuesta" in prompt
+    assert "usa siempre el nombre proporcionado como 'Planta seleccionada'" in prompt
+    assert "Nunca reemplaces ese nombre por el nombre comun" in prompt
+    assert "nombre cientifico" in prompt
+    assert "binomio" in prompt
+    assert "las cuatro secciones" in prompt.lower()
+
+
+def test_conservative_safety_fallback_includes_display_name_instruction() -> None:
+    """Conservative safety fallback must include the display-name instruction in all three variants."""
+    from app.assistant.graph import _conservative_safety_draft
+
+    state_pet = {
+        "message": "Es segura para mascotas?",
+        "display_plant_name": "Pata",
+        "plant_binomial_name": "Cotyledon tomentosa",
+        "plant_scientific_name": "Cotyledon tomentosa",
+        "answer_language": "es",
+    }
+    state_edible = {
+        "message": "Es comestible?",
+        "display_plant_name": "Pata",
+        "plant_binomial_name": "Cotyledon tomentosa",
+        "plant_scientific_name": "Cotyledon tomentosa",
+        "answer_language": "es",
+    }
+    state_generic = {
+        "message": "Que cuidados necesito?",
+        "display_plant_name": "Pata",
+        "plant_binomial_name": "Cotyledon tomentosa",
+        "plant_scientific_name": "Cotyledon tomentosa",
+        "answer_language": "es",
+    }
+
+    draft_pet = _conservative_safety_draft(state_pet)
+    draft_edible = _conservative_safety_draft(state_edible)
+    draft_generic = _conservative_safety_draft(state_generic)
+
+    pet_instruction = "When addressing the plant, use the name provided as 'Plant reference'"
+    edible_instruction = "When addressing the plant, use the name provided as 'Plant reference'"
+    generic_instruction = "When addressing the plant, use the name provided as 'Plant reference'"
+
+    assert pet_instruction in str(draft_pet.required_points)
+    assert edible_instruction in str(draft_edible.required_points)
+    assert generic_instruction in str(draft_generic.required_points)
+
+
+def test_simple_fallback_draft_includes_display_name_instruction_by_default() -> None:
+    """Simple fallback draft must include the display-name instruction when no explicit required_points are passed."""
+    from app.assistant.graph import _simple_fallback_draft
+
+    state = {
+        "message": "Mi planta necesita agua?",
+        "display_plant_name": "Pata",
+        "plant_binomial_name": "Epipremnum aureum",
+        "plant_scientific_name": "Epipremnum aureum",
+        "answer_language": "es",
+    }
+
+    draft = _simple_fallback_draft(state, intent="test_intent")
+
+    instruction = "When addressing the plant, use the name provided as 'Plant reference'"
+    assert instruction in str(draft.required_points)
+    assert "Pata" in str(draft.required_points)
+
+
+def test_recovery_draft_includes_display_name_instruction() -> None:
+    """Recovery draft must include the display-name instruction."""
+    from app.assistant.graph import _recovery_draft_for_answer_generation
+
+    state = {
+        "message": "Mi Pata necesita luz?",
+        "display_plant_name": "Pata",
+        "plant_binomial_name": "Epipremnum aureum",
+        "plant_scientific_name": "Epipremnum aureum",
+        "answer_language": "es",
+    }
+
+    draft = _recovery_draft_for_answer_generation(
+        state,
+        intent="recovery_test",
+        evidence_type="rag",
+        evidence="Some evidence",
+        limitations=[],
+        source_metadata=[],
+    )
+
+    instruction = "When addressing the plant, use the name provided as 'Plant reference'"
+    assert instruction in str(draft.required_points)
+    assert "Pata" in str(draft.required_points)
+
+
+@pytest.mark.asyncio
+async def test_nickname_round_trips_through_grounded_answer_path() -> None:
+    """The nickname provided as plant_hint must round-trip through the grounded answer path."""
+    tools = FakeTools(
+        model_response="My Pata prefers medium light.",
+        rag_answerable=True,
+        knowledge_content="Pata is a popular indoor plant.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I care for my Pata?",
+        plant_hint="Pata",
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    grounded_prompt = tools.model_prompts[-1]
+    assert "Planta seleccionada: Pata" in grounded_prompt
+    assert "Epipremnum aureum" not in result["answer"] or "Pata" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_nickname_used_in_disclaimed_guidance_answer() -> None:
+    """The nickname must be used in disclaimed-guidance answers and llm_general_guidance_used must be True."""
+    tools = FakeTools(
+        rag_answerable=False,
+        web_results=[],
+        model_response="For your Pata, medium light is ideal.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="What general care tips for my Pata?",
+        plant_hint="Pata",
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert "Pata" in result["answer"]
+    assert result.get("diagnostics", {}).get("llm_general_guidance_used") is True
+
+
+@pytest.mark.asyncio
+async def test_nickname_used_in_conservative_safety_fallback() -> None:
+    """The nickname must appear in conservative safety fallback prose."""
+    tools = FakeTools(
+        rag_answerable=False,
+        web_results=[],
+        model_response="I did not find direct evidence.",
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Is my Pata safe for pets?",
+        plant_hint="Pata",
+        plant_binomial_name="Cotyledon tomentosa",
+    )
+
+    assert "Pata" in result["answer"] or "Pata" in tools.model_prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_operational_name_used_in_knowledge_search_not_nickname() -> None:
+    """The operational (binomial) name must be used for knowledge search, not the nickname."""
+    tools = FakeTools(
+        rag_answerable=True,
+        knowledge_content="Watering: Water when soil is dry.",
+    )
+
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How often should I water my Pata?",
+        plant_hint="Pata",
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    assert tools.knowledge_search_kwargs.get("scientific_name") == "Epipremnum aureum"
+    assert "Pata" not in str(tools.knowledge_search_kwargs.get("scientific_name", ""))
+
+
+@pytest.mark.asyncio
+async def test_operational_name_used_in_web_search_not_nickname() -> None:
+    """The operational name must be used for web search, not the nickname."""
+    tools = FakeTools(
+        rag_answerable=False,
+        web_results=[],
+        model_response="General guidance for your plant.",
+    )
+
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How often should I water my Pata?",
+        plant_hint="Pata",
+        plant_binomial_name="Epipremnum aureum",
+    )
+
+    web_query = tools.web_search_query or ""
+    assert "Pata" not in web_query or "Epipremnum aureum" in web_query
+
+
+@pytest.mark.asyncio
+async def test_operational_name_used_in_plant_data_not_nickname() -> None:
+    """The operational name must be used for plant data lookup, not the nickname."""
+    tools = FakeTools(
+        rag_answerable=True,
+        knowledge_content="Light: Bright indirect light.",
+    )
+
+    await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="What light does my Pata need?",
+        plant_hint="Pata",
+        plant_scientific_name="Epipremnum aureum",
+    )
+
+    if tools.plant_data_calls:
+        last_call = tools.plant_data_calls[-1]
+        assert last_call.kwargs.get("scientific_name") == "Epipremnum aureum"
+        assert "Pata" not in str(last_call.kwargs.get("scientific_name", ""))
