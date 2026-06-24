@@ -1,8 +1,4 @@
-## Purpose
-
-Defines manual and suggested plant-care reminders, recurrence, lifecycle actions, and notification permission fallback behavior.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Reminder lifecycle
 
@@ -31,30 +27,3 @@ The system SHALL prevent invalid reminder creation with specific validation mess
 
 - **WHEN** the user submits missing plant, missing action, past date, empty time or invalid recurrence
 - **THEN** the system blocks saving and displays the corresponding English validation message
-
-### Requirement: Recurring reminders
-
-The system SHALL calculate the next occurrence when a recurring reminder is completed.
-
-#### Scenario: Recurring reminder completed
-
-- **WHEN** the user completes a recurring pending reminder
-- **THEN** the system records completion and schedules or exposes the next occurrence
-
-### Requirement: AI-suggested reminders
-
-The system SHALL support AI-suggested reminders from plant profile, garden context or assistant conversation and MUST require user confirmation before creation.
-
-#### Scenario: Suggested reminder accepted
-
-- **WHEN** the user accepts a suggested care reminder
-- **THEN** the system creates the reminder and stores the suggestion justification
-
-### Requirement: Notification permission fallback
-
-The system SHALL preserve reminders when notification permissions are rejected.
-
-#### Scenario: Notification permission rejected
-
-- **WHEN** the user rejects notification permission
-- **THEN** the reminder remains saved and the system explains notifications will not be sent

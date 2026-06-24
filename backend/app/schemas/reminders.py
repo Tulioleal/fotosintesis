@@ -36,7 +36,7 @@ class ReminderBase(ApiSchema):
     def validate_action(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
-            raise ValueError("Indica una accion de cuidado.")
+            raise ValueError("Specify a care action.")
         return stripped
 
     @field_validator("suggestion_justification")
@@ -67,7 +67,7 @@ class ReminderUpdate(ApiSchema):
             return None
         stripped = value.strip()
         if not stripped:
-            raise ValueError("Indica una accion de cuidado.")
+            raise ValueError("Specify a care action.")
         return stripped
 
 

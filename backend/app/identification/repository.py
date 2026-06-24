@@ -13,8 +13,8 @@ from app.providers.types import PlantCandidate
 def _possible_match_copy(candidate: PlantCandidate) -> str:
     confidence = candidate.confidence_label.value
     return (
-        f"Posible coincidencia, no definitiva. Confianza {confidence}; "
-        "confirmala despues de revisar rasgos visibles y taxonomia GBIF."
+        f"Possible match, not definitive. Confidence {confidence}; "
+        "confirm after reviewing visible traits and GBIF taxonomy."
     )
 
 

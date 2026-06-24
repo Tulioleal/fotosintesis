@@ -29,9 +29,9 @@ async def create_identification(
     content = await file.read()
     mime_type = file.content_type or "application/octet-stream"
     if mime_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=415, detail="Subi una imagen JPEG, PNG o WebP.")
+        raise HTTPException(status_code=415, detail="Upload a JPEG, PNG, or WebP image.")
     if not content or len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=422, detail="La imagen esta vacia o supera 8 MB.")
+        raise HTTPException(status_code=422, detail="The image is empty or exceeds 8 MB.")
 
     extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
     path = f"identifications/{user.id}/{uuid4()}.{extension}"
@@ -47,7 +47,7 @@ async def create_identification(
         size_bytes=stored.size_bytes,
         metadata={"filename": file.filename or "plant-image", "bucket": stored.bucket},
         status="needs_confirmation",
-        message="Revisa estas posibles coincidencias antes de confirmar una especie.",
+        message="Review these possible matches before confirming a species.",
     )
 
     try:
@@ -65,7 +65,7 @@ async def create_identification(
             identification_id,
             user.id,
             "maas_unavailable",
-            "No pudimos consultar el analisis visual. Reintenta o usa busqueda manual.",
+            "We could not query the visual analysis. Retry or use manual search.",
         )
 
     candidates = [candidate for candidate in analysis.candidates[:3] if candidate.scientific_name]
@@ -75,7 +75,7 @@ async def create_identification(
             identification_id,
             user.id,
             "blurry_image",
-            "La imagen parece borrosa. Reintenta con mejor foco y luz natural.",
+            "The image appears blurry. Retry with better focus and natural light.",
             candidates=candidates,
         )
 
@@ -86,7 +86,7 @@ async def create_identification(
             identification_id,
             user.id,
             "no_plant",
-            "No encontramos una planta clara en la imagen. Proba con una foto mas cercana.",
+            "We did not find a clear plant in the image. Try a closer photo.",
         )
     if not reliable:
         return await _sad_response(
@@ -94,7 +94,7 @@ async def create_identification(
             identification_id,
             user.id,
             "low_confidence",
-            "La imagen no produjo coincidencias confiables. Reintenta con mejor luz y foco.",
+            "The image did not produce reliable matches. Retry with better light and focus.",
             candidates=candidates,
         )
 
@@ -114,7 +114,7 @@ async def create_identification(
             identification_id,
             user.id,
             "no_gbif_match",
-            "Vimos posibles plantas, pero GBIF no valido los nombres sugeridos. Usa busqueda manual.",
+            "We saw possible plants, but GBIF did not validate the suggested names. Use manual search.",
         )
 
     response = await repository.get_response(identification_id, user.id)
@@ -164,6 +164,6 @@ async def confirm_candidate(
     if candidate is None:
         raise HTTPException(
             status_code=409,
-            detail="Solo podes confirmar una candidata validada taxonomicamente.",
+            detail="You can only confirm a taxonomically validated candidate.",
         )
     return ConfirmationResponse(status="confirmed", candidate=candidate)

@@ -33,14 +33,14 @@ async def get_plant_profile(
     if candidate is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Solo podes ver perfiles de plantas confirmadas y validadas.",
+            detail="You can only view profiles of confirmed and validated plants.",
         )
 
     candidate_name = candidate.accepted_scientific_name or candidate.suggested_scientific_name
     if candidate_name.strip().casefold() != scientific_name.strip().casefold():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="La candidata confirmada no coincide con el perfil solicitado.",
+            detail="The confirmed candidate does not match the requested profile.",
         )
 
     return await repository.get_or_create_profile(
@@ -64,7 +64,7 @@ async def save_garden_plant(
     if plant is None:
         raise HTTPException(
             status_code=409,
-            detail="Solo podes guardar plantas confirmadas y validadas.",
+            detail="You can only save confirmed and validated plants.",
         )
     return plant
 
@@ -86,7 +86,7 @@ async def get_garden_plant(
 ) -> GardenPlantResponse:
     plant = await PlantProfileGardenRepository(session).get_garden_plant(garden_id, user.id)
     if plant is None:
-        raise HTTPException(status_code=404, detail="Planta no encontrada en Mi Jardin.")
+        raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     return plant
 
 
@@ -103,13 +103,13 @@ async def delete_garden_plant(
         confirm_reminders=confirm_reminders,
     )
     if result is None:
-        raise HTTPException(status_code=404, detail="Planta no encontrada en Mi Jardin.")
+        raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     if result == "reminder_confirmation_required":
         raise HTTPException(
             status_code=409,
             detail=(
-                "Esta planta tiene recordatorios activos. "
-                "Confirma explicitamente para eliminarla."
+                "This plant has active reminders. "
+                "Explicitly confirm to delete it."
             ),
         )
     return GardenDeleteResponse(status=result)

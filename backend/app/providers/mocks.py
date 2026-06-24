@@ -68,7 +68,7 @@ class MockVisionPlantIdentificationProvider(ImageAnalysisProvider):
                     scientific_name="Cotyledon tomentosa",
                     common_name="Pata de oso",
                     confidence_label=ConfidenceLabel.medium,
-                    visible_traits=["hojas carnosas", "crecimiento compacto"],
+                    visible_traits=["fleshy leaves", "compact growth"],
                     provider=self.provider_name,
                 )
             ],

@@ -98,7 +98,7 @@ class AssistantRepository:
             )
         ).first()
         if plant is None:
-            raise ValueError("La planta indicada no existe en tu jardin.")
+            raise ValueError("The selected plant does not exist in your garden.")
 
         reminder_id = uuid4()
         await self.session.execute(

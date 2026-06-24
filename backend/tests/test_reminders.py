@@ -21,7 +21,7 @@ async def test_reminder_routes_support_authenticated_crud_flow(
         session_factory, email="routes@example.com"
     )
     headers = {"Authorization": f"Bearer {token}"}
-    payload = _reminder_payload(garden_plant_id, action="Regar", recurrence="weekly")
+    payload = _reminder_payload(garden_plant_id, action="Water", recurrence="weekly")
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         created = await client.post("/reminders", json=payload, headers=headers)
@@ -30,21 +30,21 @@ async def test_reminder_routes_support_authenticated_crud_flow(
         filtered = await client.get(f"/reminders?garden_plant_id={garden_plant_id}", headers=headers)
         updated = await client.patch(
             f"/reminders/{reminder_id}",
-            json={"action": "Fertilizar", "recurrence": "none"},
+            json={"action": "Fertilize", "recurrence": "none"},
             headers=headers,
         )
         completed = await client.post(f"/reminders/{reminder_id}/complete", headers=headers)
         deleted = await client.delete(f"/reminders/{reminder_id}", headers=headers)
 
     assert created.status_code == 201
-    assert created.json()["action"] == "Regar"
+    assert created.json()["action"] == "Water"
     assert created.json()["plant_name"] == "Helecho"
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [reminder_id]
     assert filtered.status_code == 200
     assert [item["id"] for item in filtered.json()] == [reminder_id]
     assert updated.status_code == 200
-    assert updated.json()["action"] == "Fertilizar"
+    assert updated.json()["action"] == "Fertilize"
     assert updated.json()["recurrence"] == "none"
     assert completed.status_code == 200
     assert completed.json()["status"] == "completed"
@@ -70,7 +70,7 @@ async def test_reminder_routes_enforce_ownership_validation_and_not_found(
             "/reminders",
             json={
                 "garden_plant_id": str(garden_plant_id),
-                "action": "Regar",
+                "action": "Water",
                 "date": "2000-01-01",
                 "time": "09:00:00",
                 "recurrence": "none",
@@ -79,11 +79,11 @@ async def test_reminder_routes_enforce_ownership_validation_and_not_found(
         )
         wrong_plant = await client.post(
             "/reminders",
-            json=_reminder_payload(other_garden_plant_id, action="Regar"),
+            json=_reminder_payload(other_garden_plant_id, action="Water"),
             headers=headers,
         )
         missing_update = await client.patch(
-            f"/reminders/{missing_reminder_id}", json={"action": "Regar"}, headers=headers
+            f"/reminders/{missing_reminder_id}", json={"action": "Water"}, headers=headers
         )
         missing_complete = await client.post(
             f"/reminders/{missing_reminder_id}/complete", headers=headers
@@ -91,9 +91,9 @@ async def test_reminder_routes_enforce_ownership_validation_and_not_found(
         missing_delete = await client.delete(f"/reminders/{missing_reminder_id}", headers=headers)
 
     assert past_due.status_code == 422
-    assert past_due.json()["detail"] == "La fecha y hora deben ser futuras."
+    assert past_due.json()["detail"] == "The date and time must be in the future."
     assert wrong_plant.status_code == 404
-    assert wrong_plant.json()["detail"] == "Planta no encontrada en Mi Jardin."
+    assert wrong_plant.json()["detail"] == "Plant not found in My Garden."
     assert missing_update.status_code == 404
     assert missing_complete.status_code == 404
     assert missing_delete.status_code == 404
@@ -122,11 +122,11 @@ async def test_repository_creates_lists_filters_and_counts_active_reminders(
         repository = ReminderRepository(session)
         later = await repository.create_reminder(
             user_id=user_id,
-            payload=_create_payload(garden_plant_id, action="Fertilizar", days=2),
+            payload=_create_payload(garden_plant_id, action="Fertilize", days=2),
         )
         earlier = await repository.create_reminder(
             user_id=user_id,
-            payload=_create_payload(garden_plant_id, action="Regar", days=1),
+            payload=_create_payload(garden_plant_id, action="Water", days=1),
         )
         wrong_filter = await repository.list_reminders(
             user_id=user_id, garden_plant_id=other_garden_plant_id
@@ -137,7 +137,7 @@ async def test_repository_creates_lists_filters_and_counts_active_reminders(
     assert later is not None
     assert earlier is not None
     assert wrong_filter == []
-    assert [item.action for item in listed] == ["Regar", "Fertilizar"]
+    assert [item.action for item in listed] == ["Water", "Fertilize"]
     assert listed[0].plant_name == "Helecho"
     assert active_count == 2
 
@@ -156,10 +156,10 @@ async def test_repository_enforces_garden_ownership(
     async with session_factory() as session:
         repository = ReminderRepository(session)
         created = await repository.create_reminder(
-            user_id=user_id, payload=_create_payload(garden_plant_id, action="Regar")
+            user_id=user_id, payload=_create_payload(garden_plant_id, action="Water")
         )
         denied_create = await repository.create_reminder(
-            user_id=user_id, payload=_create_payload(other_garden_plant_id, action="Regar")
+            user_id=user_id, payload=_create_payload(other_garden_plant_id, action="Water")
         )
         denied_update = await repository.update_reminder(
             user_id=user_id,
@@ -189,22 +189,22 @@ async def test_repository_updates_partial_fields_and_preserves_omitted_values(
             user_id=user_id,
             payload=_create_payload(
                 garden_plant_id,
-                action="Regar",
+                action="Water",
                 recurrence=ReminderRecurrence.weekly,
-                suggestion="Sugerido",
+                suggestion="Suggested",
             ),
         )
         updated = await repository.update_reminder(
             user_id=user_id,
             reminder_id=created.id,
-            payload=ReminderUpdate(action="  Fertilizar  "),
+            payload=ReminderUpdate(action="  Fertilize  "),
         )
 
     assert updated is not None
-    assert updated.action == "Fertilizar"
+    assert updated.action == "Fertilize"
     assert updated.garden_plant_id == garden_plant_id
     assert updated.recurrence == ReminderRecurrence.weekly
-    assert updated.suggestion_justification == "Sugerido"
+    assert updated.suggestion_justification == "Suggested"
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_repository_deletes_pending_reminders_and_handles_missing_records(
     async with session_factory() as session:
         repository = ReminderRepository(session)
         created = await repository.create_reminder(
-            user_id=user_id, payload=_create_payload(garden_plant_id, action="Regar")
+            user_id=user_id, payload=_create_payload(garden_plant_id, action="Water")
         )
         deleted = await repository.delete_reminder(user_id=user_id, reminder_id=created.id)
         deleted_again = await repository.delete_reminder(user_id=user_id, reminder_id=created.id)
@@ -240,7 +240,7 @@ async def test_repository_completes_non_recurring_and_recurring_reminders(
     async with session_factory() as session:
         repository = ReminderRepository(session)
         one_time = await repository.create_reminder(
-            user_id=user_id, payload=_create_payload(garden_plant_id, action="Regar")
+            user_id=user_id, payload=_create_payload(garden_plant_id, action="Water")
         )
         completed_one_time = await repository.complete_reminder(
             user_id=user_id, reminder_id=one_time.id
@@ -248,7 +248,7 @@ async def test_repository_completes_non_recurring_and_recurring_reminders(
         recurring = await repository.create_reminder(
             user_id=user_id,
             payload=_create_payload(
-                garden_plant_id, action="Fertilizar", recurrence=ReminderRecurrence.weekly
+                garden_plant_id, action="Fertilize", recurrence=ReminderRecurrence.weekly
             ),
         )
         completed_recurring = await repository.complete_reminder(
@@ -305,8 +305,8 @@ async def _create_user_garden(
                 user_id=user.id,
                 profile_id=profile_id,
                 nickname="Helecho",
-                notes="Pulverizar hojas",
-                location="Balcon",
+                notes="Mist the leaves",
+                location="Balcony",
                 custom_data={},
             )
         )

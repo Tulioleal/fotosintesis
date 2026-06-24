@@ -74,7 +74,7 @@ The backend SHALL use LangGraph nodes for intent classification, user context lo
 
 ### Requirement: Multilingual care intent classification
 
-The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, and `needs_retrieval`. The classifier SHALL use the configured cheaper/faster model from the same provider family as the main answer model. Classifier output MUST pass schema validation before it can drive routing or retrieval. Classifier confidence SHALL be retained as observability metadata and SHALL NOT be the sole reason to reject an otherwise valid classifier output.
+The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, and `needs_retrieval`. The classifier SHALL use the configured cheaper/faster model from the same provider family as the main answer model. Classifier output MUST pass schema validation before it can drive routing or retrieval. Classifier confidence SHALL be retained as observability metadata and SHALL NOT be the sole reason to reject an otherwise valid classifier output. Deterministic Spanish-keyword-based semantic intent detection SHALL NOT be used; the multilingual LLM classifier and explicit request fields (`plant`, `plant_binomial_name`, `plant_scientific_name`, reminder action fields, light measurement fields) are the sole semantic-intent path. Non-semantic safety boundaries (such as the prompt-injection `INJECTION_PATTERNS` check) MAY remain deterministic.
 
 #### Scenario: Spanish watering frequency classification
 
@@ -133,9 +133,15 @@ The assistant plant-care answer pipeline SHALL classify user input before retrie
 - **THEN** the assistant uses the classifier output for routing
 - **AND** the assistant records the low confidence as diagnostic or structured log metadata without adding a tool failure
 
+#### Scenario: Spanish-keyword deterministic routing is removed
+
+- **WHEN** the LLM classifier is unavailable or returns invalid output and a non-English user message contains common Spanish reminder, light-measurement, edibility, pet-safety, native-range, or identification keywords
+- **THEN** the assistant MUST NOT route the message to `reminder_request`, `light_measurement_question`, `plant_identification_question`, or a domain-specific care route based on those keywords
+- **AND** the assistant falls back to `plant_care_question_unknown` (with `topic: "general_care"` and `required_aspects: ["general_care_summary"]`) or asks for clarification
+
 ### Requirement: Classifier fallback handling
 
-The assistant SHALL fall back to minimal deterministic routing or clarification when the multilingual classifier fails, times out, all classifier provider attempts fail, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative. The fallback path MUST NOT infer detailed botanical `topic` or domain-qualified `required_aspects` values from deterministic keyword rules. When classifier validation identifies missing required fields, the repair retry SHALL receive those missing field names explicitly and SHALL preserve any valid fields from the previous classifier response.
+The assistant SHALL fall back to minimal deterministic routing or clarification when the multilingual classifier fails, times out, all classifier provider attempts fail, returns invalid JSON, returns non-object data, returns unknown enum values, includes forbidden extra fields, or remains structurally invalid after one repair retry. The fallback path SHALL NOT treat unvalidated classifier output as authoritative. The fallback path MUST NOT infer detailed botanical `topic` or domain-qualified `required_aspects` values from deterministic keyword rules. The fallback path MUST NOT perform Spanish-keyword-based semantic intent detection for any intent other than `unsafe_or_injection`; reminder, light-measurement, plant-identification, edibility, pet-safety, native-range, and taxonomy routing are the exclusive responsibility of the LLM classifier and the explicit request fields. When classifier validation identifies missing required fields, the repair retry SHALL receive those missing field names explicitly and SHALL preserve any valid fields from the previous classifier response.
 
 #### Scenario: Invalid classifier output is retried once
 
@@ -173,9 +179,10 @@ The assistant SHALL fall back to minimal deterministic routing or clarification 
 #### Scenario: Minimal fallback routes explicit non-care intents
 
 - **WHEN** LLM classification cannot produce schema-valid output after provider fallback and repair
-- **AND** the user message explicitly matches unsafe or prompt-injection input, a reminder request, a light measurement request, a plant identification request, or an obvious out-of-domain message with no botanical relevance or plant context
-- **THEN** minimal deterministic routing MAY select only `unsafe_or_injection`, `reminder_request`, `light_measurement_question`, `plant_identification_question`, or `out_of_domain`
+- **AND** the user message explicitly matches unsafe or prompt-injection input or an obvious out-of-domain message with no botanical relevance or plant context
+- **THEN** minimal deterministic routing MAY select only `unsafe_or_injection` or `out_of_domain`
 - **AND** the assistant does not run the plant-care evidence retrieval pipeline for those routes
+- **AND** the assistant MUST NOT select `reminder_request`, `light_measurement_question`, or `plant_identification_question` based on Spanish-keyword pattern matching in this fallback path
 
 #### Scenario: Minimal fallback routes unknown plant-care input conservatively
 
@@ -440,7 +447,7 @@ The assistant plant-care pipeline SHALL consume the centralized aspect metadata 
 
 ### Requirement: Aspect-gated care answer synthesis
 
-The assistant SHALL validate local and web evidence against the requested domain-qualified `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST integrate source-backed claims and any complementary general guidance in a continuous narrative that signals the origin of each part through soft linguistic connectors. Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the normalized judge result. The normalized judge result MUST use only canonical requested aspect identifiers in `covered_aspects` and `missing_aspects`; explanatory judge text MUST remain in reason fields and MUST NOT be used as a missing aspect. Diagnosis answers MUST present causes as hypotheses unless source-supported evidence directly supports a definitive claim. Final prose MUST NOT include URLs, institution names, or blocks labeled `Source-backed`, `Sources`, `References`, or equivalents; source attribution is delivered through the structured `sources[]` response field, not through the prose. The `_grounded_answer_prompt` MUST NOT instruct the model to add an attribution block, source link, or institutional name based on `evidence_type` (including `evidence_type == "structured_api"`).
+The assistant SHALL validate local and web evidence against the requested domain-qualified `required_aspects` before synthesizing a plant-care answer. Final care answers MUST distinguish source-validated claims from unsupported or general guidance, SHALL preserve the classified `answer_language`, and MUST integrate source-backed claims and any complementary general guidance in a continuous narrative that signals the origin of each part through soft linguistic connectors (for example, `As a general guideline…`, `In general terms…`, `A common complementary practice is…`, `As a complementary reference…`). Validation SHALL use context-aware thresholds based on aspect safety sensitivity and structural strength of the normalized judge result. The normalized judge result MUST use only canonical requested aspect identifiers in `covered_aspects` and `missing_aspects`; explanatory judge text MUST remain in reason fields and MUST NOT be used as a missing aspect. Diagnosis answers MUST present causes as hypotheses unless source-supported evidence directly supports a definitive claim. Final prose MUST NOT include URLs, institution names, or blocks labeled `Source-backed`, `Sources`, `References`, or equivalents; source attribution is delivered through the structured `sources[]` response field, not through the prose. The `_grounded_answer_prompt` MUST be written in English, MUST NOT instruct the model to add an attribution block, source link, or institutional name based on `evidence_type` (including `evidence_type == "structured_api"`), MUST instruct the model to integrate source-backed claims and any complementary general guidance into continuous narrative prose using soft linguistic connectors (for example, `As a general guideline…`, `In general terms…`, `A common complementary practice is…`, `As a complementary reference…`), and MUST include a display-name preservation paragraph that instructs the model to address the plant by the selected plant name (the display name / nickname) and never replace it with the common name, scientific name, or binomial from the evidence, taxonomy context, or source metadata. The connector-priority paragraph MUST instruct the model that soft linguistic connectors (for example, `As a general guideline…`, `In general terms…`, `A common complementary practice is…`, `As a complementary reference…`) are preferred over direct repetition of the same connective phrase in adjacent paragraphs, to avoid stilted prose.
 
 #### Scenario: Complete aspect coverage answers directly
 
@@ -514,7 +521,7 @@ The assistant SHALL validate local and web evidence against the requested domain
 
 ### Requirement: Disclaimed general guidance answer mode
 
-The assistant SHALL support a runtime-only `general_guidance_with_disclaimer` answer mode for plant-care questions when validated evidence is relevant but incomplete or insufficient and the missing guidance is not safety-sensitive. This mode MUST preserve the classified `answer_language`, MUST clearly separate source-validated facts from general model guidance, MUST explicitly state which requested information was not validated by retrieved sources, MUST NOT cite general guidance as evidence, and MUST request additional details when they would materially improve the answer.
+The assistant SHALL support a runtime-only `general_guidance_with_disclaimer` answer mode for plant-care questions when validated evidence is relevant but incomplete or insufficient and the missing guidance is not safety-sensitive. This mode MUST preserve the classified `answer_language`, MUST clearly separate source-validated facts from general model guidance, MUST explicitly state which requested information was not validated by retrieved sources, MUST NOT cite general guidance as evidence, and MUST request additional details when they would materially improve the answer. The disclaimed-guidance prompt (`_general_guidance_with_disclaimer_prompt`) MUST be written in English and MUST include a display-name preservation paragraph that instructs the model to address the plant by the selected plant name (the display name / nickname) and never replace it with the common name, scientific name, or binomial from the evidence, taxonomy context, or source metadata.
 
 #### Scenario: Full evidence keeps grounded answer behavior
 
@@ -1064,12 +1071,24 @@ The assistant SHALL keep the chat database session usable after best-effort know
 
 ### Requirement: Safety and failure handling
 
-The assistant MUST resist prompt injection and MUST NOT claim a failed tool action was completed.
+The assistant MUST resist prompt injection and MUST NOT claim a failed tool action was completed. The prompt-injection defense MUST be expressed in English-language `INJECTION_PATTERNS` entries; deterministic Spanish-keyword pattern matching SHALL NOT be used for injection resistance. The conservative safety fallback template (`_conservative_safety_answer`) MUST be written in English.
 
 #### Scenario: Tool fails
 
 - **WHEN** a tool call fails during a requested action
 - **THEN** the assistant states that the action was not completed and logs the failure
+
+#### Scenario: English prompt-injection pattern matches an English attack
+
+- **WHEN** a user message contains an English-language prompt-injection attempt such as `ignore the instructions` or `omit the rules`
+- **THEN** the English `INJECTION_PATTERNS` entry matches the message
+- **AND** the assistant routes the message as `unsafe_or_injection`
+
+#### Scenario: Spanish prompt-injection pattern entry is removed
+
+- **WHEN** a Spanish-language prompt-injection attempt arrives and the LLM classifier is available
+- **THEN** the assistant relies on the LLM classifier to detect the injection rather than on a deterministic Spanish-keyword pattern entry
+- **AND** the assistant still routes the message as `unsafe_or_injection` when the classifier identifies the injection
 
 ### Requirement: Assistant plant naming context
 

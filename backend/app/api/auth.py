@@ -96,7 +96,7 @@ async def request_recovery(payload: RecoveryRequest, repository: AuthRepo) -> Re
     )
     return RecoveryResponse(
         status="ok",
-        message="Si existe una cuenta con ese correo, te enviaremos instrucciones para recuperar el acceso.",
+        message="If an account with that email exists, we will send you instructions to recover access.",
     )
 
 

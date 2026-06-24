@@ -20,5 +20,5 @@ async def create_light_measurement(
         user_id=user.id, payload=payload
     )
     if measurement is None:
-        raise HTTPException(status_code=404, detail="Planta no encontrada en Mi Jardin.")
+        raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     return measurement

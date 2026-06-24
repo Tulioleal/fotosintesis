@@ -78,7 +78,7 @@ async def test_password_recovery_returns_neutral_confirmation() -> None:
         )
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
-        assert "Si existe una cuenta" in response.json()["message"]
+        assert "If an account with that email exists" in response.json()["message"]
 
 
 @pytest.mark.asyncio

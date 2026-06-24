@@ -14,11 +14,11 @@ async def home_summary(user: AuthUser = Depends(get_current_user)) -> HomeSummar
         user=to_public_user(user),
         empty_state=True,
         access=[
-            HomeAccessItem(key="identify", label="Identificar planta", href="/identify"),
-            HomeAccessItem(key="search", label="Buscar plantas", href="/search"),
-            HomeAccessItem(key="light_meter", label="Medidor de luz", href="/light-meter"),
-            HomeAccessItem(key="reminders", label="Recordatorios", href="/reminders"),
-            HomeAccessItem(key="garden", label="Mi Jardín", href="/garden"),
-            HomeAccessItem(key="assistant", label="Asistente", href="/assistant"),
+            HomeAccessItem(key="identify", label="Identify plant", href="/identify"),
+            HomeAccessItem(key="search", label="Search plants", href="/search"),
+            HomeAccessItem(key="light_meter", label="Light meter", href="/light-meter"),
+            HomeAccessItem(key="reminders", label="Reminders", href="/reminders"),
+            HomeAccessItem(key="garden", label="My Garden", href="/garden"),
+            HomeAccessItem(key="assistant", label="Assistant", href="/assistant"),
         ],
     )

@@ -20,13 +20,13 @@ from app.profile_garden.schemas import (
 )
 
 SECTION_TOPICS = {
-    "description": "descripcion",
-    "characteristics": "caracteristicas",
-    "conditions": "condiciones",
-    "care": "cuidados",
-    "pests": "plagas",
-    "diseases": "enfermedades",
-    "recommendations": "recomendaciones",
+    "description": "description",
+    "characteristics": "characteristics",
+    "conditions": "conditions",
+    "care": "care",
+    "pests": "pests",
+    "diseases": "diseases",
+    "recommendations": "recommendations",
 }
 
 
@@ -219,18 +219,18 @@ def _build_profile_evidence(
     sections = {key: grouped.get(key, [])[:3] for key in SECTION_TOPICS}
     for key, fallback in SECTION_TOPICS.items():
         if not sections[key]:
-            sections[key] = [f"No hay evidencia suficiente para {fallback} de {scientific_name}."]
+            sections[key] = [f"Insufficient evidence for {fallback} of {scientific_name}."]
 
     confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0.35
     limitations = []
     if not chunks:
         limitations.append(
-            "Perfil generado con evidencia RAG limitada; "
-            "evita decisiones de cuidado criticas sin revisar fuentes adicionales."
+            "Profile generated with limited RAG evidence; "
+            "avoid critical care decisions without reviewing additional sources."
         )
     if confidence < 0.7:
         limitations.append(
-            "Confianza parcial: las recomendaciones se presentan como orientativas, no categoricas."
+            "Partial confidence: the recommendations are presented as orientative, not categorical."
         )
 
     return sections, list(sources_by_url.values()), confidence, limitations, aliases
