@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from time import perf_counter
 
 
 @dataclass
@@ -98,13 +97,3 @@ def _escape_prometheus_label_value(value: str) -> str:
 
 
 metrics_registry = MetricsRegistry()
-
-
-class Timer:
-    def __enter__(self) -> "Timer":
-        self.started_at = perf_counter()
-        self.elapsed = 0.0
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        self.elapsed = perf_counter() - self.started_at

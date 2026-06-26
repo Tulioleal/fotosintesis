@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from app.core.settings import Settings, get_settings
-from app.providers.fallback import ProviderRole
 from app.providers.interfaces import (
     EmbeddingProvider,
     ImageAnalysisProvider,
@@ -41,11 +39,6 @@ from app.providers.wrappers import (
     ModelProviderFallbackWrapper,
     SearchProviderFallbackWrapper,
 )
-
-
-@dataclass(frozen=True)
-class ProviderFallbackDiagnostics:
-    provider_fallbacks: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

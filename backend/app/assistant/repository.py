@@ -12,11 +12,12 @@ from app.auth.tables import (
     plant_profiles,
     reminders,
 )
+from app.db.repository import RepositoryBase
 
 
-class AssistantRepository:
+class AssistantRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def get_or_create_conversation(
         self, *, user_id: UUID, conversation_id: UUID | None, title: str

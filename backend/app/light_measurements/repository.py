@@ -4,12 +4,13 @@ from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import garden_plants, light_measurements
+from app.db.repository import RepositoryBase
 from app.schemas.light_measurements import LightMeasurementCreate, LightMeasurementDto
 
 
-class LightMeasurementRepository:
+class LightMeasurementRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def create_measurement(
         self, *, user_id: UUID, payload: LightMeasurementCreate

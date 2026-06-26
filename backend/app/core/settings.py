@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import AnyUrl, Field
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,13 +9,9 @@ class Settings(BaseSettings):
 
     app_name: str = "Fotosintesis AI API"
     environment: str = Field(default="local", validation_alias="APP_ENV")
-    api_prefix: str = "/api"
     cors_origins: list[str] = ["http://localhost:3000"]
     database_url: str = "postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis"
-    object_storage_endpoint: AnyUrl | None = None
     object_storage_bucket: str = "fotosintesis-local"
-    object_storage_access_key: str | None = None
-    object_storage_secret_key: str | None = None
     model_provider: str = "mock"
     vision_provider: str = "mock"
     judge_provider: str = "mock"
@@ -43,7 +39,6 @@ class Settings(BaseSettings):
     gemini_judge_model: str = "gemini-2.5-flash"
     gemini_search_model: str = "gemini-2.5-flash"
     log_level: str = "INFO"
-    tracing_enabled: bool = True
     session_cookie_name: str = "fotosintesis_session"
     session_idle_ttl_minutes: int = 30
     session_absolute_ttl_days: int = 7
@@ -51,7 +46,6 @@ class Settings(BaseSettings):
     knowledge_vector_table: str = "knowledge_embeddings"
     embedding_dimension: int = 8
     assistant_classifier_timeout_seconds: float = 8.0
-    assistant_classification_accept_threshold: float = 0.70
     assistant_evidence_validation_threshold: float = 0.75
     assistant_safety_validation_threshold: float = 0.85
     assistant_strong_answer_validation_threshold: float = 0.30

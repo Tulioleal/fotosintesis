@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from app.observability.logging import get_logger
 from app.observability.metrics import metrics_registry
@@ -18,14 +17,6 @@ class ProviderRole(str, Enum):
     vision = "vision"
 
 
-class Operation(str, Enum):
-    generate_text = "generate_text"
-    generate_json = "generate_json"
-    judge_response = "judge_response"
-    search = "search"
-    analyze_image = "analyze_image"
-
-
 class FailureCategory(str, Enum):
     timeout = "timeout"
     rate_limit = "rate_limit"
@@ -35,7 +26,18 @@ class FailureCategory(str, Enum):
     invalid_structured_output = "invalid_structured_output"
     unusable_search_output = "unusable_search_output"
     non_transient = "non_transient"
+    all_providers_failed = "all_providers_failed"
     unknown = "unknown"
+
+
+NON_RECOVERABLE_FAILURE_CATEGORIES: frozenset[str] = frozenset({
+    FailureCategory.timeout.value,
+    FailureCategory.rate_limit.value,
+    FailureCategory.service_unavailable.value,
+    FailureCategory.network_error.value,
+    FailureCategory.non_transient.value,
+    FailureCategory.all_providers_failed.value,
+})
 
 
 @dataclass

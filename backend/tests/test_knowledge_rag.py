@@ -577,10 +577,10 @@ def test_llamaindex_retrieval_uses_app_configured_embed_model(
             self.condition = condition
 
     monkeypatch.setattr(
-        "app.knowledge.rag.create_llamaindex_pgvector_store", lambda settings: object()
+        "app.knowledge.rag.runtime.create_llamaindex_pgvector_store", lambda settings: object()
     )
     monkeypatch.setattr(
-        "app.knowledge.rag.create_llamaindex_embed_model",
+        "app.knowledge.rag.runtime.create_llamaindex_embed_model",
         lambda settings: "app-owned-embed-model",
     )
     monkeypatch.setitem(

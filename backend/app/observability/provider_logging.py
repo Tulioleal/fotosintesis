@@ -45,11 +45,3 @@ async def log_provider_call(
             },
         )
         raise
-
-
-def log_tool_run(tool_name: str, succeeded: bool) -> None:
-    metrics_registry.tool_runs_total += 1
-    logger.info(
-        "tool run recorded",
-        extra={"ctx_trace_id": get_trace_id(), "ctx_tool": tool_name, "ctx_succeeded": succeeded},
-    )

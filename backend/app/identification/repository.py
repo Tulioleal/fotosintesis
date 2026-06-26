@@ -5,6 +5,7 @@ from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import identification_candidates, identification_images
+from app.db.repository import RepositoryBase
 from app.identification.gbif import GbifTaxonomy
 from app.identification.schemas import IdentificationResponse, TaxonomyCandidate
 from app.providers.types import PlantCandidate
@@ -18,9 +19,9 @@ def _possible_match_copy(candidate: PlantCandidate) -> str:
     )
 
 
-class IdentificationRepository:
+class IdentificationRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def create_identification(
         self,

@@ -11,6 +11,7 @@ from app.auth.tables import (
     knowledge_chunks,
     plant_profiles,
 )
+from app.db.repository import RepositoryBase
 from app.profile_garden.schemas import (
     GardenPlantCreate,
     GardenPlantResponse,
@@ -30,9 +31,9 @@ SECTION_TOPICS = {
 }
 
 
-class PlantProfileGardenRepository:
+class PlantProfileGardenRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def get_or_create_profile(
         self,

@@ -5,12 +5,9 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from app.providers.errors import PlantDataProviderError
 from app.providers.interfaces import PlantDataProvider
 from app.providers.types import PlantDataResult
-
-
-class PlantDataProviderError(RuntimeError):
-    pass
 
 
 class TreflePlantDataProvider(PlantDataProvider):
@@ -284,11 +281,6 @@ def _list_values(value: Any) -> list[Any]:
 
 def _slug(value: str) -> str:
     return "-".join(part for part in _normalized_name(value).split() if part)
-
-
-def _binomial_name(value: str) -> str:
-    parts = value.split()
-    return " ".join(parts[:2]) if len(parts) >= 2 else value.strip()
 
 
 def _normalized_name(value: str) -> str:

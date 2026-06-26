@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import AuthSession, AuthUser, RecoveryToken
 from app.auth.passwords import hash_password, verify_password
 from app.auth.tables import recovery_tokens, sessions, users
+from app.db.repository import RepositoryBase
 
 
 class DuplicateEmailError(ValueError):
@@ -50,9 +51,9 @@ def _session_from_row(row) -> AuthSession:
     )
 
 
-class DatabaseAuthRepository:
+class DatabaseAuthRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def create_user(self, name: str, email: str, password: str) -> AuthUser:
         normalized_email = email.strip().lower()

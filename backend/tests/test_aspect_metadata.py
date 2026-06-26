@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from app.assistant.aspect_metadata import (
     REQUIRED_ASPECT_METADATA,

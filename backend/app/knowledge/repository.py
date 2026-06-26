@@ -11,6 +11,7 @@ from app.auth.tables import (
     knowledge_sources,
 )
 from app.core.settings import Settings, get_settings
+from app.db.repository import RepositoryBase
 from app.knowledge.chunking import chunk_document
 from app.knowledge.schemas import (
     KnowledgeChunk,
@@ -21,13 +22,10 @@ from app.knowledge.schemas import (
 )
 
 
-class KnowledgeRepository:
+class KnowledgeRepository(RepositoryBase):
     def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
-        self.session = session
+        super().__init__(session)
         self.settings = settings or get_settings()
-
-    async def rollback(self) -> None:
-        await self.session.rollback()
 
     async def save_document(
         self,

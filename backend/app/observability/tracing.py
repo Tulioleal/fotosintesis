@@ -52,23 +52,3 @@ def trace_span(name: str, **attributes: str) -> Iterator[TraceSpan]:
                 "ctx_elapsed_seconds": round(elapsed, 6),
             },
         )
-
-
-def trace_chat_flow() -> Iterator[TraceSpan]:
-    return trace_span("chat.flow")
-
-
-def trace_rag_flow() -> Iterator[TraceSpan]:
-    return trace_span("rag.flow")
-
-
-def trace_maas_flow() -> Iterator[TraceSpan]:
-    return trace_span("maas.flow")
-
-
-def trace_gbif_flow() -> Iterator[TraceSpan]:
-    return trace_span("gbif.flow")
-
-
-def trace_ingestion_flow() -> Iterator[TraceSpan]:
-    return trace_span("ingestion.flow")

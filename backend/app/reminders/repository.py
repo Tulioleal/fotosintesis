@@ -5,12 +5,13 @@ from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import garden_plants, plant_profiles, reminders
+from app.db.repository import RepositoryBase
 from app.schemas.reminders import ReminderCreate, ReminderDto, ReminderRecurrence, ReminderStatus, ReminderUpdate
 
 
-class ReminderRepository:
+class ReminderRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        super().__init__(session)
 
     async def list_reminders(self, *, user_id: UUID, garden_plant_id: UUID | None = None) -> list[ReminderDto]:
         conditions = [reminders.c.user_id == user_id]

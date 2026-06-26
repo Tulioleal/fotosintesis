@@ -39,14 +39,6 @@ class GardenPlantCreate(BaseModel):
     custom_data: dict[str, object] = Field(default_factory=dict)
 
 
-class GardenPlantUpdate(BaseModel):
-    nickname: str | None = None
-    notes: str | None = None
-    location: str | None = None
-    image_path: str | None = None
-    custom_data: dict[str, object] = Field(default_factory=dict)
-
-
 class GardenPlantResponse(BaseModel):
     id: UUID
     profile: PlantProfileResponse
