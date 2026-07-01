@@ -1,0 +1,25 @@
+@use "@/styles/tokens" as *;
+
+.tonePrimary {
+  color: $color-primary;
+}
+
+.toneSecondary {
+  color: $color-secondary;
+}
+
+.toneMuted {
+  color: $color-on-surface-variant;
+}
+
+.toneOnSurfaceVariant {
+  color: $color-on-surface-variant;
+}
+
+.toneOnPrimary {
+  color: $color-on-primary;
+}
+
+.toneError {
+  color: $color-error;
+}

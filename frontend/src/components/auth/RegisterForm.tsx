@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
+import { Button, Field, Notice } from "@/components/ui";
 import { apiClient } from "@/lib/api/client";
 import { authStyles } from "./AuthShell";
 import { registerSchema, type RegisterFormValues } from "./auth-schemas";
@@ -14,7 +15,13 @@ export function RegisterForm() {
   const [formError, setFormError] = useState<string | null>(null);
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
+    reValidateMode: "onBlur",
   });
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = form;
 
   async function onSubmit(values: RegisterFormValues) {
     setFormError(null);
@@ -29,58 +36,58 @@ export function RegisterForm() {
   }
 
   return (
-    <form className={authStyles.form} onSubmit={form.handleSubmit(onSubmit)}>
-      <label className={authStyles.field}>
-        Nombre
-        <input
-          autoComplete="name"
-          disabled={form.formState.isSubmitting}
-          {...form.register("name")}
-        />
-        {form.formState.errors.name && (
-          <span className={authStyles.error}>
-            {form.formState.errors.name.message}
-          </span>
-        )}
-      </label>
-      <label className={authStyles.field}>
-        Correo
-        <input
-          autoComplete="email"
-          disabled={form.formState.isSubmitting}
-          type="email"
-          {...form.register("email")}
-        />
-        {form.formState.errors.email && (
-          <span className={authStyles.error}>
-            {form.formState.errors.email.message}
-          </span>
-        )}
-      </label>
-      <label className={authStyles.field}>
-        Contraseña
-        <input
-          autoComplete="new-password"
-          disabled={form.formState.isSubmitting}
-          type="password"
-          {...form.register("password")}
-        />
-        {form.formState.errors.password && (
-          <span className={authStyles.error}>
-            {form.formState.errors.password.message}
-          </span>
-        )}
-      </label>
-      {formError && <p className={authStyles.error}>{formError}</p>}
+    <form
+      className={authStyles.form}
+      onSubmit={handleSubmit(onSubmit)}
+      noValidate
+    >
+      <Field
+        label="Nombre"
+        autoComplete="name"
+        disabled={isSubmitting}
+        error={errors.name?.message}
+        required
+        {...register("name")}
+      />
+      <Field
+        label="Correo"
+        autoComplete="email"
+        type="email"
+        disabled={isSubmitting}
+        error={errors.email?.message}
+        required
+        {...register("email")}
+      />
+      <Field
+        label="Contraseña"
+        autoComplete="new-password"
+        type="password"
+        disabled={isSubmitting}
+        error={errors.password?.message}
+        required
+        {...register("password")}
+      />
+      {formError ? (
+        <Notice tone="error" role="alert">
+          {formError}
+        </Notice>
+      ) : null}
       <div className={authStyles.actions}>
-        <button
-          className={authStyles.primary}
-          disabled={form.formState.isSubmitting}
+        <Button
           type="submit"
+          variant="primary"
+          size="md"
+          fullWidth
+          disabled={isSubmitting}
         >
-          {form.formState.isSubmitting ? "Creando cuenta..." : "Crear cuenta"}
-        </button>
-        <button className={authStyles.disabledSocial} disabled type="button">
+          {isSubmitting ? "Creando cuenta..." : "Crear cuenta"}
+        </Button>
+        <button
+          className={authStyles.disabledSocial}
+          disabled
+          type="button"
+          aria-disabled="true"
+        >
           Continuar con Google próximamente
         </button>
       </div>

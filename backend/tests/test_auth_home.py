@@ -1,14 +1,23 @@
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import types
+from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.repository import DatabaseAuthRepository
-from app.auth.tables import identification_candidates, identification_images, recovery_tokens, sessions, users
+from app.auth.tables import (
+    garden_plants,
+    identification_candidates,
+    identification_images,
+    plant_profiles,
+    recovery_tokens,
+    sessions,
+    users,
+)
 from app.core.settings import get_settings
 from app.identification.gbif import GbifTaxonomy
 from app.main import app
@@ -168,6 +177,247 @@ async def test_protected_home_summary_requires_and_accepts_session(
                 await session.execute(select(sessions).where(sessions.c.session_token == token))
             ).first()
             assert row.invalidated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_home_summary_returns_garden_count_and_recent_garden_plants(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        repository = DatabaseAuthRepository(session)
+        user = await repository.create_user("Sam", "sam@example.com", "password123")
+        auth_session = await repository.create_session(
+            user.id,
+            idle_ttl=timedelta(minutes=30),
+            absolute_ttl=timedelta(days=1),
+        )
+        token = auth_session.token
+
+        monstera_id = uuid4()
+        ficus_id = uuid4()
+        sansevieria_id = uuid4()
+        other_user_id = (
+            await repository.create_user("Otto", "otto@example.com", "password123")
+        ).id
+        await session.execute(
+            insert(plant_profiles).values(
+                [
+                    {
+                        "id": monstera_id,
+                        "scientific_name": "Monstera deliciosa",
+                        "common_name": "Monstera Deliciosa",
+                        "aliases": [],
+                        "sections": {},
+                        "sources": [],
+                        "confidence": 0.92,
+                        "limitations": [],
+                    },
+                    {
+                        "id": ficus_id,
+                        "scientific_name": "Ficus lyrata",
+                        "common_name": "Ficus Lyrata",
+                        "aliases": [],
+                        "sections": {},
+                        "sources": [],
+                        "confidence": 0.88,
+                        "limitations": [],
+                    },
+                    {
+                        "id": sansevieria_id,
+                        "scientific_name": "Sansevieria trifasciata",
+                        "common_name": "Sansevieria",
+                        "aliases": [],
+                        "sections": {},
+                        "sources": [],
+                        "confidence": 0.81,
+                        "limitations": [],
+                    },
+                ]
+            )
+        )
+
+        newest_id = uuid4()
+        middle_id = uuid4()
+        oldest_id = uuid4()
+        stranger_id = uuid4()
+        await session.execute(
+            insert(garden_plants).values(
+                [
+                    {
+                        "id": oldest_id,
+                        "user_id": user.id,
+                        "profile_id": monstera_id,
+                        "nickname": "Lobby monstera",
+                        "location": "Living",
+                        "image_path": "garden-plants/monstera.jpg",
+                        "custom_data": {},
+                        "active_reminders": 2,
+                        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": middle_id,
+                        "user_id": user.id,
+                        "profile_id": ficus_id,
+                        "nickname": "Ficus de la sala",
+                        "location": "Sala",
+                        "image_path": "garden-plants/ficus.jpg",
+                        "custom_data": {},
+                        "active_reminders": 0,
+                        "created_at": datetime(2026, 3, 1, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": newest_id,
+                        "user_id": user.id,
+                        "profile_id": sansevieria_id,
+                        "nickname": None,
+                        "location": "Dormitorio",
+                        "image_path": None,
+                        "custom_data": {},
+                        "active_reminders": 1,
+                        "created_at": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": stranger_id,
+                        "user_id": other_user_id,
+                        "profile_id": monstera_id,
+                        "nickname": None,
+                        "location": None,
+                        "image_path": None,
+                        "custom_data": {},
+                        "active_reminders": 0,
+                        "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    },
+                ]
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/home/summary", headers={"Authorization": f"Bearer {token}"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["garden_count"] == 3
+    assert payload["empty_state"] is False
+
+    recent = payload["recent_garden_plants"]
+    assert [plant["id"] for plant in recent] == [str(newest_id), str(middle_id), str(oldest_id)]
+    assert recent[0]["scientific_name"] == "Sansevieria trifasciata"
+    assert recent[0]["common_name"] == "Sansevieria"
+    assert recent[0]["nickname"] is None
+    assert recent[0]["image_path"] is None
+    assert recent[0]["location"] == "Dormitorio"
+    assert recent[0]["active_reminders"] == 1
+    assert recent[0]["created_at"].startswith("2026-06-01")
+
+    assert recent[1]["scientific_name"] == "Ficus lyrata"
+    assert recent[1]["common_name"] == "Ficus Lyrata"
+    assert recent[1]["nickname"] == "Ficus de la sala"
+    assert recent[1]["image_path"] == "garden-plants/ficus.jpg"
+    assert recent[1]["location"] == "Sala"
+    assert recent[1]["active_reminders"] == 0
+
+    assert recent[2]["scientific_name"] == "Monstera deliciosa"
+    assert recent[2]["nickname"] == "Lobby monstera"
+    assert recent[2]["image_path"] == "garden-plants/monstera.jpg"
+    assert recent[2]["location"] == "Living"
+    assert recent[2]["active_reminders"] == 2
+
+
+@pytest.mark.asyncio
+async def test_home_summary_caps_recent_garden_plants_at_eight(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        repository = DatabaseAuthRepository(session)
+        user = await repository.create_user("Nia", "nia@example.com", "password123")
+        auth_session = await repository.create_session(
+            user.id,
+            idle_ttl=timedelta(minutes=30),
+            absolute_ttl=timedelta(days=1),
+        )
+        token = auth_session.token
+
+        profile_ids = [
+            uuid4() for _ in range(10)
+        ]
+        await session.execute(
+            insert(plant_profiles).values(
+                [
+                    {
+                        "id": pid,
+                        "scientific_name": f"Species {i}",
+                        "common_name": f"Common {i}",
+                        "aliases": [],
+                        "sections": {},
+                        "sources": [],
+                        "confidence": 0.5,
+                        "limitations": [],
+                    }
+                    for i, pid in enumerate(profile_ids)
+                ]
+            )
+        )
+        await session.execute(
+            insert(garden_plants).values(
+                [
+                    {
+                        "id": uuid4(),
+                        "user_id": user.id,
+                        "profile_id": profile_ids[i],
+                        "nickname": None,
+                        "location": None,
+                        "image_path": None,
+                        "custom_data": {},
+                        "active_reminders": 0,
+                        "created_at": datetime(2026, 1, i + 1, tzinfo=timezone.utc),
+                    }
+                    for i in range(10)
+                ]
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/home/summary", headers={"Authorization": f"Bearer {token}"}
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["garden_count"] == 10
+    assert len(payload["recent_garden_plants"]) == 8
+    assert [plant["scientific_name"] for plant in payload["recent_garden_plants"]] == [
+        f"Species {i}" for i in range(9, 1, -1)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_home_summary_marks_empty_state_when_user_has_no_garden_plants(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        repository = DatabaseAuthRepository(session)
+        user = await repository.create_user("Emi", "emi@example.com", "password123")
+        auth_session = await repository.create_session(
+            user.id,
+            idle_ttl=timedelta(minutes=30),
+            absolute_ttl=timedelta(days=1),
+        )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/home/summary",
+            headers={"Authorization": f"Bearer {auth_session.token}"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["garden_count"] == 0
+    assert payload["empty_state"] is True
+    assert payload["recent_garden_plants"] == []
 
 
 @pytest.mark.asyncio

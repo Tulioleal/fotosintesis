@@ -493,6 +493,80 @@
         "title": "GardenDeleteResponse",
         "type": "object"
       },
+      "GardenPlantCard": {
+        "properties": {
+          "active_reminders": {
+            "default": 0,
+            "title": "Active Reminders",
+            "type": "integer"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Path"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "scientific_name": {
+            "title": "Scientific Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scientific_name",
+          "created_at"
+        ],
+        "title": "GardenPlantCard",
+        "type": "object"
+      },
       "GardenPlantCreate": {
         "properties": {
           "confirmed_candidate_id": {
@@ -699,6 +773,18 @@
           "empty_state": {
             "title": "Empty State",
             "type": "boolean"
+          },
+          "garden_count": {
+            "default": 0,
+            "title": "Garden Count",
+            "type": "integer"
+          },
+          "recent_garden_plants": {
+            "items": {
+              "$ref": "#/components/schemas/GardenPlantCard"
+            },
+            "title": "Recent Garden Plants",
+            "type": "array"
           },
           "user": {
             "$ref": "#/components/schemas/PublicAuthUser"

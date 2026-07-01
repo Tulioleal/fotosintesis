@@ -1,0 +1,267 @@
+@use "@/styles/tokens" as *;
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: $space-lg;
+  width: 100%;
+  padding: 1rem 0 5rem;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.title {
+  margin: 0;
+  color: $color-primary;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-lg;
+  font-weight: $font-weight-bold;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+}
+
+.nickname {
+  margin: 0.25rem 0 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-lg;
+  font-weight: $font-weight-medium;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.mainGrid,
+.detailGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $gutter;
+}
+
+.imageFrame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-md;
+  aspect-ratio: 1 / 1;
+  background: $color-surface-container;
+
+  img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.imageFallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: $color-primary;
+  background: linear-gradient(
+    135deg,
+    $color-tertiary-fixed,
+    $color-surface-container
+  );
+}
+
+.sideColumn {
+  display: flex;
+  flex-direction: column;
+  gap: $gutter;
+}
+
+.cardHeading {
+  display: flex;
+  align-items: center;
+  gap: $space-xs;
+  color: $color-primary;
+
+  h2 {
+    margin: 0;
+    color: inherit;
+    font-family: $font-headline-stack;
+    font-size: $font-size-headline-sm;
+    font-weight: $font-weight-medium;
+  }
+}
+
+.cardCopy {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+}
+
+.readings {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  border-top: 1px solid $color-outline-variant;
+  margin-top: $space-xs;
+  padding-top: $space-sm;
+}
+
+.readingsTitle {
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.readingsList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readingItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.readingMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: $space-xs;
+}
+
+.readingDate {
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.readingLabel {
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  font-weight: $font-weight-medium;
+}
+
+.readingBar {
+  position: relative;
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: $radius-pill;
+  background: $color-surface-variant;
+
+  > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: $color-primary-fixed-dim;
+  }
+}
+
+.infoColumns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-md;
+}
+
+.kicker {
+  display: block;
+  margin-bottom: $space-xs;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.scientific,
+.location {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-lg;
+  color: $color-on-surface;
+}
+
+.location {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+}
+
+.notes {
+  border-top: 1px solid $color-outline-variant;
+  margin-top: $space-md;
+  padding-top: $space-md;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  line-height: $line-height-relaxed;
+
+  p {
+    margin: 0;
+  }
+}
+
+.dangerColumn {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: $space-sm;
+}
+
+.infoCard {
+  min-width: 0;
+}
+
+@media (min-width: 760px) {
+  .header {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+
+  .imageFrame {
+    aspect-ratio: 4 / 3;
+  }
+
+  .mainGrid,
+  .detailGrid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: $gutter-desktop;
+  }
+
+  .imageFrame {
+    grid-column: span 8;
+  }
+
+  .sideColumn,
+  .dangerColumn {
+    grid-column: span 4;
+  }
+
+  .infoCard {
+    grid-column: span 8;
+  }
+
+  .infoColumns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

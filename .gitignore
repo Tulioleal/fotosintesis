@@ -75,3 +75,6 @@ execution-order.md
 TODO.txt
 /SPECS
 *.egg-info/
+*/REFERENCES/*
+*/todo/*
+frontend/e2e/.care-tools-credentials.json

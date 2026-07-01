@@ -1,0 +1,78 @@
+@use "@/styles/tokens" as *;
+
+.header {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: end;
+  gap: $space-sm;
+  padding: 0;
+}
+
+.bordered {
+  padding: $space-sm 0;
+  border-bottom: 1px solid $border-softer;
+}
+
+.text {
+  display: grid;
+  gap: $space-xs;
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0;
+  color: $color-primary;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-lg;
+  font-weight: $font-weight-bold;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-on-surface;
+}
+
+.description {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-size: $font-size-body-lg;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-relaxed;
+  max-width: 48rem;
+}
+
+.art {
+  display: grid;
+  overflow: hidden;
+  border-radius: $radius-lg;
+  min-height: 8rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+@media (min-width: 720px) {
+  .bordered {
+    padding: $space-md 0;
+  }
+
+  .header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .art {
+    grid-row: span 2;
+    min-height: 12rem;
+  }
+}

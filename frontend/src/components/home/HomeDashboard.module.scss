@@ -1,99 +1,407 @@
 @use "@/styles/tokens" as *;
 
-.header {
+.welcome {
   display: grid;
-  gap: 0.8rem;
-  padding: 1.25rem 0;
+  gap: $space-xs;
+  padding: 0 0 $space-sm;
 }
 
-.eyebrow {
+.title {
   margin: 0;
-  color: $color-accent;
-  font-size: 0.78rem;
-  font-weight: 900;
-  letter-spacing: 0.14em;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-lg;
+  font-weight: $font-weight-bold;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-on-surface;
+
+  span {
+    color: $color-outline;
+  }
+}
+
+.lead {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-lg;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-relaxed;
+}
+
+.mosaic {
+  display: grid;
+  gap: $space-md;
+  margin-bottom: $space-md;
+}
+
+.sectionHeading {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-md;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  color: $color-on-surface;
+}
+
+.mosaicGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $gutter;
+}
+
+.mosaicCard {
+  position: relative;
+  display: flex;
+  min-height: 16rem;
+  height: 16rem;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-md;
+  background-color: $color-primary-container;
+  color: $color-on-primary;
+  text-decoration: none;
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    box-shadow 300ms ease,
+    transform 300ms ease;
+
+  &:hover {
+    color: $color-on-primary;
+    text-decoration: none;
+    box-shadow: 0 8px 24px rgba(72, 100, 75, 0.06);
+  }
+
+  &:hover::before {
+    transform: scale(1.08);
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    background-position: center;
+    background-size: cover;
+    transition: transform 500ms ease;
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(
+      to top,
+      rgba(0, 0, 0, 0.8),
+      rgba(0, 0, 0, 0.2),
+      transparent
+    );
+  }
+
+  &[data-illustration="garden"]::before {
+    background-image: url("/references/dashboard-mosaic-edition/quick-access-garden.jpg");
+  }
+
+  &[data-illustration="identify"]::before {
+    background-image: url("/references/dashboard-mosaic-edition/quick-access-identify.png");
+  }
+
+  &[data-illustration="reminders"]::before {
+    background-image: url("/references/dashboard-mosaic-edition/quick-access-reminders.png");
+  }
+
+  &:focus-visible {
+    outline: $focus-ring-width solid $color-secondary;
+    outline-offset: 2px;
+  }
+}
+
+.mosaicCardPrimary {
+  min-height: 16rem;
+}
+
+.mosaicTop {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.mosaicCardPrimary .mosaicTop {
+  justify-content: flex-end;
+}
+
+.plantBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-pill;
+  background: $color-primary;
+  color: $color-on-primary;
+  padding: 0.25rem 0.75rem;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-medium;
+  line-height: 1;
+}
+
+.mosaicIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: $radius-pill;
+  background: rgba(255, 255, 255, 0.2);
+  color: $color-primary;
+  backdrop-filter: blur(12px);
+}
+
+.mosaicBody {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: $space-xs;
+}
+
+.mosaicTitle {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-primary;
+}
+
+.mosaicCopy {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  font-weight: $font-weight-light;
+  line-height: $line-height-relaxed;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.featured {
+  display: grid;
+  gap: $space-md;
+}
+
+.featuredHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: $space-md;
+  border-bottom: 1px solid $color-outline-variant;
+  padding-bottom: $space-xs;
+}
+
+.viewAll {
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-medium;
+  line-height: 1;
+  letter-spacing: $letter-spacing-wide;
   text-transform: uppercase;
+  color: $color-outline;
+  border-bottom: 1px solid transparent;
+  transition:
+    color 300ms ease,
+    border-color 300ms ease;
+
+  &:hover {
+    color: $color-secondary;
+    border-color: $color-primary;
+    text-decoration: none;
+  }
+
+  &:focus-visible {
+    outline: $focus-ring-width solid $color-secondary;
+    outline-offset: 2px;
+  }
 }
 
-.header h1 {
+.featuredGrid {
+  display: flex;
+  flex-direction: row;
+  gap: $gutter;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding: 0 0 $space-xs;
+  margin: 0 (-$margin-mobile);
+  padding-left: $margin-mobile;
+  padding-right: $margin-mobile;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.plantCard {
+  flex: 0 0 16rem;
+  scroll-snap-align: start;
+  display: grid;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 200ms ease;
+
+  &:hover {
+    color: inherit;
+    text-decoration: none;
+    transform: translateY(-2px);
+  }
+
+  &:focus-visible {
+    outline: $focus-ring-width solid $color-secondary;
+    outline-offset: 2px;
+  }
+}
+
+.plantImageWrap {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid $color-outline-variant;
+  border-bottom: 0;
+  border-radius: $radius-lg $radius-lg 0 0;
+  background: $color-surface-container-high;
+}
+
+.plantImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plantImagePlaceholder {
+  width: 100%;
+  height: 100%;
+  background: $color-surface-container-high;
+}
+
+.plantBody {
+  border: 1px solid $color-outline-variant;
+  border-radius: 0 0 $radius-lg $radius-lg;
+  background: $color-surface-container-lowest;
+  padding: $space-sm;
+}
+
+.plantName {
+  margin: 0 0 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-surface;
+  transition: color 300ms ease;
+}
+
+.plantCard:hover .plantName {
+  color: $color-primary;
+}
+
+.plantDetail {
   margin: 0;
-  font-size: clamp(2.4rem, 11vw, 5rem);
-  line-height: 0.92;
-  letter-spacing: -0.07em;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-light;
+  line-height: $line-height-relaxed;
+  color: $color-outline;
+  transition: color 300ms ease;
 }
 
-.search {
-  display: block;
-  padding: 1rem 1.1rem;
-  border: 1px solid rgba(40, 80, 52, 0.16);
-  border-radius: 1.2rem;
-  background: rgba(255, 255, 255, 0.82);
-  color: $color-muted;
-  font-weight: 800;
-  text-decoration: none;
+.plantCard:hover .plantDetail {
+  color: $color-secondary;
 }
 
-.primaryCta {
-  display: grid;
-  gap: 0.7rem;
-  margin: 1rem 0;
-  padding: 1.35rem;
-  border-radius: 2rem;
-  background: $color-foreground;
-  color: #fffdf0;
-  text-decoration: none;
-}
-
-.primaryCta strong {
-  font-size: 2rem;
-  letter-spacing: -0.04em;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-  gap: 0.85rem;
-}
-
-.card,
-.empty,
-.error,
-.skeleton {
-  padding: 1rem;
-  border: 1px solid rgba(40, 80, 52, 0.14);
-  border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.78);
-  color: $color-foreground;
-  text-decoration: none;
-}
-
-.card span {
-  display: block;
-  color: $color-muted;
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
-.empty,
 .error {
-  margin: 1rem 0;
-}
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-error;
+  border-radius: $radius-lg;
+  background: $color-error-container;
+  color: $color-on-error-container;
 
-.error button {
-  padding: 0.75rem 1rem;
-  border: 0;
-  border-radius: 999px;
-  background: $color-foreground;
-  color: #fffdf0;
-  font-weight: 800;
+  h1 {
+    margin: 0;
+    font-family: $font-headline-stack;
+    font-size: $font-size-headline-md;
+    font-weight: $font-weight-medium;
+    line-height: $line-height-snug;
+  }
+
+  p {
+    margin: 0;
+    color: $color-on-error-container;
+    line-height: $line-height-relaxed;
+  }
+
+  button {
+    justify-self: start;
+    padding: 0.7rem 1.2rem;
+    border: 0;
+    border-radius: $radius-pill;
+    background: $color-primary;
+    color: $color-on-primary-soft;
+    font-family: $font-body-stack;
+    font-size: 0.9rem;
+    font-weight: $font-weight-medium;
+    cursor: pointer;
+  }
 }
 
 .skeleton {
-  min-height: 8rem;
-  animation: pulse 1.1s ease-in-out infinite alternate;
+  min-height: 18rem;
+  border-radius: $radius-lg;
+  background: linear-gradient(
+    90deg,
+    $color-surface-container-low 0%,
+    $color-surface-container-high 50%,
+    $color-surface-container-low 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
 }
 
-@keyframes pulse {
-  from { opacity: 0.48; }
-  to { opacity: 1; }
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (min-width: 720px) {
+  .mosaicGrid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .mosaicCardPrimary {
+    grid-column: span 2;
+  }
+
+  .skeleton {
+    min-height: 22rem;
+  }
+}
+
+@media (min-width: 720px) {
+  .featuredGrid {
+    margin: 0 (-$margin-desktop);
+    padding-left: $margin-desktop;
+    padding-right: $margin-desktop;
+  }
+}
+
+@media (min-width: 1024px) {
+  .plantCard {
+    flex-basis: 18rem;
+  }
 }

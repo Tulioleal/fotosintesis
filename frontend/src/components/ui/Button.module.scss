@@ -1,0 +1,139 @@
+@use "@/styles/tokens" as *;
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: $radius-md;
+  font-family: $font-body-stack;
+  font-weight: $font-weight-medium;
+  font-size: $font-size-label-md;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: none;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease,
+    transform 120ms ease;
+  white-space: nowrap;
+}
+
+.button:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(0.98);
+}
+
+.button:disabled,
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button:focus-visible {
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+}
+
+.size-sm {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  border-radius: $radius-pill;
+  letter-spacing: $letter-spacing-wide;
+}
+
+.size-md {
+  min-height: 3rem;
+  padding: 0.75rem 1.5rem;
+}
+
+.size-lg {
+  min-height: 3.5rem;
+  padding: 0.95rem 1.75rem;
+  font-size: 1rem;
+}
+
+.variant-primary {
+  background: $color-primary;
+  color: $color-on-primary;
+  border-color: $color-primary;
+  box-shadow: 0 4px 12px rgba(72, 100, 75, 0.18);
+}
+
+.variant-primary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-primary-container;
+  border-color: $color-primary-container;
+  box-shadow: 0 6px 16px rgba(72, 100, 75, 0.22);
+}
+
+.variant-secondary {
+  background: $color-surface;
+  color: $color-on-surface;
+  border-color: $color-surface;
+}
+
+.variant-secondary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-surface-container;
+  border-color: $color-surface-container;
+}
+
+.variant-tertiary {
+  background: $color-surface-tertiary-soft;
+  color: $color-primary;
+  border-color: transparent;
+}
+
+.variant-tertiary:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-surface-tertiary-medium;
+}
+
+.variant-outline {
+  background: transparent;
+  color: $color-primary;
+  border-color: $color-primary;
+}
+
+.variant-outline:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-surface-primary-soft;
+}
+
+.variant-ghost {
+  background: transparent;
+  color: $color-on-surface-variant;
+  border-color: transparent;
+}
+
+.variant-ghost:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-surface-container-low;
+  color: $color-on-surface;
+}
+
+.variant-destructive {
+  background: $color-surface-error-soft;
+  color: $color-error;
+  border-color: $color-error-container;
+}
+
+.variant-destructive:hover:not(:disabled):not([aria-disabled="true"]) {
+  background: $color-error-container;
+  color: $color-on-error-container;
+}
+
+.fullWidth {
+  width: 100%;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+}

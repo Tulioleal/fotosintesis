@@ -2,7 +2,10 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { BellIcon, CameraIcon, SunIcon } from "@phosphor-icons/react";
 import { apiClient, type GardenPlant, type LightClassification, type LightMeasurementCreate, type MeasurementReliability, type MeasurementSource } from "@/lib/api/client";
+import { Button, Card, Chip, Notice, PageHeader, SelectField } from "@/components/ui";
+import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./LightMeter.module.scss";
 
 type SensorReading = {
@@ -27,6 +30,24 @@ const manualOptions: Array<{ value: LightClassification; label: string; copy: st
   { value: "alta", label: "Alta", copy: "Muy iluminado cerca de una ventana." },
   { value: "directa", label: "Directa", copy: "Rayos de sol llegan a la planta." },
 ];
+
+const reliabilityTone: Record<MeasurementReliability, "success" | "warning" | "error"> = {
+  high: "success",
+  medium: "warning",
+  low: "error",
+};
+
+const reliabilityChipLabel: Record<MeasurementReliability, string> = {
+  high: "Confiabilidad alta",
+  medium: "Confiabilidad media",
+  low: "Confiabilidad baja",
+};
+
+const sourceChipLabel: Record<MeasurementSource, string> = {
+  sensor: "Sensor ambiental",
+  camera: "Camara aproximada",
+  manual: "Registro manual",
+};
 
 export function LightMeter() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -185,62 +206,165 @@ export function LightMeter() {
   }
 
   const plants = garden.data ?? [];
+  const unreliableCamera = reading?.reliability === "low" && reading.source === "camera";
+  const cameraSupported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+  const sensorSupported = typeof window !== "undefined" && Boolean((window as typeof window & { AmbientLightSensor?: unknown }).AmbientLightSensor);
 
   return (
-    <section className={styles.meter}>
-      <div className={styles.hero}>
-        <p className={styles.eyebrow}>Medidor de luz</p>
-        <h1>Mediciones reales cuando se pueda, alternativas claras cuando no.</h1>
-        <p>Primero intentamos sensor ambiental, luego camara aproximada y finalmente registro manual.</p>
-      </div>
+    <section className={styles.page}>
+      <PageHeader
+        eyebrow="Cuidados"
+        heading="Medidor de luz"
+        description="Mediciones reales cuando se pueda, alternativas claras cuando no."
+      />
 
-      <div className={styles.actions}>
-        <button type="button" onClick={measureAutomatically}>Medir luz</button>
-        <button type="button" className={styles.secondary} onClick={startCamera}>Usar camara</button>
-      </div>
+      <p className={styles.introBody}>
+        Primero intentamos sensor ambiental, luego camara aproximada y finalmente registro manual.
+      </p>
 
-      <p className={styles.notice}>{status}</p>
-      {error ? <p className={styles.error}>{error}</p> : null}
-
-      <div className={styles.camera} data-active={cameraActive}>
-        <video ref={videoRef} playsInline muted aria-label="Vista de camara para estimar luz" />
-        <canvas ref={canvasRef} width={96} height={96} hidden />
-        <button type="button" onClick={captureCameraReading} disabled={!cameraActive}>Tomar medicion aproximada</button>
-      </div>
-
-      <form className={styles.card} onSubmit={registerManual}>
-        <p className={styles.eyebrow}>Registro manual</p>
-        <label>
-          Condicion observada
-          <select value={manualClassification} onChange={(event) => setManualClassification(event.target.value as LightClassification)}>
-            {manualOptions.map((option) => <option key={option.value} value={option.value}>{option.label} - {option.copy}</option>)}
-          </select>
-        </label>
-        <button type="submit">Usar registro manual</button>
-      </form>
-
-      {reading ? (
-        <article className={styles.result}>
-          <p className={styles.eyebrow}>{sourceLabel(reading.source)} · confiabilidad {reliabilityLabel(reading.reliability)}</p>
-          <h2>{classificationLabel(reading.classification)}</h2>
-          <p>{reading.lux === null ? "Sin lux estimado." : `${Math.round(reading.lux)} lux estimados.`}</p>
-          <p>{reading.copy}</p>
-          <label>
-            Asociar a planta de Mi Jardin (opcional)
-            <select value={selectedPlantId} onChange={(event) => setSelectedPlantId(event.target.value)}>
-              <option value="">Sin asociar</option>
-              {plants.map((plant) => <option key={plant.id} value={plant.id}>{plantLabel(plant)}</option>)}
-            </select>
-          </label>
-          {garden.isError ? <p className={styles.error}>No pudimos cargar Mi Jardin. Podes guardar sin asociar.</p> : null}
-          <button type="button" onClick={persistReading} disabled={saveMeasurement.isPending || reading.reliability === "low" && reading.source === "camera"}>
-            {saveMeasurement.isPending ? "Guardando..." : "Guardar medicion"}
-          </button>
-          {reading.reliability === "low" && reading.source === "camera" ? <p className={styles.warning}>Repeti la medicion antes de guardarla o usa registro manual.</p> : null}
-          {saveMeasurement.isSuccess ? <p className={styles.notice}>Medicion guardada correctamente.</p> : null}
-          {saveMeasurement.isError ? <p className={styles.error}>{saveMeasurement.error.message || "No pudimos guardar la medicion."}</p> : null}
-        </article>
+      {error ? (
+        <Notice tone="error" role="alert">{error}</Notice>
       ) : null}
+      {saveMeasurement.isError ? (
+        <Notice tone="error" role="alert">{saveMeasurement.error.message || "No pudimos guardar la medicion."}</Notice>
+      ) : null}
+      {saveMeasurement.isSuccess ? (
+        <Notice tone="success" role="status">Medicion guardada correctamente.</Notice>
+      ) : null}
+      <Notice tone="info" role="status">
+        {status}
+      </Notice>
+
+      <div className={styles.layout}>
+        <div className={styles.primaryColumn}>
+          <Card variant="tonal" padding="md" className={styles.measureCard}>
+            <h2 className={styles.measureHeading}>Medicion principal</h2>
+            <p className={styles.measureCopy}>
+              Proba primero el sensor ambiental del dispositivo. Si no esta disponible, pasamos automaticamente a la camara.
+            </p>
+            <div className={styles.measureActions}>
+              <Button type="button" variant="primary" size="md" onClick={measureAutomatically} leadingIcon={<SunIcon aria-hidden="true" size="1rem" className={iconStyles.toneOnPrimary} />}>
+                Medir luz
+              </Button>
+              <Button type="button" variant="outline" size="md" onClick={startCamera} leadingIcon={<CameraIcon aria-hidden="true" size="1rem" className={iconStyles.tonePrimary} />}>
+                Usar camara
+              </Button>
+            </div>
+            <ul className={styles.sensorStatusList}>
+              <li className={styles.sensorStatusItem}>
+                <span className={styles.sensorDot} data-state={sensorSupported ? "ready" : "blocked"} />
+                Sensor ambiental {sensorSupported ? "disponible" : "no disponible en este navegador"}
+              </li>
+              <li className={styles.sensorStatusItem}>
+                <span className={styles.sensorDot} data-state={cameraSupported ? "ready" : "blocked"} />
+                Camara {cameraSupported ? "lista para usar" : "no disponible en este navegador"}
+              </li>
+              <li className={styles.sensorStatusItem}>
+                <span className={styles.sensorDot} data-state={cameraActive ? "active" : "ready"} />
+                Camara {cameraActive ? "capturando" : "inactiva"}
+              </li>
+            </ul>
+          </Card>
+
+          <Card className={styles.cameraCard} data-active={cameraActive} aria-live="polite">
+            <h2 className={styles.measureHeading}>Estimacion con camara</h2>
+            <p className={styles.measureCopy}>
+              Apunta hacia donde recibe luz la planta y captura una muestra estable. Si la camara queda cubierta, sobreexpuesta o las muestras son inconsistentes, te avisaremos para repetir.
+            </p>
+            <video ref={videoRef} playsInline muted aria-label="Vista de camara para estimar luz" className={styles.cameraVideo} />
+            <canvas ref={canvasRef} width={96} height={96} hidden />
+            <div className={styles.cameraActions}>
+              <Button type="button" variant="primary" size="md" onClick={captureCameraReading} disabled={!cameraActive}>
+                Tomar medicion aproximada
+              </Button>
+              <Button type="button" variant="ghost" size="md" onClick={() => stopCamera(true)} disabled={!cameraActive}>
+                Detener camara
+              </Button>
+            </div>
+          </Card>
+
+          {reading ? (
+            <Card className={styles.resultCard} aria-labelledby="light-meter-result-heading">
+              <p className={styles.resultEyebrow}>
+                <Chip tone="primary" icon={<SunIcon aria-hidden="true" size="1rem" className={iconStyles.toneOnPrimary} />}>
+                  {sourceChipLabel[reading.source]}
+                </Chip>
+                <Chip tone={reliabilityTone[reading.reliability]} icon={<BellIcon aria-hidden="true" size="1rem" className={iconStyles.tonePrimary} />}>
+                  {reliabilityChipLabel[reading.reliability]}
+                </Chip>
+              </p>
+              <h2 id="light-meter-result-heading" className={styles.resultHeading}>
+                {classificationLabel(reading.classification)}
+              </h2>
+              <p className={styles.resultLux}>
+                {reading.lux === null ? "Sin lux estimado." : `${Math.round(reading.lux)} lux estimados.`}
+              </p>
+              <p className={styles.resultCopy}>{reading.copy}</p>
+              {unreliableCamera ? (
+                <p className={styles.resultCopy} role="alert">
+                  Repeti la medicion antes de guardarla o usa registro manual.
+                </p>
+              ) : null}
+            </Card>
+          ) : null}
+        </div>
+
+        <div className={styles.asideColumn}>
+          <Card variant="tonal" padding="md" className={styles.manualCard}>
+            <h2 className={styles.measureHeading}>Registro manual</h2>
+            <form className={styles.manualForm} onSubmit={registerManual}>
+              <SelectField
+                kind="select"
+                label="Condicion observada"
+                value={manualClassification}
+                onChange={(event) => setManualClassification(event.target.value as LightClassification)}
+              >
+                {manualOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label} - {option.copy}</option>
+                ))}
+              </SelectField>
+              <div className={styles.manualActions}>
+                <Button type="submit" variant="tertiary" size="md" fullWidth>
+                  Usar registro manual
+                </Button>
+              </div>
+            </form>
+          </Card>
+
+          <Card variant="tonal" padding="md" className={styles.association}>
+            <h2 className={styles.measureHeading}>Guardar medicion</h2>
+            <p className={styles.associationHint}>
+              Asocia la lectura a una planta de Mi Jardin para usarla como contexto en sus cuidados. Podes guardar sin asociar.
+            </p>
+            <SelectField
+              kind="select"
+              label="Asociar a planta de Mi Jardin (opcional)"
+              value={selectedPlantId}
+              onChange={(event) => setSelectedPlantId(event.target.value)}
+            >
+              <option value="">Sin asociar</option>
+              {plants.map((plant) => (
+                <option key={plant.id} value={plant.id}>{plantLabel(plant)}</option>
+              ))}
+            </SelectField>
+            {garden.isError ? (
+              <Notice tone="error" role="alert">No pudimos cargar Mi Jardin. Podes guardar sin asociar.</Notice>
+            ) : null}
+            <div className={styles.manualActions}>
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                fullWidth
+                onClick={persistReading}
+                disabled={!reading || saveMeasurement.isPending || Boolean(unreliableCamera)}
+              >
+                {saveMeasurement.isPending ? "Guardando..." : "Guardar medicion"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      </div>
     </section>
   );
 }
@@ -284,14 +408,6 @@ function standardDeviation(values: number[]) {
 
 function classificationLabel(value: LightClassification) {
   return { baja: "Luz baja", media: "Luz media", alta: "Luz alta", directa: "Luz directa" }[value];
-}
-
-function reliabilityLabel(value: MeasurementReliability) {
-  return { high: "alta", medium: "media", low: "baja" }[value];
-}
-
-function sourceLabel(value: MeasurementSource) {
-  return { sensor: "sensor ambiental", camera: "camara aproximada", manual: "registro manual" }[value];
 }
 
 function plantLabel(plant: GardenPlant) {

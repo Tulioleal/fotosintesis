@@ -1,55 +1,125 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
-import { FormEvent, useState } from "react";
-import { apiClient } from "@/lib/api/client";
-import styles from "./PlantProfileView.module.scss";
+import { PlantIcon, PlusIcon } from "@phosphor-icons/react";
+import { apiClient, type GardenPlant } from "@/lib/api/client";
+import { resolveImageUrl } from "@/lib/images";
+import { AppLink, Card, ImageCard, Notice, PageHeader } from "@/components/ui";
+import iconStyles from "@/components/ui/Icons.module.scss";
+import styles from "./GardenList.module.scss";
+import Image from "next/image";
+
+function displayPlantName(plant: GardenPlant): string {
+  return (
+    plant.nickname ??
+    plant.profile?.selected_alias ??
+    plant.profile?.common_name ??
+    plant.profile?.scientific_name ??
+    "Planta"
+  );
+}
+
+function formatCareStatus(plant: GardenPlant): string {
+  if (plant.active_reminders && plant.active_reminders > 0) {
+    return `${plant.active_reminders} recordatorio${plant.active_reminders === 1 ? "" : "s"} activo${plant.active_reminders === 1 ? "" : "s"}`;
+  }
+  return "Último riego: Sin registros";
+}
 
 export function GardenList() {
-  const [query, setQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
   const garden = useQuery({
-    queryKey: ["garden", "list", submittedQuery],
-    queryFn: () => apiClient.listGardenPlants(submittedQuery),
+    queryKey: ["garden", "list"],
+    queryFn: () => apiClient.listGardenPlants(""),
   });
   const plants = garden.isError ? [] : (garden.data ?? []);
 
-  function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmittedQuery(query);
-  }
-
   return (
-    <section className={styles.profile}>
-      <div className={styles.hero}>
-        <p className={styles.eyebrow}>Mi Jardin</p>
-        <h1>Tus plantas guardadas.</h1>
-        <p>Busca por nombre comun, alias, nombre cientifico o apodo.</p>
-      </div>
-      <form className={styles.search} onSubmit={search}>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar planta" />
-        <button type="submit">Buscar</button>
-      </form>
-      {garden.isError ? <p className={styles.error}>{garden.error.message || "No pudimos cargar Mi Jardin."}</p> : null}
-      {garden.isLoading ? <p className={styles.notice}>Cargando plantas...</p> : null}
-      {!garden.isLoading && !garden.isError && !plants.length ? (
-        <article className={styles.card}>
-          <h2>Tu jardin esta vacio</h2>
-          <p>Confirma una candidata validada desde Identificar y guardala desde su perfil.</p>
-          <Link href="/identify">Identificar planta</Link>
-        </article>
+    <section className={styles.garden}>
+      <PageHeader
+        heading="Mi Jardín"
+        description="Monitorea y gestiona el cuidado de tus plantas."
+        actions={
+          <AppLink
+            href="/identify"
+            variant="button"
+            buttonVariant="primary"
+            leadingIcon={
+              <PlusIcon
+                aria-hidden="true"
+                size="1rem"
+                weight="bold"
+                className={iconStyles.toneOnPrimary}
+              />
+            }
+          >
+            Registrar Planta
+          </AppLink>
+        }
+      />
+
+      {garden.isError ? (
+        <Notice tone="error" role="alert">
+          {garden.error.message || "No pudimos cargar Mi Jardín."}
+        </Notice>
       ) : null}
-      <div className={styles.sections}>
-        {plants.map((plant) => (
-          <article className={styles.card} key={plant.id}>
-            <p className={styles.eyebrow}>{plant.location ?? "Sin ubicacion"}</p>
-            <h2>{plant.nickname ?? plant.profile.selected_alias ?? plant.profile.scientific_name}</h2>
-            <p><em>{plant.profile.scientific_name}</em></p>
-            <p>{plant.notes ?? "Sin notas personalizadas."}</p>
-            <Link href={`/garden/${plant.id}`}>Ver detalle</Link>
-          </article>
-        ))}
+      {garden.isLoading ? (
+        <Notice tone="info" role="status">
+          Cargando plantas...
+        </Notice>
+      ) : null}
+      {!garden.isLoading && !garden.isError && !plants.length ? (
+        <Card variant="tonal" padding="md" className={styles.empty}>
+          <h2 className={styles.emptyTitle}>Tu jardín está vacío</h2>
+          <p>
+            Confirma una candidata validada desde Identificar y guárdala desde
+            su perfil.
+          </p>
+          <AppLink href="/identify" variant="button" buttonVariant="primary">
+            Identificar planta
+          </AppLink>
+        </Card>
+      ) : null}
+
+      <div className={styles.grid}>
+        {plants.map((plant) => {
+          const imageSrc = resolveImageUrl(plant.image_path);
+          const name = displayPlantName(plant);
+          const location = plant.location ?? "Sin ubicación";
+          const care = "Luz indirecta";
+
+          return (
+            <AppLink
+              key={plant.id}
+              href={`/garden/${plant.id}`}
+              variant="plain"
+              className={styles.cardLink}
+            >
+              <ImageCard
+                variant="result"
+                image={
+                  imageSrc ? (
+                    <Image src={imageSrc} alt={name} layout="fill" />
+                  ) : undefined
+                }
+                imageAlt={name}
+                fallback={
+                  <PlantIcon
+                    size="3rem"
+                    weight="regular"
+                    className={iconStyles.tonePrimary}
+                  />
+                }
+                title={name}
+                description={`${location} • ${care}`}
+                meta={
+                  <span className={styles.cardFooter}>
+                    {formatCareStatus(plant)}
+                  </span>
+                }
+              />
+            </AppLink>
+          );
+        })}
       </div>
     </section>
   );

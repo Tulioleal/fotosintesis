@@ -1,5 +1,6 @@
 "use client";
 
+import { IconContext } from "@phosphor-icons/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SessionProvider } from "next-auth/react";
 import type { ReactNode } from "react";
@@ -19,8 +20,12 @@ export function Providers({ children }: Readonly<{ children: ReactNode }>) {
   );
 
   return (
-    <SessionProvider>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </SessionProvider>
+    <IconContext.Provider
+      value={{ color: "currentColor", size: 20, weight: "fill" }}
+    >
+      <SessionProvider>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </SessionProvider>
+    </IconContext.Provider>
   );
 }

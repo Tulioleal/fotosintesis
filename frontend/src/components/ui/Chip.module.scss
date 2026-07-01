@@ -1,0 +1,63 @@
+@use "@/styles/tokens" as *;
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: $radius-pill;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.tone-neutral {
+  background: $color-surface-tertiary-soft;
+  color: $color-primary;
+  border-color: $border-softest;
+}
+
+.tone-primary {
+  background: $color-primary;
+  color: $color-on-primary;
+  border-color: $color-primary;
+}
+
+.tone-secondary {
+  background: $color-secondary-container;
+  color: $color-on-secondary-container;
+  border-color: transparent;
+}
+
+.tone-success {
+  background: $color-surface-tertiary-soft;
+  color: $color-primary;
+  border-color: $color-tertiary-fixed-dim;
+}
+
+.tone-warning {
+  background: $color-surface-secondary-soft;
+  color: $color-secondary-container;
+  border-color: $color-secondary-fixed-dim;
+}
+
+.tone-error {
+  background: $color-error-container;
+  color: $color-on-error-container;
+  border-color: transparent;
+}

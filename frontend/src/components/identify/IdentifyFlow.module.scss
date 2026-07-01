@@ -1,118 +1,354 @@
 @use "@/styles/tokens" as *;
 
 .flow {
-  display: grid;
-  gap: 1rem;
-  padding: 1rem 0 5rem;
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+  padding-bottom: $space-xl;
 }
 
-.hero,
-.card {
-  border: 1px solid rgba(40, 80, 52, 0.16);
-  border-radius: 2rem;
-  background: rgba(255, 255, 255, 0.78);
-  padding: 1.25rem;
-}
-
-.hero h1 {
-  margin: 0;
-  font-size: clamp(2.15rem, 9vw, 4.5rem);
-  line-height: 0.95;
-  letter-spacing: -0.06em;
-}
-
-.hero p,
-.card p,
-.notice,
-.warning,
-.error {
-  color: $color-muted;
-  line-height: 1.55;
-}
-
-.eyebrow {
-  margin: 0 0 0.5rem;
-  color: $color-accent;
-  font-size: 0.78rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-}
-
-.actions button,
-.card button,
-.profileLink {
-  border: 0;
-  border-radius: 999px;
-  background: $color-foreground;
-  color: white;
-  cursor: pointer;
-  display: inline-flex;
-  font-weight: 900;
+.dropPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 0.95rem 1rem;
-  text-decoration: none;
 }
 
-.actions .secondary,
-.card button:disabled {
-  background: rgba(86, 124, 58, 0.16);
-  color: $color-foreground;
-}
-
-.preview {
+.dropZone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  max-height: 22rem;
-  object-fit: cover;
-  border-radius: 1.5rem;
+  max-width: 48rem;
+  aspect-ratio: 16 / 9;
+  gap: $space-md;
+  border: 1px dashed $color-outline;
+  border-radius: $radius-md;
+  background: $color-surface-container-low;
+  transition: background-color 160ms ease, border-color 160ms ease;
 }
 
-.results {
-  display: grid;
-  gap: 1rem;
+.dropZone:hover,
+.dropZone:focus-within {
+  background: $color-surface-container;
 }
 
-.card {
-  display: grid;
-  gap: 0.75rem;
+@media (min-width: 720px) {
+  .dropZone {
+    aspect-ratio: 21 / 9;
+  }
 }
 
-.card h2 {
+.dropIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: $radius-pill;
+  background: $color-surface-container-highest;
+  color: $color-primary;
+}
+
+.dropActions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $space-sm;
+}
+
+@media (min-width: 720px) {
+  .dropActions {
+    flex-direction: row;
+    gap: $space-md;
+  }
+}
+
+.dropHint {
   margin: 0;
-  font-size: 1.5rem;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  font-weight: $font-weight-light;
+  line-height: $line-height-relaxed;
+  color: $color-on-surface-variant;
 }
 
-.card ul {
+.analysisPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: $space-md;
+}
+
+.previewFrame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 48rem;
+  aspect-ratio: 16 / 9;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-md;
+  overflow: hidden;
+}
+
+@media (min-width: 720px) {
+  .previewFrame {
+    aspect-ratio: 21 / 9;
+  }
+}
+
+.previewImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: $color-surface-container-low;
+}
+
+.previewImageAnalyzing {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(20%);
+  opacity: 0.6;
+}
+
+.scanOverlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(72, 100, 75, 0.2) 50%,
+    transparent 100%
+  );
+  height: 20%;
+  animation: identifyScan 3s ease-in-out infinite;
+}
+
+.analysisStatus {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $space-xs;
+  width: 100%;
+  max-width: 28rem;
+  text-align: center;
+}
+
+.fileName {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-bold;
+  letter-spacing: $letter-spacing-wide;
+  color: $color-on-surface;
+}
+
+.fileNameHeading {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-surface;
+}
+
+.statusCopy {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  font-weight: $font-weight-light;
+  line-height: $line-height-relaxed;
+  color: $color-on-surface-variant;
+}
+
+.progress {
+  position: relative;
+  width: 100%;
+  height: 0.375rem;
+  border-radius: $radius-pill;
+  background: $color-surface-variant;
+  overflow: hidden;
+}
+
+.progressBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: $color-primary;
+  border-radius: $radius-pill;
+  transform-origin: left center;
+  animation: identifyProgress 2s linear infinite;
+}
+
+.resultsSection {
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+}
+
+.resultsDivider {
+  border: 0;
+  border-top: 1px solid $color-outline-variant;
+  margin: 0;
+}
+
+.resultsHeader {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-xs;
+}
+
+.resultsHeading {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-md;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  color: $color-on-surface;
+}
+
+.searchPulse {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: $radius-pill;
+  background: $color-primary;
+  margin-right: 0.4rem;
+  animation: identifyPulse 1.4s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+.resultGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: $space-md;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.card li {
-  border-radius: 999px;
-  background: rgba(86, 124, 58, 0.12);
-  padding: 0.4rem 0.65rem;
+.resultGrid > li {
+  display: flex;
 }
 
-.warning,
-.error {
-  border-radius: 1rem;
-  background: rgba(158, 82, 45, 0.12);
-  padding: 0.85rem;
+@media (min-width: 720px) {
+  .resultGrid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: $space-md;
+  }
 }
 
-@media (min-width: 760px) {
-  .flow {
-    max-width: 760px;
-    margin: 0 auto;
+.resultCard {
+  width: 100%;
+  min-height: 100%;
+}
+
+.confidenceLine {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 $space-xs;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  color: $color-on-surface-variant;
+}
+
+.confidenceIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.candidateLinks {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+.skeletonCard {
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+  padding: $space-sm;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-md;
+  background: $color-surface-container-lowest;
+  animation: identifyPulse 1.6s ease-in-out infinite;
+  box-shadow: 0 2px 8px rgba(73, 101, 76, 0.04);
+}
+
+.skeletonImage {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: $radius-md;
+  background: $color-surface-container;
+}
+
+.skeletonLines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 $space-xs $space-xs;
+}
+
+.skeletonLine {
+  height: 0.75rem;
+  border-radius: $radius-sm;
+  background: $color-surface-container;
+}
+
+.skeletonLineTertiary {
+  height: 0.5rem;
+  border-radius: $radius-sm;
+  background: $color-surface-container;
+}
+
+@keyframes identifyScan {
+  0% {
+    transform: translateY(-25%);
+  }
+  100% {
+    transform: translateY(500%);
+  }
+}
+
+@keyframes identifyProgress {
+  0% {
+    transform: translateX(-100%) scaleX(0.2);
+  }
+  50% {
+    transform: translateX(0%) scaleX(0.5);
+  }
+  100% {
+    transform: translateX(100%) scaleX(0.2);
+  }
+}
+
+@keyframes identifyPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
   }
 }

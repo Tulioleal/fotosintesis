@@ -1,9 +1,10 @@
 from collections import defaultdict
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, insert, or_, select
+from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.schemas import GardenPlantCard
 from app.auth.tables import (
     garden_plants,
     identification_candidates,
@@ -188,6 +189,30 @@ class PlantProfileGardenRepository(RepositoryBase):
             )
         ).first()
 
+    async def count_garden_plants(self, *, user_id: UUID) -> int:
+        value = await self.session.scalar(
+            select(func.count())
+            .select_from(garden_plants)
+            .where(garden_plants.c.user_id == user_id)
+        )
+        return int(value or 0)
+
+    async def list_recent_garden_plants(
+        self, *, user_id: UUID, limit: int = 8
+    ) -> list[GardenPlantCard]:
+        statement = (
+            select(garden_plants, plant_profiles)
+            .join(plant_profiles, plant_profiles.c.id == garden_plants.c.profile_id)
+            .where(garden_plants.c.user_id == user_id)
+            .order_by(
+                garden_plants.c.created_at.desc(),
+                garden_plants.c.id,
+            )
+            .limit(limit)
+        )
+        rows = (await self.session.execute(statement)).all()
+        return [_garden_card_from_row(row._mapping) for row in rows]
+
 
 def _build_profile_evidence(
     scientific_name: str, common_name: str | None, chunks: list[dict]
@@ -302,6 +327,20 @@ def _garden_from_row(row) -> GardenPlantResponse:
         location=row[garden_plants.c.location],
         image_path=row[garden_plants.c.image_path],
         custom_data=row[garden_plants.c.custom_data],
+        active_reminders=row[garden_plants.c.active_reminders],
+        created_at=row[garden_plants.c.created_at],
+    )
+
+
+def _garden_card_from_row(row) -> GardenPlantCard:
+    common = row[plant_profiles.c.common_name]
+    return GardenPlantCard(
+        id=row[garden_plants.c.id],
+        scientific_name=row[plant_profiles.c.scientific_name],
+        common_name=common,
+        nickname=row[garden_plants.c.nickname],
+        image_path=row[garden_plants.c.image_path],
+        location=row[garden_plants.c.location],
         active_reminders=row[garden_plants.c.active_reminders],
         created_at=row[garden_plants.c.created_at],
     )

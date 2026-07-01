@@ -1,0 +1,118 @@
+@use "@/styles/tokens" as *;
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: $font-weight-medium;
+  font-size: $font-size-label-md;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: none;
+  color: $color-on-surface-variant;
+}
+
+.required[data-required="true"]::after {
+  content: " *";
+  color: $color-error;
+  font-weight: $font-weight-medium;
+}
+
+.required {
+  color: $color-error;
+}
+
+.optional {
+  margin-left: 0.25rem;
+  color: $color-on-surface-variant;
+  font-size: 0.75rem;
+  font-weight: $font-weight-light;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.hint {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-size: 0.8rem;
+  font-weight: $font-weight-light;
+}
+
+.input {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: 1px solid $color-outline-variant;
+  border-top-left-radius: $radius-sm;
+  border-top-right-radius: $radius-sm;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: $color-surface-tertiary-soft;
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+  font-size: 0.95rem;
+  line-height: $line-height-normal;
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease,
+    color 200ms ease;
+}
+
+.input::placeholder {
+  color: $color-on-surface-variant;
+  opacity: 0.7;
+}
+
+.input:hover:not(:disabled):not([aria-invalid="true"]) {
+  border-bottom-color: $color-secondary;
+}
+
+.textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, $color-on-surface-variant 50%),
+    linear-gradient(135deg, $color-on-surface-variant 50%, transparent 50%);
+  background-position: calc(100% - 1.2rem) 50%, calc(100% - 0.8rem) 50%;
+  background-size: 0.4rem 0.4rem;
+  background-repeat: no-repeat;
+  padding-right: 2.5rem;
+  cursor: pointer;
+}
+
+.input:focus,
+.input:focus-visible {
+  outline: none;
+  border-bottom-color: $color-secondary;
+  background: $color-surface-tertiary-medium;
+}
+
+.input:disabled {
+  background: $color-surface-container;
+  color: $color-on-surface-variant;
+  cursor: not-allowed;
+}
+
+.invalid {
+  border-bottom-color: $color-error;
+}
+
+.invalid:focus {
+  background: $color-surface-error-soft;
+}
+
+.error {
+  margin: 0;
+  color: $color-error;
+  font-size: 0.8rem;
+  font-weight: $font-weight-medium;
+}

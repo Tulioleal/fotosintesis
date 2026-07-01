@@ -1,0 +1,110 @@
+@use "@/styles/tokens" as *;
+
+.card {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-sm;
+  border-radius: $radius-sm;
+  border: 1px solid $color-outline-variant;
+  background: $color-surface-container-lowest;
+  color: $color-on-surface;
+  text-align: left;
+  transition:
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+.body {
+  display: grid;
+  gap: $space-xs;
+}
+
+.art {
+  display: grid;
+  overflow: hidden;
+  border-radius: $radius-lg;
+}
+
+.variant-tonal {
+  background: $color-surface-container-lowest;
+  border-color: $color-outline-variant;
+}
+
+.variant-outlined {
+  background: transparent;
+  border-color: $color-outline-variant;
+}
+
+.variant-quiet {
+  background: $color-surface-quiet-fill;
+  border-color: $border-softest;
+}
+
+.variant-elevated {
+  background: $color-surface-container-lowest;
+  border-color: $color-outline-variant;
+  box-shadow: $shadow-reference-hover;
+}
+
+.variant-callout {
+  background: $color-primary;
+  color: $color-on-primary;
+  border-color: transparent;
+}
+
+.padding-sm {
+  padding: $space-sm;
+}
+
+.padding-md {
+  padding: $space-md;
+}
+
+.padding-lg {
+  padding: $space-lg;
+}
+
+.eyebrow {
+  margin: 0;
+  color: $color-primary;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.variant-callout .eyebrow {
+  color: $color-on-primary-container;
+}
+
+.title {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: inherit;
+}
+
+.description {
+  margin: 0;
+  color: $color-on-surface-variant;
+  line-height: $line-height-relaxed;
+}
+
+.variant-callout .description {
+  color: $color-on-primary-container;
+  opacity: 0.92;
+}
+
+.content {
+  display: grid;
+  gap: $space-xs;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}

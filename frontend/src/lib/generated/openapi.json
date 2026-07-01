@@ -61,6 +61,11 @@
             ],
             "title": "Intent"
           },
+          "llm_general_guidance_used": {
+            "default": false,
+            "title": "Llm General Guidance Used",
+            "type": "boolean"
+          },
           "missing_aspects": {
             "default": [],
             "items": {
@@ -488,6 +493,80 @@
         "title": "GardenDeleteResponse",
         "type": "object"
       },
+      "GardenPlantCard": {
+        "properties": {
+          "active_reminders": {
+            "default": 0,
+            "title": "Active Reminders",
+            "type": "integer"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Path"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "nickname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nickname"
+          },
+          "scientific_name": {
+            "title": "Scientific Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "scientific_name",
+          "created_at"
+        ],
+        "title": "GardenPlantCard",
+        "type": "object"
+      },
       "GardenPlantCreate": {
         "properties": {
           "confirmed_candidate_id": {
@@ -694,6 +773,18 @@
           "empty_state": {
             "title": "Empty State",
             "type": "boolean"
+          },
+          "garden_count": {
+            "default": 0,
+            "title": "Garden Count",
+            "type": "integer"
+          },
+          "recent_garden_plants": {
+            "items": {
+              "$ref": "#/components/schemas/GardenPlantCard"
+            },
+            "title": "Recent Garden Plants",
+            "type": "array"
           },
           "user": {
             "$ref": "#/components/schemas/PublicAuthUser"
@@ -2639,6 +2730,102 @@
       }
     },
     "/light-measurements": {
+      "get": {
+        "operationId": "list_light_measurements_light_measurements_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "garden_plant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Garden Plant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LightMeasurementDto"
+                  },
+                  "title": "Response List Light Measurements Light Measurements Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Light Measurements",
+        "tags": [
+          "light-measurements"
+        ]
+      },
       "post": {
         "operationId": "create_light_measurement_light_measurements_post",
         "parameters": [

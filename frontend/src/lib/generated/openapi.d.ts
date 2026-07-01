@@ -234,7 +234,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Light Measurements */
+        get: operations["list_light_measurements_light_measurements_get"];
         put?: never;
         /** Create Light Measurement */
         post: operations["create_light_measurement_light_measurements_post"];
@@ -360,6 +361,11 @@ export interface components {
             evidence_path: string[];
             /** Intent */
             intent?: string | null;
+            /**
+             * Llm General Guidance Used
+             * @default false
+             */
+            llm_general_guidance_used: boolean;
             /**
              * Missing Aspects
              * @default []
@@ -530,6 +536,34 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** GardenPlantCard */
+        GardenPlantCard: {
+            /**
+             * Active Reminders
+             * @default 0
+             */
+            active_reminders: number;
+            /** Common Name */
+            common_name?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Image Path */
+            image_path?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Nickname */
+            nickname?: string | null;
+            /** Scientific Name */
+            scientific_name: string;
+        };
         /** GardenPlantCreate */
         GardenPlantCreate: {
             /**
@@ -608,6 +642,13 @@ export interface components {
             access: components["schemas"]["HomeAccessItem"][];
             /** Empty State */
             empty_state: boolean;
+            /**
+             * Garden Count
+             * @default 0
+             */
+            garden_count: number;
+            /** Recent Garden Plants */
+            recent_garden_plants?: components["schemas"]["GardenPlantCard"][];
             user: components["schemas"]["PublicAuthUser"];
         };
         /** IdentificationResponse */
@@ -1474,6 +1515,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfirmationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_light_measurements_light_measurements_get: {
+        parameters: {
+            query?: {
+                garden_plant_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LightMeasurementDto"][];
                 };
             };
             /** @description Validation Error */

@@ -1,0 +1,50 @@
+@use "@/styles/tokens" as *;
+
+.wrapper {
+  display: grid;
+  gap: $space-md;
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+}
+
+.hero {
+  display: grid;
+  gap: $space-xs;
+  padding: $space-md;
+  border-radius: $radius-xl;
+  background:
+    radial-gradient(circle at 16% 18%, rgba(72, 100, 75, 0.18), transparent 60%),
+    linear-gradient(135deg, $color-tertiary-fixed 0%, $color-primary-container 100%);
+  border: 1px solid $border-soft;
+  color: $color-on-primary;
+  box-shadow: $shadow-ambient;
+  text-align: left;
+}
+
+.heroIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: $radius-md;
+  background: $color-primary;
+  color: $color-on-primary;
+}
+
+.heroTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: 1.4rem;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  letter-spacing: $letter-spacing-tight;
+}
+
+.heroCopy {
+  margin: 0;
+  color: inherit;
+  opacity: 0.92;
+  line-height: $line-height-relaxed;
+}

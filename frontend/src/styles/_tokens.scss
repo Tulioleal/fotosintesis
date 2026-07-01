@@ -1,6 +1,195 @@
-$color-background: #f4f1df;
-$color-foreground: #1d2d22;
-$color-muted: #516456;
-$color-accent: #567c3a;
+// Fotosintesis design tokens.
+// Source of truth: frontend/REFERENCES/fotosintesis/DESIGN.md
+
+// --- Color palette --------------------------------------------------------
+
+$color-surface: #f9f9f7;
+$color-surface-dim: #dadad8;
+$color-surface-bright: #f9f9f7;
+$color-surface-container-lowest: #ffffff;
+$color-surface-container-low: #f4f4f2;
+$color-surface-container: #eeeeec;
+$color-surface-container-high: #e8e8e6;
+$color-surface-container-highest: #e2e3e1;
+$color-on-surface: #1a1c1b;
+$color-on-surface-variant: #424842;
+$color-inverse-surface: #2f3130;
+$color-inverse-on-surface: #f1f1ef;
+$color-outline: #737971;
+$color-outline-variant: #c2c8bf;
+$color-surface-tint: #49654c;
+
+$color-primary: #314c35;
+$color-on-primary: #ffffff;
+$color-primary-container: #48644b;
+$color-on-primary-container: #bfdfc0;
+$color-inverse-primary: #afcfb0;
+
+$color-secondary: #89502c;
+$color-on-secondary: #ffffff;
+$color-secondary-container: #feb387;
+$color-on-secondary-container: #794320;
+
+$color-tertiary: #3e493b;
+$color-on-tertiary: #ffffff;
+$color-tertiary-container: #566151;
+$color-on-tertiary-container: #cfdbc8;
+
+$color-error: #ba1a1a;
+$color-on-error: #ffffff;
+$color-error-container: #ffdad6;
+$color-on-error-container: #93000a;
+
+$color-primary-fixed: #cbebcb;
+$color-primary-fixed-dim: #afcfb0;
+$color-on-primary-fixed: #06210d;
+$color-on-primary-fixed-variant: #324d36;
+$color-secondary-fixed: #ffdbc9;
+$color-secondary-fixed-dim: #ffb68c;
+$color-on-secondary-fixed: #321200;
+$color-on-secondary-fixed-variant: #6d3917;
+$color-tertiary-fixed: #dae6d2;
+$color-tertiary-fixed-dim: #becab7;
+$color-on-tertiary-fixed: #141e12;
+$color-on-tertiary-fixed-variant: #3f4a3b;
+
+$color-background: $color-surface;
+$color-on-background: $color-on-surface;
+$color-surface-variant: #e2e3e1;
+
+// Semantic accents (warm paper + botanical greens)
+$color-foreground: $color-on-surface;
+$color-muted: $color-on-surface-variant;
+$color-accent: $color-primary-container;
+
+// --- Typography -----------------------------------------------------------
+
+$font-headline-stack:
+  var(--font-headline, "Bodoni Moda"), "Times New Roman", serif;
+$font-body-stack:
+  var(--font-body, "Roboto"), "Helvetica Neue", Arial, sans-serif;
+
+$font-size-headline-lg: 2rem;
+$font-size-headline-md: 1.5rem;
+$font-size-headline-sm: 1.25rem;
+$font-size-body-lg: 1.125rem;
+$font-size-body-md: 0.875rem;
+$font-size-label-md: 0.875rem;
+
+$font-weight-light: 300;
+$font-weight-medium: 500;
+$font-weight-bold: 700;
+
+$line-height-tight: 1.2;
+$line-height-snug: 1.3;
+$line-height-normal: 1.4;
+$line-height-relaxed: 1.6;
+
+$letter-spacing-tight: -0.02em;
+$letter-spacing-display: -0.06em;
+$letter-spacing-wide: 0.05em;
+
+// --- Spacing scale --------------------------------------------------------
+
+$space-base: 4px;
+$space-xs: 8px;
+$space-sm: 16px;
+$space-md: 24px;
+$space-lg: 40px;
+$space-xl: 64px;
+
+$gutter: 16px;
+$margin-mobile: 16px;
+$margin-desktop: 32px;
+$gutter-desktop: 24px;
+
+$content-width-sm: 30rem;
+$content-width-md: 42rem;
+$content-width-lg: 58rem;
+$content-width-xl: 80rem;
+
+// Aliases for existing module compatibility.
 $space-3: 0.75rem;
 $space-6: 1.5rem;
+
+// --- Radius ---------------------------------------------------------------
+
+$radius-sm: 0.25rem;
+$radius-default: 0.5rem;
+$radius-md: 0.75rem;
+$radius-lg: 1rem;
+$radius-xl: 1.5rem;
+$radius-pill: 9999px;
+
+// --- Elevation ------------------------------------------------------------
+
+$shadow-ambient: 0 24px 80px rgba(43, 78, 50, 0.12);
+$shadow-ambient-strong: 0 24px 80px rgba(43, 78, 50, 0.16);
+$shadow-overlay: 0 18px 60px rgba(43, 78, 50, 0.16);
+$shadow-reference-hover: 0 8px 24px rgba(73, 101, 76, 0.08);
+$shadow-reference-soft: 0 4px 16px rgba(73, 101, 76, 0.06);
+
+// --- Surfaces, borders, focus --------------------------------------------
+
+$border-soft: rgba(72, 100, 75, 0.16);
+$border-softer: rgba(72, 100, 75, 0.12);
+$border-softest: rgba(40, 80, 52, 0.18);
+$border-emphasis: rgba(40, 80, 52, 0.22);
+$border-on-surface: rgba(49, 76, 53, 0.05);
+$border-on-surface-strong: rgba(49, 76, 53, 0.12);
+
+$surface-soft-fill: rgba(255, 255, 255, 0.78);
+$surface-card-fill: rgba(255, 255, 255, 0.82);
+$surface-overlay-fill: rgba(255, 255, 255, 0.84);
+$surface-nav-fill: rgba(255, 255, 255, 0.9);
+$surface-glass-fill: rgba(255, 255, 255, 0.7);
+$surface-quiet-fill: rgba(72, 100, 75, 0.04);
+
+// Soft botanical fills for chips, surfaces, and wells.
+$surface-tertiary-soft: rgba(72, 100, 75, 0.08);
+$surface-tertiary-medium: rgba(72, 100, 75, 0.12);
+$surface-tertiary-strong: rgba(72, 100, 75, 0.18);
+$surface-primary-soft: rgba(49, 76, 53, 0.05);
+$surface-secondary-soft: rgba(154, 94, 57, 0.1);
+$surface-secondary-medium: rgba(154, 94, 57, 0.16);
+$surface-secondary-strong: rgba(154, 94, 57, 0.3);
+$surface-error-soft: rgba(186, 26, 26, 0.08);
+$surface-error-medium: rgba(186, 26, 26, 0.18);
+$surface-error-strong: rgba(186, 26, 26, 0.32);
+
+$focus-ring-color: rgba(154, 94, 57, 0.32);
+$focus-ring-width: 3px;
+
+$on-primary-soft: #fffdf0;
+
+// Aliased names for the shared UI primitives.
+$color-surface-soft-fill: $surface-soft-fill;
+$color-surface-card-fill: $surface-card-fill;
+$color-surface-overlay-fill: $surface-overlay-fill;
+$color-surface-nav-fill: $surface-nav-fill;
+$color-surface-glass-fill: $surface-glass-fill;
+$color-surface-quiet-fill: $surface-quiet-fill;
+$color-surface-tertiary-soft: $surface-tertiary-soft;
+$color-surface-tertiary-medium: $surface-tertiary-medium;
+$color-surface-tertiary-strong: $surface-tertiary-strong;
+$color-surface-primary-soft: $surface-primary-soft;
+$color-surface-secondary-soft: $surface-secondary-soft;
+$color-surface-secondary-medium: $surface-secondary-medium;
+$color-surface-secondary-strong: $surface-secondary-strong;
+$color-surface-error-soft: $surface-error-soft;
+$color-surface-error-medium: $surface-error-medium;
+$color-surface-error-strong: $surface-error-strong;
+$color-border-soft: $border-soft;
+$color-border-softer: $border-softer;
+$color-border-softest: $border-softest;
+$color-border-emphasis: $border-emphasis;
+$color-border-on-surface: $border-on-surface;
+$color-border-on-surface-strong: $border-on-surface-strong;
+$color-shadow-ambient: $shadow-ambient;
+$color-shadow-ambient-strong: $shadow-ambient-strong;
+$color-shadow-overlay: $shadow-overlay;
+$color-shadow-reference-hover: $shadow-reference-hover;
+$color-shadow-reference-soft: $shadow-reference-soft;
+$color-on-primary-soft: $on-primary-soft;
+$color-focus-ring: $focus-ring-color;
+$color-focus-ring-width: $focus-ring-width;

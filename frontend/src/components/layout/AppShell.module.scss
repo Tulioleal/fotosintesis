@@ -1,60 +1,279 @@
 @use "@/styles/tokens" as *;
 
 .shell {
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
-  padding: 1rem 1rem 6rem;
   background:
-    radial-gradient(circle at 80% 0%, rgba(86, 124, 58, 0.18), transparent 24rem),
+    radial-gradient(circle at 80% 0%, rgba(86, 124, 58, 0.12), transparent 28rem),
     $color-background;
   color: $color-foreground;
 }
 
-.content {
-  width: min(100%, 58rem);
-  margin: 0 auto;
+.topBar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: $color-surface;
+  border-bottom: 1px solid $color-outline-variant;
+  backdrop-filter: saturate(120%) blur(8px);
 }
 
-.nav {
+.topBarInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-md;
+  width: 100%;
+  max-width: $content-width-lg;
+  margin: 0 auto;
+  padding: $space-sm $margin-mobile;
+
+  @media (min-width: 720px) {
+    padding: $space-sm $margin-desktop;
+  }
+
+  @media (min-width: 1200px) {
+    max-width: $content-width-xl;
+  }
+}
+
+.brand {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-bold;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-primary;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: none;
+    color: $color-primary;
+  }
+}
+
+.topNav {
+  display: none;
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+
+  @media (min-width: 720px) {
+    display: flex;
+  }
+}
+
+.topNavList {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-xs;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topNavItem {
+  display: inline-flex;
+}
+
+.topNavLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: $radius-pill;
+  border: 1px solid transparent;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+
+  &:hover {
+    background: $color-surface-container-low;
+    color: $color-on-surface;
+    text-decoration: none;
+  }
+
+  &[data-active="true"] {
+    background: $color-primary-container;
+    border-color: $color-outline-variant;
+    color: $color-on-primary-container;
+  }
+}
+
+.topActions {
+  display: none;
+  align-items: center;
+  gap: $space-xs;
+
+  @media (min-width: 720px) {
+    display: inline-flex;
+  }
+}
+
+.canvas {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: $content-width-lg;
+  margin: 0 auto;
+  padding: $space-md $margin-mobile calc(#{$space-lg} + 6rem);
+  gap: $space-md;
+
+  @media (min-width: 720px) {
+    padding: $space-lg $margin-desktop calc(#{$space-xl} + 2rem);
+    gap: $space-lg;
+  }
+
+  @media (min-width: 1200px) {
+    max-width: $content-width-xl;
+  }
+}
+
+.canvasFullBleed {
+  padding: 0;
+  gap: 0;
+  max-width: none;
+}
+
+.bottomNav {
   position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  left: 1rem;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 0.35rem;
-  width: min(calc(100% - 2rem), 38rem);
-  margin: 0 auto;
-  padding: 0.45rem;
-  border: 1px solid rgba(40, 80, 52, 0.14);
-  border-radius: 1.4rem;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 18px 60px rgba(43, 78, 50, 0.16);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  background: $color-surface-container-lowest;
+  border-top: 1px solid $color-outline-variant;
+  box-shadow: 0 -4px 24px rgba(73, 101, 76, 0.08);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+
+  @media (min-width: 720px) {
+    display: none;
+  }
 }
 
-.nav a {
+.bottomNavList {
   display: grid;
-  place-items: center;
-  min-height: 3rem;
-  border-radius: 1rem;
-  color: $color-muted;
-  font-size: 0.78rem;
-  font-weight: 800;
+  grid-template-columns: repeat(6, 1fr);
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  max-width: $content-width-lg;
+  margin: 0 auto;
+  padding: 0.45rem $margin-mobile calc(0.45rem + env(safe-area-inset-bottom, 0));
+  list-style: none;
+}
+
+.bottomNavItem {
+  display: flex;
+  justify-content: center;
+}
+
+.bottomNavLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.6rem;
+  width: 100%;
+  padding: 0.35rem 0.4rem;
+  border-radius: $radius-pill;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.72rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
   text-align: center;
   text-decoration: none;
+  transition: background-color 120ms ease, color 120ms ease;
+
+  &:hover {
+    background: $color-surface-variant;
+    color: $color-on-surface;
+    text-decoration: none;
+  }
+
+  &[data-active="true"] {
+    background: $color-secondary-container;
+    color: $color-on-secondary-container;
+  }
 }
 
-.nav a[data-active="true"] {
-  background: $color-foreground;
-  color: #fffdf0;
+.footer {
+  display: none;
+  width: 100%;
+  background: $color-surface-container-high;
+  border-top: 1px solid $color-outline-variant;
+  margin-top: auto;
+
+  @media (min-width: 720px) {
+    display: block;
+  }
+}
+
+.footerInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-xs;
+  width: 100%;
+  max-width: $content-width-lg;
+  margin: 0 auto;
+  padding: $space-md $margin-mobile;
+
+  @media (min-width: 720px) {
+    flex-direction: row;
+    padding: $space-md $margin-desktop;
+  }
+
+  @media (min-width: 1200px) {
+    max-width: $content-width-xl;
+  }
 }
 
 .logout {
-  margin: 1rem 0 0 auto;
-  display: block;
-  padding: 0.65rem 1rem;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(29, 45, 34, 0.08);
-  color: $color-foreground;
-  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-pill;
+  background: transparent;
+  color: $color-primary;
+  font-family: $font-body-stack;
+  font-size: 0.82rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+
+  &:hover {
+    background: $color-primary-container;
+    color: $color-on-primary-container;
+    border-color: $color-primary;
+  }
+
+  &:focus-visible {
+    outline: $focus-ring-width solid $color-secondary;
+    outline-offset: 2px;
+  }
+}
+
+.footerBrand {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  color: $color-primary;
+}
+
+.footerCopy {
+  color: $color-on-surface-variant;
+  font-size: 0.85rem;
+  font-weight: $font-weight-light;
 }

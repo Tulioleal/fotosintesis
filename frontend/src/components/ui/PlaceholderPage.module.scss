@@ -1,33 +1,29 @@
 @use "@/styles/tokens" as *;
 
-.placeholder {
-  display: grid;
-  gap: 1rem;
-  min-height: 70vh;
-  align-content: center;
-  padding: 1rem 0;
-}
-
 .panel {
-  padding: 1.35rem;
-  border: 1px solid rgba(40, 80, 52, 0.16);
-  border-radius: 2rem;
-  background: rgba(255, 255, 255, 0.78);
+  margin-top: var(--space-md);
 }
 
-.panel h1 {
+.copy {
   margin: 0;
-  font-size: clamp(2.3rem, 10vw, 4.8rem);
-  line-height: 0.94;
-  letter-spacing: -0.06em;
+  color: $color-on-surface-variant;
+  line-height: $line-height-relaxed;
 }
 
-.panel p {
-  color: $color-muted;
-  line-height: 1.6;
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: $space-sm;
+  padding: 0.65rem 1rem;
+  border-radius: $radius-pill;
+  background: $color-foreground;
+  color: $color-on-primary-soft;
+  font-weight: $font-weight-medium;
+  text-decoration: none;
 }
 
-.panel a {
-  color: $color-accent;
-  font-weight: 900;
+.link:hover {
+  background: $color-primary;
+  text-decoration: none;
 }

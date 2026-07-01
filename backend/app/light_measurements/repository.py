@@ -49,6 +49,26 @@ class LightMeasurementRepository(RepositoryBase):
         ).first()
         return _measurement_from_row(row._mapping) if row else None
 
+    async def list_measurements(
+        self,
+        *,
+        user_id: UUID,
+        garden_plant_id: UUID | None,
+        limit: int,
+    ) -> list[LightMeasurementDto]:
+        rows = (
+            await self.session.execute(
+                select(light_measurements)
+                .where(
+                    light_measurements.c.user_id == user_id,
+                    light_measurements.c.garden_plant_id.is_not_distinct_from(garden_plant_id),
+                )
+                .order_by(light_measurements.c.measured_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [_measurement_from_row(row._mapping) for row in rows]
+
     async def _plant_exists(self, *, user_id: UUID, garden_plant_id: UUID) -> bool:
         row = (
             await self.session.execute(

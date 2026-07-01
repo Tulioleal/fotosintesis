@@ -1,11 +1,56 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
+import {
+  ArrowLeftIcon,
+  BellIcon,
+  CameraIcon,
+  ChatTextIcon,
+  MapPinIcon,
+  PlantIcon,
+  PlusCircleIcon,
+  SunIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ApiClientError, apiClient } from "@/lib/api/client";
-import styles from "./PlantProfileView.module.scss";
+import {
+  ApiClientError,
+  apiClient,
+  type LightClassification,
+  type LightMeasurement,
+} from "@/lib/api/client";
+import { buildAssistantHref } from "@/lib/assistant";
+import { resolveImageUrl } from "@/lib/images";
+import { AppLink, Button, Card, Chip, Notice } from "@/components/ui";
+import iconStyles from "@/components/ui/Icons.module.scss";
+import styles from "./GardenDetail.module.scss";
+import Image from "next/image";
+
+const classificationLabel: Record<LightClassification, string> = {
+  baja: "Baja",
+  media: "Media",
+  alta: "Alta",
+  directa: "Directa",
+};
+
+const classificationToWidth: Record<LightClassification, string> = {
+  baja: "25%",
+  media: "50%",
+  alta: "75%",
+  directa: "100%",
+};
+
+const measurementDateFormatter = new Intl.DateTimeFormat("es", {
+  day: "2-digit",
+  month: "short",
+});
+
+function formatMeasurementDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return measurementDateFormatter.format(date).replace(".", "");
+}
 
 export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   const router = useRouter();
@@ -19,11 +64,17 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   const plant = garden.data;
 
   const deletePlant = useMutation({
-    mutationFn: (confirmReminders: boolean) => apiClient.deleteGardenPlant(gardenId, confirmReminders),
+    mutationFn: (confirmReminders: boolean) =>
+      apiClient.deleteGardenPlant(gardenId, confirmReminders),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["garden", "list"] }),
-        queryClient.invalidateQueries({ queryKey: ["garden", "detail", gardenId] }),
+        queryClient.invalidateQueries({
+          queryKey: ["garden", "detail", gardenId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["light-measurements", gardenId],
+        }),
       ]);
       router.push("/garden");
     },
@@ -37,66 +88,279 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
     },
   });
 
+  const lightMeasurements = useQuery({
+    queryKey: ["light-measurements", gardenId],
+    queryFn: () => apiClient.listLightMeasurements(gardenId, 5),
+    enabled: !!gardenId,
+  });
+
   async function remove(confirmReminders = false) {
     setError(null);
     deletePlant.mutate(confirmReminders);
   }
 
-  if (garden.isError && !plant) return <p className={styles.error}>{garden.error.message || "No pudimos cargar la planta."}</p>;
-  if (garden.isLoading || !plant) return <p className={styles.notice}>Cargando detalle...</p>;
+  if (garden.isError && !plant) {
+    return (
+      <Notice tone="error" role="alert">
+        {garden.error.message || "No pudimos cargar la planta."}
+      </Notice>
+    );
+  }
+  if (garden.isLoading || !plant) {
+    return (
+      <Notice tone="info" role="status">
+        Cargando detalle...
+      </Notice>
+    );
+  }
 
-  const profilePath = `/profiles/${encodeURIComponent(plant.profile.scientific_name)}`;
-  const profileHref = plant.confirmed_candidate_id
-    ? `${profilePath}?candidateId=${encodeURIComponent(plant.confirmed_candidate_id)}`
-    : profilePath;
   const binomialName = profileBinomialName(plant.profile);
+  const displayName =
+    plant.profile.selected_alias ??
+    plant.profile.common_name ??
+    plant.profile.scientific_name;
+  const nickname = plant.nickname ? `"${plant.nickname}"` : null;
+  const imageSrc = resolveImageUrl(plant.image_path);
+  const location = plant.location ?? "Sin ubicacion";
+  const notes = plant.notes ?? "Todavia no agregaste notas personalizadas.";
+  const reminderLabel =
+    plant.active_reminders > 0
+      ? `${plant.active_reminders} recordatorio${plant.active_reminders === 1 ? "" : "s"} activo${plant.active_reminders === 1 ? "" : "s"}`
+      : "Sin recordatorios";
   const assistantHref = buildAssistantHref({
-    plant: plant.nickname ?? plant.profile.selected_alias ?? plant.profile.common_name ?? plant.profile.scientific_name,
+    plant: plant.nickname ?? displayName,
     binomial: binomialName,
     scientific: plant.profile.scientific_name,
   });
+  const lightMeterHref = `/light-meter?plant=${encodeURIComponent(plant.profile.scientific_name)}`;
+  const reminderHref = `/reminders?plant=${encodeURIComponent(plant.profile.scientific_name)}`;
+  const chatSubject = plant.nickname ?? displayName;
+  const readings: LightMeasurement[] = lightMeasurements.data ?? [];
 
   return (
-    <section className={styles.profile}>
-      <article className={styles.hero}>
-        <p className={styles.eyebrow}>Detalle de Mi Jardin</p>
-        <h1>{plant.nickname ?? plant.profile.selected_alias ?? plant.profile.scientific_name}</h1>
-        <p><em>{plant.profile.scientific_name}</em></p>
-        <p>{plant.location ?? "Sin ubicacion"}</p>
-      </article>
-      <article className={styles.card}>
-        <h2>Notas</h2>
-        <p>{plant.notes ?? "Todavia no agregaste notas personalizadas."}</p>
-        <p>Recordatorios activos: {plant.active_reminders}</p>
-      </article>
-      <div className={styles.ctas}>
-        <Link href={profileHref}>Ver perfil</Link>
-        <Link href={assistantHref}>Preguntar al asistente</Link>
-        <Link href={`/reminders?plant=${encodeURIComponent(plant.profile.scientific_name)}`}>Crear recordatorio</Link>
-        <Link href={`/light-meter?plant=${encodeURIComponent(plant.profile.scientific_name)}`}>Medir luz</Link>
+    <section className={styles.detail} aria-label={`Detalle de ${displayName}`}>
+      <AppLink
+        href="/garden"
+        variant="back"
+        leadingIcon={
+          <ArrowLeftIcon aria-hidden="true" size="1rem" weight="regular" />
+        }
+      >
+        Volver a Mi Jardin
+      </AppLink>
+
+      <header className={styles.header}>
+        <div>
+          <h1 className={styles.title}>{displayName}</h1>
+          {nickname ? <p className={styles.nickname}>{nickname}</p> : null}
+        </div>
+
+        <div className={styles.chips} aria-label="Resumen de cuidados">
+          <Chip
+            tone="neutral"
+            icon={
+              <BellIcon
+                aria-hidden="true"
+                size="1rem"
+                className={iconStyles.toneOnSurfaceVariant}
+              />
+            }
+          >
+            {reminderLabel}
+          </Chip>
+          <Chip
+            tone="primary"
+            icon={
+              <SunIcon
+                aria-hidden="true"
+                size="1rem"
+                className={iconStyles.toneOnPrimary}
+              />
+            }
+          >
+            Luz Indirecta
+          </Chip>
+        </div>
+      </header>
+
+      <div className={styles.mainGrid}>
+        <div className={styles.imageFrame}>
+          {imageSrc ? (
+            <Image src={imageSrc} alt={displayName} layout="fill" />
+          ) : (
+            <div className={styles.imageFallback} aria-hidden="true">
+              <PlantIcon size="3rem" weight="regular" />
+            </div>
+          )}
+        </div>
+
+        <aside className={styles.sideColumn}>
+          <Card variant="tonal" padding="md">
+            <div className={styles.cardHeading}>
+              <SunIcon
+                aria-hidden="true"
+                size="1.25rem"
+                className={iconStyles.tonePrimary}
+              />
+              <h2>Medicion de Luz</h2>
+            </div>
+            <p className={styles.cardCopy}>
+              Usa la camara para verificar si {plant.nickname ?? displayName}{" "}
+              recibe luz adecuada.
+            </p>
+            <AppLink
+              href={lightMeterHref}
+              variant="button"
+              buttonVariant="primary"
+              leadingIcon={
+                <CameraIcon
+                  aria-hidden="true"
+                  size="1rem"
+                  weight="regular"
+                  className={iconStyles.toneOnPrimary}
+                />
+              }
+            >
+              Iniciar Medicion
+            </AppLink>
+            {readings.length > 0 ? (
+              <div className={styles.readings} aria-label="Ultimas lecturas">
+                <span className={styles.readingsTitle}>Ultimas lecturas</span>
+                <ul className={styles.readingsList}>
+                  {readings.map((reading) => (
+                    <li key={reading.id} className={styles.readingItem}>
+                      <div className={styles.readingMeta}>
+                        <span className={styles.readingDate}>
+                          {formatMeasurementDate(reading.measured_at)}
+                        </span>
+                        <span className={styles.readingLabel}>
+                          {classificationLabel[reading.classification]}
+                        </span>
+                      </div>
+                      <div
+                        className={styles.readingBar}
+                        role="presentation"
+                        style={
+                          {
+                            "--reading-width":
+                              classificationToWidth[reading.classification],
+                          } as React.CSSProperties
+                        }
+                      >
+                        <span
+                          style={{
+                            width:
+                              classificationToWidth[reading.classification],
+                          }}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </Card>
+
+          <Card variant="tonal" padding="md">
+            <span className={styles.kicker}>Acciones</span>
+            <AppLink
+              href={assistantHref}
+              variant="button"
+              buttonVariant="outline"
+              leadingIcon={
+                <ChatTextIcon
+                  aria-hidden="true"
+                  size="1rem"
+                  weight="regular"
+                  className={iconStyles.tonePrimary}
+                />
+              }
+            >
+              Iniciar Chat sobre {chatSubject}
+            </AppLink>
+            <AppLink
+              href={reminderHref}
+              variant="button"
+              buttonVariant="outline"
+              leadingIcon={
+                <PlusCircleIcon
+                  aria-hidden="true"
+                  size="1rem"
+                  weight="regular"
+                  className={iconStyles.tonePrimary}
+                />
+              }
+            >
+              Crear Recordatorio
+            </AppLink>
+          </Card>
+        </aside>
       </div>
-      {error ? <p className={styles.error}>{error}</p> : null}
-      {requiresReminderConfirm ? (
-        <button className={styles.danger} type="button" onClick={() => remove(true)}>
-          {deletePlant.isPending ? "Eliminando..." : "Confirmar eliminacion y afectar recordatorios"}
-        </button>
-      ) : (
-        <button className={styles.danger} type="button" onClick={() => remove(false)}>
-          {deletePlant.isPending ? "Eliminando..." : "Eliminar de Mi Jardin"}
-        </button>
-      )}
+
+      <div className={styles.detailGrid}>
+        <Card variant="tonal" padding="md" className={styles.infoCard}>
+          <div className={styles.infoColumns}>
+            <div>
+              <span className={styles.kicker}>Nombre Cientifico</span>
+              <p className={styles.scientific}>
+                <em>{plant.profile.scientific_name}</em>
+              </p>
+            </div>
+            <div>
+              <span className={styles.kicker}>Ubicacion</span>
+              <p className={styles.location}>
+                <MapPinIcon
+                  aria-hidden="true"
+                  size="1rem"
+                  className={iconStyles.tonePrimary}
+                />
+                {location}
+              </p>
+            </div>
+          </div>
+
+          <div className={styles.notes}>
+            <span className={styles.kicker}>Notas de Usuario</span>
+            <p>{notes}</p>
+          </div>
+        </Card>
+
+        <div className={styles.dangerColumn}>
+          {error ? (
+            <Notice tone="error" role="alert">
+              {error}
+            </Notice>
+          ) : null}
+          {requiresReminderConfirm ? (
+            <Button
+              variant="destructive"
+              onClick={() => remove(true)}
+              fullWidth
+            >
+              {deletePlant.isPending
+                ? "Eliminando..."
+                : "Confirmar eliminacion y afectar recordatorios"}
+            </Button>
+          ) : (
+            <Button
+              variant="destructive"
+              onClick={() => remove(false)}
+              fullWidth
+              leadingIcon={
+                <TrashIcon aria-hidden="true" size="1rem" weight="regular" />
+              }
+            >
+              {deletePlant.isPending ? "Eliminando..." : "Eliminar Planta"}
+            </Button>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
 
-function profileBinomialName(profile: { scientific_name: string } & { binomial_name?: string | null }) {
+function profileBinomialName(
+  profile: { scientific_name: string } & { binomial_name?: string | null },
+) {
   return profile.binomial_name ?? null;
-}
-
-function buildAssistantHref(values: { plant?: string | null; binomial?: string | null; scientific?: string | null }) {
-  const params = Object.entries(values)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
-    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
-    .join("&");
-  return `/assistant${params ? `?${params}` : ""}`;
 }

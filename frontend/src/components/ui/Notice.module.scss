@@ -1,0 +1,62 @@
+@use "@/styles/tokens" as *;
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid transparent;
+  border-radius: $radius-md;
+  font-family: $font-body-stack;
+  font-size: 0.9rem;
+  line-height: $line-height-relaxed;
+}
+
+.icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.15rem;
+}
+
+.body {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-weight: $font-weight-medium;
+}
+
+.content {
+  display: grid;
+  gap: 0.25rem;
+  color: inherit;
+}
+
+.tone-info {
+  background: $color-surface-tertiary-soft;
+  border-color: transparent;
+  color: $color-on-surface;
+}
+
+.tone-success {
+  background: $color-surface-tertiary-soft;
+  border-color: $color-tertiary-fixed-dim;
+  color: $color-on-surface;
+}
+
+.tone-warning {
+  background: $color-surface-secondary-soft;
+  border-color: $color-secondary-fixed-dim;
+  color: $color-on-secondary-fixed-variant;
+}
+
+.tone-error {
+  background: $color-error-container;
+  border-color: transparent;
+  color: $color-on-error-container;
+}

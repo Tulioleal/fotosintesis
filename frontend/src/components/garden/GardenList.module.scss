@@ -1,0 +1,62 @@
+@use "@/styles/tokens" as *;
+
+.garden {
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+  width: 100%;
+  padding: 0 0 5rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $gutter-desktop;
+}
+
+.cardLink {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border-radius: $radius-xl;
+}
+
+.cardFooter {
+  color: $color-outline;
+  font-family: $font-body-stack;
+  font-size: 0.78rem;
+  font-weight: $font-weight-light;
+}
+
+.empty {
+  text-align: left;
+}
+
+.emptyTitle {
+  margin: 0 0 $space-xs;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-md;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  color: $color-on-surface;
+}
+
+.empty p {
+  margin: 0 0 $space-sm;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+}
+
+@media (min-width: 760px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}

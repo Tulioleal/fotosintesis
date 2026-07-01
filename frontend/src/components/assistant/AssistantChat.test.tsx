@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantChat, AssistantMessageContent } from "./AssistantChat";
 
@@ -55,7 +55,7 @@ describe("AssistantChat", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(await screen.findByText("Recordatorio sugerido")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "regar" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Riego" })).toBeInTheDocument();
     expect(screen.getByText(/Pata .* Semanal/)).toBeInTheDocument();
     expect(screen.getByText("Sugerido por el asistente desde la conversacion.")).toBeInTheDocument();
   });
@@ -76,13 +76,49 @@ describe("AssistantChat", () => {
     });
     expect(mocks.createReminder).toHaveBeenCalledWith({
       garden_plant_id: "garden-1",
-      action: "regar",
+      action: "Riego",
       date: "2026-06-01",
       time: "10:30",
       recurrence: "weekly",
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
     });
     expect(await screen.findByRole("button", { name: "Recordatorio creado" })).toBeDisabled();
+  });
+
+  it("normalizes a non-water assistant suggestion to its TASK_TYPES value before posting", async () => {
+    mocks.sendAssistantMessage.mockResolvedValueOnce({
+      message: {
+        role: "assistant",
+        content: "Tengo una sugerencia lista para confirmar.",
+        content_format: "plain_text",
+      },
+      sources: [],
+      requires_confirmation: true,
+      reminder_suggestion: {
+        garden_plant_id: "garden-1",
+        plant_name: "Pata",
+        action: "limpiar polvo del follaje",
+        due_at: "2026-06-01T10:30:00Z",
+        recurrence: "weekly",
+        suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+      },
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Sugerime un recordatorio para Pata" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByRole("heading", { name: "Limpieza" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
+
+    await waitFor(() => {
+      expect(mocks.createReminder).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "Limpieza" }),
+      );
+    });
   });
 
   it("maps assistant taxonomy query parameters to the chat payload", async () => {
@@ -94,7 +130,7 @@ describe("AssistantChat", () => {
 
     render(<AssistantChat />);
 
-    expect(screen.getByText("Contexto inicial: Tomato")).toBeInTheDocument();
+    expect(screen.getByText("Tomato")).toBeInTheDocument();
     expect(screen.getByText("Solanum lycopersicum")).toBeInTheDocument();
     expect(screen.queryByText("Solanum lycopersicum var. cerasiforme")).not.toBeInTheDocument();
 
@@ -215,5 +251,113 @@ describe("AssistantChat", () => {
     expect(await screen.findByText("Cada cuanto riego mi Pata?")).toBeInTheDocument();
     expect(screen.getByText("No model-generated assistant response could be produced. Please retry.")).toBeInTheDocument();
     expect(screen.queryByText("Tengo una sugerencia lista para confirmar.")).not.toBeInTheDocument();
+  });
+
+  it("renders the composer and back buttons with stroke-based icons so they are visible", () => {
+    mocks.searchParams = new URLSearchParams({ plant: "Pata" });
+
+    const { container } = render(<AssistantChat />);
+
+    const backButton = screen.getByRole("button", { name: /Volver al detalle/i });
+    expect(backButton.querySelector("svg")).toBeTruthy();
+
+    const submitButton = screen.getByRole("button", { name: "Enviar" });
+    expect(submitButton.querySelector("svg")).toBeTruthy();
+
+    const attachButton = container.querySelector(
+      'button[aria-label="Adjuntar archivo"] svg',
+    );
+    expect(attachButton).toBeTruthy();
+  });
+
+  it("renders structured sources as accessible source links", async () => {
+    mocks.sendAssistantMessage.mockResolvedValue({
+      conversation_id: "conversation-1",
+      message: { role: "assistant", content: "Aqui tienes evidencia.", content_format: "plain_text" },
+      sources: [
+        { title: "Royal Horticultural Society", domain: "rhs.org.uk", url: "https://rhs.org.uk/monstera" },
+        { title: null, domain: null, url: "https://example.com/monstera-care" },
+      ],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Como riego?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    const sources = await screen.findByRole("complementary", { name: /Fuentes usadas/i });
+    const firstLink = within(sources).getByRole("link", { name: /Royal Horticultural Society/i });
+    await expect(firstLink).toHaveAttribute("href", "https://rhs.org.uk/monstera");
+
+    const fallbackLink = within(sources).getByRole("link", { name: /example\.com\/monstera-care/i });
+    await expect(fallbackLink).toHaveAttribute("href", "https://example.com/monstera-care");
+  });
+
+  it("preserves conversation id across a successful response and the next send", async () => {
+    mocks.sendAssistantMessage
+      .mockResolvedValueOnce({
+        conversation_id: "conversation-7",
+        message: { role: "assistant", content: "Hola!", content_format: "plain_text" },
+        sources: [],
+        requires_confirmation: false,
+        reminder_suggestion: null,
+        tool_failures: [],
+      })
+      .mockResolvedValueOnce({
+        conversation_id: "conversation-7",
+        message: { role: "assistant", content: "Otra respuesta", content_format: "plain_text" },
+        sources: [],
+        requires_confirmation: false,
+        reminder_suggestion: null,
+        tool_failures: [],
+      });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Hola" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Seguime contando" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mocks.sendAssistantMessage.mock.calls[1]?.[0]).toMatchObject({
+      conversation_id: "conversation-7",
+    });
+  });
+
+  it("uses a full-width chat area when no plant context query parameters are present", () => {
+    mocks.searchParams = new URLSearchParams();
+
+    render(<AssistantChat />);
+
+    expect(screen.queryByRole("complementary", { name: /contexto de la planta/i })).not.toBeInTheDocument();
+
+    const composerField = screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?").closest("form");
+    expect(composerField).not.toBeNull();
+    const composerDock = composerField?.parentElement;
+    expect(composerDock).not.toBeNull();
+    const chatArea = composerDock?.parentElement;
+    expect(chatArea).not.toBeNull();
+    const workspace = chatArea?.parentElement;
+    expect(workspace).not.toBeNull();
+    expect(workspace?.children.length).toBe(1);
+    expect(workspace?.firstElementChild).toBe(chatArea);
   });
 });

@@ -10,7 +10,7 @@ export function LogoutButton() {
   }
 
   return (
-    <button className={styles.logout} onClick={logout}>
+    <button type="button" className={styles.logout} onClick={logout}>
       Cerrar sesión
     </button>
   );

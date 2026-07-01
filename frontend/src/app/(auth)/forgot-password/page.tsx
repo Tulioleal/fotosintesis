@@ -5,7 +5,7 @@ export default function ForgotPasswordPage() {
   return (
     <AuthShell
       title="Recuperar acceso"
-      description="Si el correo existe, vamos a preparar las instrucciones para recuperar la cuenta. El envío de email queda para una integración posterior."
+      description="Si el correo existe en Fotosíntesis, vamos a preparar las instrucciones para que vuelvas a entrar. El envío del email queda para una integración posterior."
     >
       <RecoveryForm />
     </AuthShell>

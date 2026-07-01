@@ -2,12 +2,12 @@ import type { components } from "@/lib/generated/openapi";
 import type { operations } from "@/lib/generated/openapi";
 import { API_BASE_URL } from "./config";
 
-export type PublicAuthUser = components["schemas"]["PublicAuthUser"];
 export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type RegisterResponse = components["schemas"]["RegisterResponse"];
 export type RecoveryRequest = components["schemas"]["RecoveryRequest"];
 export type RecoveryResponse = components["schemas"]["RecoveryResponse"];
 export type HomeSummaryResponse = components["schemas"]["HomeSummaryResponse"];
+export type GardenPlantCard = components["schemas"]["GardenPlantCard"];
 export type GardenPlant = operations["get_garden_plant_garden__garden_id__get"]["responses"][200]["content"]["application/json"];
 export type GardenPlantCreate = operations["save_garden_plant_garden_post"]["requestBody"]["content"]["application/json"];
 export type GardenDeleteResponse = operations["delete_garden_plant_garden__garden_id__delete"]["responses"][200]["content"]["application/json"];
@@ -163,5 +163,11 @@ export const apiClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+  },
+  listLightMeasurements(gardenPlantId: string, limit = 5) {
+    const params = new URLSearchParams();
+    params.set("garden_plant_id", gardenPlantId);
+    params.set("limit", String(limit));
+    return frontendRequest<LightMeasurement[]>(`/api/light-measurements?${params.toString()}`);
   },
 };

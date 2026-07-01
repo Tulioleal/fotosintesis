@@ -13,19 +13,41 @@ const items = [
   { href: "/assistant", label: "Asistente" },
 ];
 
-export function BottomNavigation() {
+type BottomNavigationProps = {
+  variant: "top" | "bottom";
+};
+
+export function BottomNavigation({ variant }: BottomNavigationProps) {
   const pathname = usePathname();
   return (
-    <nav className={styles.nav} aria-label="Navegación principal">
-      {items.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          data-active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
-        >
-          {item.label}
-        </Link>
-      ))}
-    </nav>
+    <ul
+      className={
+        variant === "top" ? styles.topNavList : styles.bottomNavList
+      }
+    >
+      {items.map((item) => {
+        const isActive =
+          pathname === item.href || pathname.startsWith(`${item.href}/`);
+        return (
+          <li
+            key={item.href}
+            className={
+              variant === "top" ? styles.topNavItem : styles.bottomNavItem
+            }
+          >
+            <Link
+              href={item.href}
+              data-active={isActive}
+              aria-current={isActive ? "page" : undefined}
+              className={
+                variant === "top" ? styles.topNavLink : styles.bottomNavLink
+              }
+            >
+              {item.label}
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

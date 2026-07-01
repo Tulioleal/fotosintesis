@@ -1,0 +1,231 @@
+@use "@/styles/tokens" as *;
+
+.card {
+  display: grid;
+  padding: $space-sm;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-sm;
+  background: $color-surface-container-lowest;
+  font-family: $font-body-stack;
+  color: $color-on-surface;
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.card:hover {
+  text-decoration: none;
+  color: inherit;
+  transform: translateY(-2px);
+  box-shadow: $shadow-reference-hover;
+}
+
+.card:focus-visible {
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+}
+
+.frame {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.image {
+  display: grid;
+  overflow: hidden;
+  border-radius: $radius-md;
+  background: $color-surface-container;
+}
+
+.image :global(img),
+.image :global(svg),
+.image :global(video) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 500ms ease;
+}
+
+.variant-result:hover .image :global(img),
+.variant-result:hover .image :global(svg),
+.variant-result:hover .image :global(video) {
+  transform: scale(1.08);
+}
+
+.fallback {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: $radius-md;
+  background: linear-gradient(
+    135deg,
+    $color-tertiary-container,
+    $color-surface-container
+  );
+}
+
+.fallbackLeaf {
+  width: 40%;
+  height: 40%;
+  border-radius: 50% 0 50% 50%;
+  background: $color-primary-container;
+  opacity: 0.6;
+  transform: rotate(-15deg);
+  transition: transform 500ms ease;
+}
+
+.variant-result:hover .fallbackLeaf {
+  transform: rotate(-15deg) scale(1.08);
+}
+
+.caption {
+  color: $color-on-surface-variant;
+  font-size: 0.78rem;
+  font-weight: $font-weight-light;
+  line-height: $line-height-normal;
+}
+
+.body {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0;
+  color: $color-primary;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+}
+
+.description {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-size: 0.9rem;
+  line-height: $line-height-relaxed;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+// Result variant: outer surface card with fixed image on top.
+.variant-result {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-md;
+  background: $color-surface-container-lowest;
+}
+
+.variant-result:hover {
+  box-shadow: $shadow-reference-hover;
+}
+
+.variant-result .image,
+.variant-result .fallback {
+  aspect-ratio: 1;
+  border-radius: 0;
+}
+
+.variant-result .body {
+  padding: $space-sm;
+}
+
+// Overlay variant: image fully covers the card with text on top.
+.variant-overlay {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  border-radius: $radius-md;
+  border-color: transparent;
+  background: $color-primary;
+  color: $color-on-primary;
+  isolation: isolate;
+  min-height: 16rem;
+}
+
+.overlayImage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.overlayImage :global(img),
+.overlayImage :global(svg),
+.overlayImage :global(video) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 500ms ease;
+}
+
+.variant-overlay:hover .overlayImage :global(img) {
+  transform: scale(1.06);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.8),
+    rgba(0, 0, 0, 0.2),
+    transparent
+  );
+  pointer-events: none;
+}
+
+.overlayBody {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: $space-xs;
+  align-content: end;
+  width: 100%;
+  height: 100%;
+  min-height: 16rem;
+  padding: $space-md;
+  color: $color-on-primary;
+}
+
+.overlayEyebrow {
+  margin: 0;
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+}
+
+.overlayTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-md;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  color: $color-on-primary;
+}
+
+.overlayCopy {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+  color: rgba(255, 255, 255, 0.85);
+}

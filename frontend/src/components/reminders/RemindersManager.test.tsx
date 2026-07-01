@@ -11,7 +11,7 @@ const plant = {
   custom_data: {},
   id: "garden-1",
   image_path: null,
-  location: "Balcon",
+  location: "Balcón",
   nickname: "Helecho",
   notes: "Pulverizar hojas",
   profile: {
@@ -28,7 +28,7 @@ const plant = {
 };
 
 const reminder = {
-  action: "Regar",
+  action: "Riego",
   due_at: "2999-01-10T09:00:00Z",
   garden_plant_id: "garden-1",
   id: "reminder-1",
@@ -81,7 +81,7 @@ describe("RemindersManager", () => {
     mocks.listGardenPlants.mockResolvedValue([plant]);
     mocks.listReminders.mockResolvedValue([reminder]);
     mocks.createReminder.mockResolvedValue(reminder);
-    mocks.updateReminder.mockResolvedValue({ ...reminder, action: "Fertilizar" });
+    mocks.updateReminder.mockResolvedValue({ ...reminder, action: "Fertilizante" });
     mocks.completeReminder.mockResolvedValue({
       ...reminder,
       next_occurrence_at: "2999-01-17T09:00:00Z",
@@ -104,25 +104,24 @@ describe("RemindersManager", () => {
     mocks.listReminders.mockResolvedValueOnce([]);
     renderWithQueryClient(<RemindersManager />);
 
-    expect(await screen.findByText("Guarda una planta en Mi Jardin antes de crear recordatorios.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Crear recordatorio" })).toBeDisabled();
+    expect(await screen.findByText("Guarda una planta en Mi Jardín antes de crear recordatorios.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar recordatorio" })).toBeDisabled();
   });
 
   it("prevents invalid submissions", async () => {
     renderWithQueryClient(<RemindersManager />);
 
-    fireEvent.change(await screen.findByLabelText("Accion"), { target: { value: "" } });
-    fireEvent.submit(screen.getByRole("button", { name: "Crear recordatorio" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "Guardar recordatorio" }).closest("form")!);
 
-    expect(await screen.findByText("Indica una accion de cuidado.")).toBeInTheDocument();
+    expect(await screen.findByText("Selecciona un tipo de tarea.")).toBeInTheDocument();
     expect(screen.getByText("Indica una fecha.")).toBeInTheDocument();
     expect(screen.getByText("Indica una hora.")).toBeInTheDocument();
     expect(mocks.createReminder).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByLabelText("Accion"), { target: { value: "Regar" } });
-    fireEvent.change(screen.getByLabelText("Fecha"), { target: { value: "2000-01-01" } });
-    fireEvent.change(screen.getByLabelText("Hora"), { target: { value: "09:00" } });
-    fireEvent.submit(screen.getByRole("button", { name: "Crear recordatorio" }).closest("form")!);
+    fireEvent.change(screen.getByLabelText(/^Tipo de Tarea/), { target: { value: "Riego" } });
+    fireEvent.change(screen.getByLabelText(/^Fecha/), { target: { value: "2000-01-01" } });
+    fireEvent.change(screen.getByLabelText(/^Hora/), { target: { value: "09:00" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Guardar recordatorio" }).closest("form")!);
 
     expect(await screen.findByText("La fecha y hora deben ser futuras.")).toBeInTheDocument();
     expect(mocks.createReminder).not.toHaveBeenCalled();
@@ -132,12 +131,12 @@ describe("RemindersManager", () => {
     const { queryClient } = renderWithQueryClient(<RemindersManager />);
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
 
-    await fillReminderForm("Regar", "2999-01-10", "09:00", "weekly");
-    fireEvent.submit(screen.getByRole("button", { name: "Crear recordatorio" }).closest("form")!);
+    await fillReminderForm("Riego", "2999-01-10", "09:00", "weekly");
+    fireEvent.submit(screen.getByRole("button", { name: "Guardar recordatorio" }).closest("form")!);
 
     await waitFor(() => {
       expect(mocks.createReminder).toHaveBeenCalledWith({
-        action: "Regar",
+        action: "Riego",
         date: "2999-01-10",
         garden_plant_id: "garden-1",
         recurrence: "weekly",
@@ -148,19 +147,21 @@ describe("RemindersManager", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reminders", "list"] });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["garden", "list"] });
     expect(await screen.findByText("Recordatorio guardado.")).toBeInTheDocument();
-    expect(screen.getByText("Las notificaciones estan habilitadas.")).toBeInTheDocument();
+    expect(screen.getByText("Las notificaciones están habilitadas.")).toBeInTheDocument();
   });
 
-  it("updates an existing reminder from edit mode", async () => {
+  it("updates an existing reminder from the popover", async () => {
     renderWithQueryClient(<RemindersManager />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
-    fireEvent.change(screen.getByLabelText("Accion"), { target: { value: "Fertilizar" } });
-    fireEvent.submit(screen.getByRole("button", { name: "Actualizar" }).closest("form")!);
+    fireEvent.click(await screen.findByRole("button", { name: "Abrir acciones del recordatorio" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Editar" }));
+
+    fireEvent.change(screen.getByLabelText(/^Tipo de Tarea/), { target: { value: "Fertilizante" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Actualizar recordatorio" }).closest("form")!);
 
     await waitFor(() => {
       expect(mocks.updateReminder).toHaveBeenCalledWith("reminder-1", {
-        action: "Fertilizar",
+        action: "Fertilizante",
         date: "2999-01-10",
         garden_plant_id: "garden-1",
         recurrence: "weekly",
@@ -169,20 +170,22 @@ describe("RemindersManager", () => {
       });
     });
     expect(await screen.findByText("Recordatorio actualizado.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Crear recordatorio" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar recordatorio" })).toBeInTheDocument();
   });
 
-  it("completes and deletes reminders", async () => {
+  it("completes and deletes reminders from the popover", async () => {
     renderWithQueryClient(<RemindersManager />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Completar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Abrir acciones del recordatorio" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Completar" }));
 
     await waitFor(() => {
       expect(mocks.completeReminder).toHaveBeenCalledWith("reminder-1");
     });
-    expect(await screen.findByText(/Completado\. Proximo recordatorio:/)).toBeInTheDocument();
+    expect(await screen.findByText(/Completado\. Próximo recordatorio:/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Abrir acciones del recordatorio" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Eliminar" }));
 
     await waitFor(() => {
       expect(mocks.deleteReminder).toHaveBeenCalledWith("reminder-1");
@@ -190,22 +193,64 @@ describe("RemindersManager", () => {
     expect(await screen.findByText("Recordatorio eliminado.")).toBeInTheDocument();
   });
 
-  it("accepts a generated suggestion", async () => {
-    mocks.getParam.mockReturnValue("nephrolepis exaltata");
-
+  it("reveals suggestions after clicking Generar con IA", async () => {
     renderWithQueryClient(<RemindersManager />);
 
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
     fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
 
     await waitFor(() => {
       expect(mocks.createReminder).toHaveBeenCalledWith({
-        action: "Revisar riego",
+        action: "Riego",
         date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         garden_plant_id: "garden-1",
         recurrence: "weekly",
-        suggestion_justification: "Basado en el perfil de Helecho y su contexto guardado. Requiere confirmacion antes de crearse.",
+        suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
         time: "09:00",
       });
+    });
+  });
+
+  it("accepts a generated suggestion when plant hint is set", async () => {
+    mocks.getParam.mockReturnValue("nephrolepis exaltata");
+
+    renderWithQueryClient(<RemindersManager />);
+
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
+
+    await waitFor(() => {
+      expect(mocks.createReminder).toHaveBeenCalledWith({
+        action: "Riego",
+        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        garden_plant_id: "garden-1",
+        recurrence: "weekly",
+        suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
+        time: "09:00",
+      });
+    });
+  });
+
+  it("falls back to 'Revisión general' when the care plan has no specific keyword", async () => {
+    mocks.listGardenPlants.mockResolvedValueOnce([
+      {
+        ...plant,
+        id: "garden-3",
+        profile: { ...plant.profile, sections: { care: ["Inspeccion general del follaje"] } },
+      },
+    ]);
+
+    renderWithQueryClient(<RemindersManager />);
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
+
+    await waitFor(() => {
+      expect(mocks.createReminder).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "Revisión general" }),
+      );
     });
   });
 
@@ -216,18 +261,32 @@ describe("RemindersManager", () => {
 
     expect(await screen.findByText("No pudimos cargar recordatorios.")).toBeInTheDocument();
 
-    mocks.createReminder.mockRejectedValueOnce(new ApiClientError("Fecha invalida", 422));
-    await fillReminderForm("Regar", "2999-01-10", "09:00", "none");
-    fireEvent.submit(screen.getByRole("button", { name: "Crear recordatorio" }).closest("form")!);
+    mocks.createReminder.mockRejectedValueOnce(new ApiClientError("Fecha inválida", 422));
+    await fillReminderForm("Riego", "2999-01-10", "09:00", "none");
+    fireEvent.submit(screen.getByRole("button", { name: "Guardar recordatorio" }).closest("form")!);
 
-    expect(await screen.findByText("Fecha invalida")).toBeInTheDocument();
+    expect(await screen.findByText("Fecha inválida")).toBeInTheDocument();
   });
 });
 
-async function fillReminderForm(action: string, date: string, time: string, recurrence: string) {
-  await screen.findByText("Helecho");
-  fireEvent.change(screen.getByLabelText("Accion"), { target: { value: action } });
-  fireEvent.change(screen.getByLabelText("Fecha"), { target: { value: date } });
-  fireEvent.change(screen.getByLabelText("Hora"), { target: { value: time } });
-  fireEvent.change(screen.getByLabelText("Recurrencia"), { target: { value: recurrence } });
+async function fillReminderForm(taskType: string, date: string, time: string, recurrence: string) {
+  await screen.findByRole("option", { name: "Helecho" });
+  fireEvent.change(screen.getByLabelText(/^Tipo de Tarea/), { target: { value: taskType } });
+  fireEvent.change(screen.getByLabelText(/^Fecha/), { target: { value: date } });
+  fireEvent.change(screen.getByLabelText(/^Hora/), { target: { value: time } });
+  fireEvent.click(screen.getByRole("radio", { name: labelForRecurrence(recurrence) }));
+}
+
+function labelForRecurrence(value: string) {
+  switch (value) {
+    case "daily":
+      return "Diario";
+    case "weekly":
+      return "Semanal";
+    case "monthly":
+      return "Mensual";
+    case "none":
+    default:
+      return "Personalizado";
+  }
 }

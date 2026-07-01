@@ -1,0 +1,46 @@
+@use "@/styles/tokens" as *;
+
+.layout {
+  width: 100%;
+  margin: 0 auto;
+  padding-inline: var(--margin-mobile);
+  max-width: var(--content-width-md);
+}
+
+.section {
+  display: grid;
+  gap: var(--space-md);
+  padding-block: var(--space-md);
+}
+
+.sectionLg {
+  display: grid;
+  gap: var(--space-lg);
+  padding-block: var(--space-lg);
+}
+
+.gridMobile {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--gutter);
+}
+
+@media (min-width: 720px) {
+  .layout {
+    padding-inline: var(--margin-desktop);
+    max-width: var(--content-width-lg);
+  }
+
+  .section {
+    padding-block: var(--space-lg);
+  }
+
+  .sectionLg {
+    padding-block: var(--space-xl);
+  }
+
+  .gridMobile {
+    grid-template-columns: repeat(12, 1fr);
+    gap: var(--gutter-desktop);
+  }
+}

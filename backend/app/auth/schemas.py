@@ -76,7 +76,20 @@ class HomeAccessItem(BaseModel):
     status: str = "placeholder"
 
 
+class GardenPlantCard(BaseModel):
+    id: UUID
+    scientific_name: str
+    common_name: str | None = None
+    nickname: str | None = None
+    image_path: str | None = None
+    location: str | None = None
+    active_reminders: int = 0
+    created_at: datetime
+
+
 class HomeSummaryResponse(BaseModel):
     user: PublicAuthUser
     empty_state: bool
     access: list[HomeAccessItem]
+    garden_count: int = 0
+    recent_garden_plants: list[GardenPlantCard] = Field(default_factory=list)

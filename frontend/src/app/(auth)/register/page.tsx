@@ -5,7 +5,7 @@ export default function RegisterPage() {
   return (
     <AuthShell
       title="Creá tu cuenta"
-      description="Guardamos tu acceso con contraseña segura y dejamos la verificación de correo preparada para más adelante."
+      description="Empezá a identificar y organizar tus plantas con una contraseña segura."
     >
       <RegisterForm />
     </AuthShell>

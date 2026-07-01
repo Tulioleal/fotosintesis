@@ -1,0 +1,588 @@
+@use "@/styles/tokens" as *;
+
+.page {
+  display: grid;
+  gap: $space-md;
+}
+
+.title {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-lg;
+  font-weight: $font-weight-bold;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-primary;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-md;
+
+  @media (min-width: 960px) {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+    gap: $space-md;
+  }
+}
+
+.aside {
+  display: grid;
+  gap: $space-md;
+  align-content: start;
+  min-width: 0;
+}
+
+.listColumn {
+  display: grid;
+  gap: $space-md;
+  align-content: start;
+  min-width: 0;
+}
+
+.formCard {
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  background: $color-surface-container-lowest;
+  transition: box-shadow 200ms ease;
+}
+
+.formCard:hover {
+  box-shadow: $shadow-reference-hover;
+}
+
+.formHeading {
+  margin: 0 0 $space-xs;
+  padding-bottom: $space-sm;
+  border-bottom: 1px solid $color-outline-variant;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-surface;
+}
+
+.form {
+  display: grid;
+  gap: $space-sm;
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-sm;
+
+  @media (min-width: 540px) {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.recurrenceGroup {
+  display: grid;
+  gap: $space-xs;
+}
+
+.recurrenceLabel {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  color: $color-on-surface-variant;
+}
+
+.recurrenceOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.recurrenceOption {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: $radius-pill;
+  background: $color-surface-tertiary-soft;
+  padding: 0.4rem 0.95rem;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  color: $color-primary;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.recurrenceOption:hover {
+  background: $color-surface-tertiary-medium;
+}
+
+.recurrenceOption[aria-pressed="true"] {
+  background: $color-primary;
+  border-color: $color-primary;
+  color: $color-on-primary;
+}
+
+.recurrenceOption:focus-visible {
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+.formSubmit {
+  width: 100%;
+  text-transform: uppercase;
+  letter-spacing: $letter-spacing-wide;
+}
+
+.suggestionCard {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: $space-sm;
+}
+
+.suggestionCard::after {
+  content: "";
+  position: absolute;
+  right: -2.5rem;
+  bottom: -2.5rem;
+  width: 8rem;
+  height: 8rem;
+  background: rgba(255, 178, 135, 0.18);
+  filter: blur(2rem);
+  pointer-events: none;
+}
+
+.suggestionHeader {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: inherit;
+  z-index: 1;
+}
+
+.suggestionBody {
+  margin: 0;
+  text-align: center;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  line-height: $line-height-relaxed;
+  color: inherit;
+  z-index: 1;
+}
+
+.suggestionTrigger {
+  width: 100%;
+  text-transform: none;
+}
+
+.suggestionList {
+  display: grid;
+  gap: $space-xs;
+  z-index: 1;
+}
+
+.suggestionItem {
+  display: grid;
+  gap: $space-xs;
+  padding: $space-sm;
+  border-radius: $radius-lg;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.suggestionItemTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: inherit;
+}
+
+.suggestionItemCopy {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 0.8rem;
+  line-height: $line-height-relaxed;
+  color: inherit;
+}
+
+.suggestionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  z-index: 1;
+}
+
+.listCard {
+  display: grid;
+  gap: 0;
+  border: 1px solid $color-outline-variant;
+  background: $color-surface-container-lowest;
+  overflow: hidden;
+  transition: box-shadow 200ms ease;
+}
+
+.listCard:hover {
+  box-shadow: $shadow-reference-hover;
+}
+
+.listHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-xs;
+  padding: $space-md;
+  border-bottom: 1px solid $color-outline-variant;
+  background: $color-surface;
+}
+
+.listHeaderTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-surface;
+}
+
+.listColumns {
+  display: none;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 3fr) minmax(0, 4fr) minmax(
+      0,
+      1fr
+    );
+  gap: $space-sm;
+  padding: $space-xs $space-md;
+  background: $color-surface-container-low;
+  border-bottom: 1px solid $color-outline-variant;
+  font-family: $font-body-stack;
+  font-size: 0.72rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+  color: $color-on-surface-variant;
+
+  @media (min-width: 720px) {
+    display: grid;
+  }
+}
+
+.listColumnHeading {
+  margin: 0;
+}
+
+.listColumnHeadingRight {
+  margin: 0;
+  text-align: right;
+}
+
+.listRows {
+  display: grid;
+}
+
+.listRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: $space-sm;
+  padding: $space-sm $space-md;
+  border-bottom: 1px solid $border-softer;
+  align-items: center;
+  transition: background-color 120ms ease;
+  position: relative;
+
+  @media (min-width: 720px) {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 3fr) minmax(0, 4fr) minmax(
+        0,
+        1fr
+      );
+  }
+}
+
+.listRow:last-child {
+  border-bottom: 0;
+}
+
+.listRow:hover {
+  background: $color-surface-container-low;
+}
+
+.listRow[data-status="completed"] {
+  opacity: 0.78;
+}
+
+.listPlant {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-xs;
+  min-width: 0;
+}
+
+.listPlantAvatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-default;
+  background: rgba(72, 100, 75, 0.1);
+  overflow: hidden;
+  color: $color-primary;
+}
+
+.listPlantImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.listPlantName {
+  min-width: 0;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  font-weight: $font-weight-medium;
+  color: $color-on-surface;
+  overflow-wrap: anywhere;
+}
+
+.listTask {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-xs;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.listTaskIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+}
+
+.listDate {
+  display: grid;
+  gap: 0.15rem;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+}
+
+.listDatePrimary {
+  font-weight: $font-weight-medium;
+  color: $color-on-surface;
+}
+
+.listDateMeta {
+  color: $color-on-surface-variant;
+  font-size: 0.78rem;
+}
+
+.listActionsCell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+}
+
+.listActionsTrigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 0;
+  border-radius: $radius-pill;
+  background: transparent;
+  color: $color-outline;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.listActionsTrigger:hover {
+  background: rgba(72, 100, 75, 0.1);
+  color: $color-primary;
+}
+
+.listActionsTrigger:focus-visible {
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+}
+
+.rowActionsMenu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 10rem;
+  gap: 0.15rem;
+  padding: 0.4rem;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-default;
+  background: $color-surface-container-lowest;
+  box-shadow: $shadow-overlay;
+}
+
+.rowActionsItem {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border: 0;
+  border-radius: $radius-sm;
+  background: transparent;
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.rowActionsItem:hover:not(:disabled) {
+  background: $color-surface-container-low;
+}
+
+.rowActionsItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rowActionsItemDanger {
+  color: $color-error;
+}
+
+.listRowMobileMeta {
+  display: grid;
+  gap: 0.15rem;
+  grid-column: 1 / -1;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.78rem;
+
+  @media (min-width: 720px) {
+    display: none;
+  }
+}
+
+.emptyState {
+  display: grid;
+  place-items: center;
+  gap: $space-xs;
+  padding: $space-lg $space-md;
+  text-align: center;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.9rem;
+  line-height: $line-height-relaxed;
+}
+
+.emptyState strong {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  color: $color-on-surface;
+}
+
+.skeletonRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: $space-sm;
+  padding: $space-sm $space-md;
+  border-bottom: 1px solid $border-softer;
+
+  @media (min-width: 720px) {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 3fr) minmax(0, 4fr) minmax(
+        0,
+        1fr
+      );
+  }
+}
+
+.skeletonLine {
+  height: 0.85rem;
+  border-radius: $radius-default;
+  background: linear-gradient(
+    90deg,
+    rgba(72, 100, 75, 0.08),
+    rgba(72, 100, 75, 0.18),
+    rgba(72, 100, 75, 0.08)
+  );
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+
+.skeletonCircle {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: $radius-default;
+  background: linear-gradient(
+    90deg,
+    rgba(72, 100, 75, 0.08),
+    rgba(72, 100, 75, 0.18),
+    rgba(72, 100, 75, 0.08)
+  );
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+
+.skeletonBlock {
+  display: inline-block;
+  margin-right: $space-xs;
+}
+
+.skeletonMuted {
+  opacity: 0.4;
+}
+
+@keyframes skeleton {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

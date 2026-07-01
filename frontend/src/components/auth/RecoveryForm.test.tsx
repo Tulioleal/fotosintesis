@@ -1,5 +1,4 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RecoveryForm } from "./RecoveryForm";
 
@@ -20,14 +19,16 @@ describe("RecoveryForm", () => {
     mocks.requestRecovery.mockClear();
   });
 
-  it("renders the recovery email field", () => {
+  it("renders the recovery email field with its preserved accessible label", () => {
     render(<RecoveryForm />);
 
     expect(screen.getByLabelText("Correo")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Recuperar acceso" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Recuperar acceso" }),
+    ).toBeEnabled();
   });
 
-  it("submits recovery requests and displays the neutral message", async () => {
+  it("submits recovery requests and displays the neutral confirmation message", async () => {
     render(<RecoveryForm />);
 
     fireEvent.change(screen.getByLabelText("Correo"), {
@@ -35,9 +36,21 @@ describe("RecoveryForm", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Recuperar acceso" }));
 
-    expect(await screen.findByText("Si el correo existe, te enviaremos instrucciones.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Si el correo existe, te enviaremos instrucciones.",
+      ),
+    ).toBeInTheDocument();
     expect(mocks.requestRecovery).toHaveBeenCalledWith({
       email: "tuli@example.com",
     });
+  });
+
+  it("exposes a link back to the login route", () => {
+    render(<RecoveryForm />);
+
+    expect(
+      screen.getByRole("link", { name: "Volver a ingresar" }),
+    ).toHaveAttribute("href", "/login");
   });
 });

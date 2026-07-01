@@ -1,127 +1,284 @@
 @use "@/styles/tokens" as *;
 
-.meter {
+.page {
   display: grid;
-  gap: 1rem;
-  padding: 1rem 0 5rem;
+  gap: $space-md;
 }
 
-.hero,
-.card,
-.result,
-.camera {
-  border: 1px solid rgba(40, 80, 52, 0.16);
-  border-radius: 2rem;
-  background: rgba(255, 255, 255, 0.8);
-  padding: 1.25rem;
+.intro {
+  display: grid;
+  gap: $space-sm;
 }
 
-.hero h1 {
+.introBody {
   margin: 0;
-  font-size: clamp(2.1rem, 8vw, 4.4rem);
-  letter-spacing: -0.06em;
-  line-height: 0.95;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+  max-width: 48rem;
 }
 
-.hero p,
-.card p,
-.result p,
-.notice,
-.warning,
-.error {
-  color: $color-muted;
-  line-height: 1.55;
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-xs;
 }
 
-.eyebrow {
-  margin: 0 0 0.5rem;
-  color: $color-accent;
-  font-size: 0.78rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.actions,
-.card,
-.result,
-.camera {
+.layout {
   display: grid;
-  gap: 0.75rem;
+  grid-template-columns: 1fr;
+  gap: $space-md;
+  align-items: start;
+
+  @media (min-width: 960px) {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: $space-md;
+  }
 }
 
-.actions {
-  grid-template-columns: 1fr 1fr;
+.primaryColumn {
+  display: grid;
+  gap: $space-md;
+  align-content: start;
 }
 
-.actions button,
-.card button,
-.result button,
-.camera button {
-  border: 0;
-  border-radius: 999px;
-  background: $color-foreground;
-  color: white;
-  cursor: pointer;
+.asideColumn {
+  display: grid;
+  gap: $space-md;
+  align-content: start;
+}
+
+.measureCard {
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-xl;
+  background: $color-surface-container-lowest;
+  transition: box-shadow 200ms ease;
+
+  &:hover {
+    box-shadow: $shadow-reference-hover;
+  }
+}
+
+.measureHeading {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  color: $color-on-surface;
+}
+
+.measureCopy {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.9rem;
+  line-height: $line-height-relaxed;
+}
+
+.measureActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.measureStats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-xs;
+}
+
+.sensorStatusList {
+  display: grid;
+  gap: $space-xs;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sensorStatusItem {
   display: inline-flex;
-  font-weight: 900;
-  justify-content: center;
-  padding: 0.95rem 1rem;
+  align-items: center;
+  gap: $space-xs;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  color: $color-on-surface-variant;
 }
 
-.actions .secondary,
-.result button:disabled,
-.camera button:disabled {
-  background: rgba(86, 124, 58, 0.16);
-  color: $color-foreground;
+.sensorDot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: $radius-pill;
+  background: $color-outline-variant;
 }
 
-.card label,
-.result label {
+.sensorDot[data-state="ready"] {
+  background: $color-primary;
+}
+
+.sensorDot[data-state="active"] {
+  background: $color-secondary;
+}
+
+.sensorDot[data-state="blocked"] {
+  background: $color-error;
+}
+
+.cameraCard {
   display: grid;
-  gap: 0.35rem;
-  font-weight: 800;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-xl;
+  background: $color-surface-container-lowest;
 }
 
-.card select,
-.result select {
-  border: 1px solid rgba(40, 80, 52, 0.18);
-  border-radius: 1rem;
-  font: inherit;
-  padding: 0.9rem 1rem;
-}
-
-.camera {
+.cameraCard[data-active="false"] {
   display: none;
 }
 
-.camera[data-active="true"] {
-  display: grid;
-}
-
-.camera video {
+.cameraVideo {
   width: 100%;
-  max-height: 20rem;
-  border-radius: 1.5rem;
-  background: #172315;
+  max-height: 24rem;
+  border-radius: $radius-lg;
+  background: #1f2a1c;
   object-fit: cover;
 }
 
-.result h2 {
+.cameraActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.manualCard {
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-xl;
+  background: $color-surface-container-lowest;
+}
+
+.manualForm {
+  display: grid;
+  gap: $space-sm;
+}
+
+.manualActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+}
+
+.association {
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid $color-outline-variant;
+  border-radius: $radius-xl;
+  background: $color-surface-container-lowest;
+}
+
+.associationHint {
   margin: 0;
-  font-size: clamp(2rem, 8vw, 3.25rem);
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  line-height: $line-height-relaxed;
 }
 
-.warning,
-.error {
-  border-radius: 1rem;
-  background: rgba(158, 82, 45, 0.12);
-  padding: 0.85rem;
+.resultCard {
+  display: grid;
+  gap: $space-sm;
+  padding: $space-md;
+  border: 1px solid transparent;
+  border-radius: $radius-xl;
+  background: $color-primary-container;
+  color: $color-on-primary-container;
+  position: relative;
+  overflow: hidden;
 }
 
-@media (min-width: 760px) {
-  .meter {
-    max-width: 800px;
-    margin: 0 auto;
-  }
+.resultCard::after {
+  content: "";
+  position: absolute;
+  right: -2.5rem;
+  bottom: -2.5rem;
+  width: 8rem;
+  height: 8rem;
+  border-radius: 50%;
+  background: rgba(255, 178, 135, 0.18);
+  filter: blur(2rem);
+  pointer-events: none;
+}
+
+.resultEyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $space-xs;
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-wide;
+  text-transform: uppercase;
+  color: $color-on-primary-container;
+  z-index: 1;
+}
+
+.resultHeading {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: clamp(1.75rem, 5vw, 2.4rem);
+  font-weight: $font-weight-medium;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-on-primary-container;
+  z-index: 1;
+}
+
+.resultLux {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 1rem;
+  line-height: $line-height-relaxed;
+  color: $color-on-primary-container;
+  z-index: 1;
+}
+
+.resultCopy {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+  color: $color-on-primary-container;
+  z-index: 1;
+}
+
+.resultActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-xs;
+  z-index: 1;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

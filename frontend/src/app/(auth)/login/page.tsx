@@ -5,8 +5,8 @@ import { LoginForm } from "@/components/auth/LoginForm";
 export default function LoginPage() {
   return (
     <AuthShell
-      title="Ingresá a Fotosíntesis"
-      description="Usá tu correo y contraseña. Si algo falla, te vamos a mostrar un mensaje recuperable."
+      title="Ingresá a tu cuenta"
+      description="Usá tu correo y contraseña para retomar el cuidado de tu jardín."
     >
       <Suspense fallback={<p>Cargando formulario...</p>}>
         <LoginForm />

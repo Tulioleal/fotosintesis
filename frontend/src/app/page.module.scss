@@ -1,52 +1,645 @@
 @use "@/styles/tokens" as *;
 
-.main {
+.page {
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: $space-6;
-  background: $color-background;
-  color: $color-foreground;
+  background: $color-surface;
+  color: $color-on-surface;
 }
+
+.skipLink {
+  position: absolute;
+  left: $space-xs;
+  top: -3rem;
+  z-index: 100;
+  padding: 0.5rem 0.9rem;
+  border-radius: $radius-default;
+  background: $color-primary;
+  color: $color-on-primary;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+  font-weight: $font-weight-medium;
+  text-decoration: none;
+  transition: top 120ms ease;
+}
+
+.skipLink:focus-visible {
+  top: $space-xs;
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+  text-decoration: none;
+}
+
+.main:focus {
+  outline: none;
+}
+
+// --- Top bar ---------------------------------------------------------------
+
+.topBar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba($color-surface-container-low, 0.92);
+  border-bottom: 1px solid $color-outline-variant;
+  backdrop-filter: blur(12px);
+}
+
+.topBarInner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-sm;
+  padding: $space-sm var(--margin-mobile);
+}
+
+.brand {
+  font-family: $font-headline-stack;
+  font-size: 1.5rem;
+  font-weight: $font-weight-medium;
+  letter-spacing: $letter-spacing-display;
+  color: $color-primary;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.brand:hover,
+.brand:focus-visible {
+  color: $color-primary-container;
+  text-decoration: none;
+}
+
+.topBarActions {
+  display: flex;
+  align-items: center;
+  gap: $space-xs;
+  margin-left: auto;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: none;
+  background: transparent;
+  border-radius: $radius-default;
+  color: $color-on-surface-variant;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.iconButton:hover,
+.iconButton:focus-visible {
+  background: $color-surface-container-lowest;
+  color: $color-primary;
+}
+
+// --- Main canvas -----------------------------------------------------------
+
+.main {
+  width: 100%;
+  display: grid;
+  gap: 0;
+}
+
+// --- Hero ------------------------------------------------------------------
 
 .hero {
-  width: min(100%, 42rem);
-  padding: $space-6;
-  border: 1px solid rgba(40, 80, 52, 0.16);
-  border-radius: 2rem;
-  background: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 24px 80px rgba(43, 78, 50, 0.12);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(73, 101, 76, 0.055) 0%,
+      rgba(191, 203, 184, 0.11) 100%
+    ),
+    $color-surface-container-low;
+  padding: $space-lg var(--margin-mobile) $space-xl;
+  min-height: 100vh;
 }
 
-.hero h1 {
+.heroInner {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-lg;
+  align-items: center;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+  align-items: flex-start;
+  padding: 0;
+}
+
+.heroTitle {
   margin: 0;
-  font-size: clamp(2.25rem, 9vw, 4.5rem);
-  line-height: 0.95;
-  letter-spacing: -0.06em;
+  font-family: $font-headline-stack;
+  font-size: clamp(2.4rem, 6vw, 3.5rem);
+  font-weight: $font-weight-bold;
+  line-height: 1.05;
+  letter-spacing: $letter-spacing-display;
+  color: $color-primary;
 }
 
-.hero p {
-  max-width: 36rem;
-  color: $color-muted;
+.heroBody {
+  margin: 0;
+  color: $color-on-surface-variant;
   font-size: 1.05rem;
-  line-height: 1.65;
+  font-weight: $font-weight-light;
+  line-height: $line-height-relaxed;
+  max-width: 30rem;
 }
 
-.eyebrow {
-  margin: 0 0 $space-3;
-  color: $color-accent;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-sm;
+  margin-top: $space-xs;
 }
 
-.start {
+.primaryCta {
   display: inline-flex;
-  margin-top: $space-3;
-  padding: 0.85rem 1.2rem;
-  border-radius: 999px;
-  background: $color-foreground;
-  color: #fffdf0;
-  font-weight: 800;
+  align-items: center;
+  justify-content: center;
+  gap: $space-xs;
+  min-height: 3rem;
+  padding: 0.85rem 1.5rem;
+  border-radius: $radius-default;
+  background: $color-primary-container;
+  color: $color-on-primary;
+  font-family: $font-headline-stack;
+  font-size: 1.05rem;
+  font-weight: $font-weight-medium;
   text-decoration: none;
+  box-shadow: $shadow-ambient;
+  transition: background 120ms ease;
+}
+
+.primaryCta:hover,
+.primaryCta:focus-visible {
+  background: $color-primary;
+  text-decoration: none;
+}
+
+.secondaryCta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3rem;
+  padding: 0.85rem 1.5rem;
+  border-radius: $radius-default;
+  border: 1px solid $color-primary-container;
+  color: $color-primary;
+  font-family: $font-headline-stack;
+  font-size: 1.05rem;
+  font-weight: $font-weight-medium;
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.secondaryCta:hover,
+.secondaryCta:focus-visible {
+  background: rgba(72, 100, 75, 0.08);
+  text-decoration: none;
+}
+
+.heroVisual {
+  position: relative;
+  isolation: isolate;
+  min-height: 30rem;
+  border-radius: 2.75rem;
+  overflow: hidden;
+  box-shadow:
+    0 30px 60px -20px rgba(20, 40, 25, 0.45),
+    0 18px 40px -18px rgba(20, 40, 25, 0.3);
+}
+
+.heroVisualGlow {
+  position: absolute;
+  inset: 8% -4% 8% 4%;
+  background: $color-primary;
+  opacity: 0.16;
+  border-radius: 3rem;
+  filter: blur(50px);
+  transform: rotate(2deg) scale(0.96);
+  z-index: 0;
+}
+
+.heroImage,
+.heroImageFallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  z-index: 1;
+}
+
+.heroImageFallback {
+  background:
+    radial-gradient(
+      circle at 22% 28%,
+      rgba(72, 100, 75, 0.35),
+      transparent 55%
+    ),
+    radial-gradient(
+      circle at 78% 18%,
+      rgba(255, 179, 135, 0.35),
+      transparent 55%
+    ),
+    radial-gradient(circle at 60% 80%, rgba(86, 97, 81, 0.45), transparent 60%),
+    linear-gradient(
+      135deg,
+      $color-tertiary-fixed 0%,
+      $color-primary-container 100%
+    );
+}
+
+$inner-space: 1.5rem;
+
+.heroFloat {
+  position: absolute;
+  bottom: $inner-space * 2;
+  left: $inner-space * 2;
+  right: $inner-space * 2;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: $space-sm;
+  padding: $space-sm $space-md;
+  background: $color-surface-overlay-fill;
+  border: 1px solid rgba(191, 203, 184, 0.4);
+  border-radius: $radius-lg;
+  backdrop-filter: blur(12px);
+  box-shadow: $shadow-overlay;
+  width: calc(100% - $inner-space * 4);
+}
+
+.heroFloatIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: $radius-md;
+  background: $color-primary-container;
+  color: $color-on-primary;
+  flex-shrink: 0;
+}
+
+.heroFloatCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.heroFloatTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: 1.05rem;
+  font-weight: $font-weight-medium;
+  color: $color-primary;
+}
+
+.heroFloatSubtitle {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-size: 0.85rem;
+  line-height: $line-height-normal;
+}
+
+// --- Features mosaic -------------------------------------------------------
+
+.features {
+  display: grid;
+  gap: $space-lg;
+  padding: $space-xl var(--margin-mobile);
+  background: $color-surface-container-lowest;
+}
+
+.featuresInner {
+  display: grid;
+  gap: $space-lg;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+}
+
+.featuresHeader {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  text-align: center;
+  align-items: center;
+}
+
+.featuresTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: clamp(1.6rem, 3.4vw, 2.2rem);
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-primary;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-lg;
+  margin-top: $space-sm;
+}
+
+.featureCard {
+  position: relative;
+  overflow: hidden;
+  border-radius: $radius-md;
+  isolation: isolate;
+  color: $color-on-primary;
+  box-shadow: $shadow-ambient;
+  min-height: 18rem;
+}
+
+.featureImage,
+.featureFallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+.featureFallback {
+  background:
+    radial-gradient(
+      circle at 20% 25%,
+      rgba(255, 255, 255, 0.18),
+      transparent 55%
+    ),
+    radial-gradient(circle at 80% 80%, rgba(0, 0, 0, 0.12), transparent 60%),
+    linear-gradient(135deg, $color-tertiary-container, $color-surface-container);
+}
+
+.tonePrimary {
+  background: linear-gradient(135deg, $color-primary-container, $color-primary);
+}
+
+.toneSecondary {
+  background: linear-gradient(
+    135deg,
+    $color-secondary,
+    $color-secondary-container
+  );
+}
+
+.toneTertiary {
+  background: linear-gradient(
+    135deg,
+    $color-tertiary-container,
+    $color-tertiary
+  );
+}
+
+.featureOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.overlayPrimary,
+.overlaySecondary {
+  background: linear-gradient(
+    to top,
+    rgba(49, 76, 53, 0.88) 0%,
+    rgba(49, 76, 53, 0.42) 48%,
+    rgba(49, 76, 53, 0.04) 100%
+  );
+}
+
+.overlaySecondary {
+  background: linear-gradient(
+    to top,
+    rgba(137, 80, 44, 0.86) 0%,
+    rgba(137, 80, 44, 0.38) 48%,
+    rgba(137, 80, 44, 0.04) 100%
+  );
+}
+
+.overlayTertiary {
+  background: linear-gradient(
+    to right,
+    rgba(62, 73, 59, 0.9) 0%,
+    rgba(62, 73, 59, 0.46) 46%,
+    rgba(62, 73, 59, 0.08) 100%
+  );
+}
+
+.featureContent {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  padding: $space-lg;
+}
+
+.sizeWide .featureContent,
+.sizeCompact .featureContent {
+  max-width: 34rem;
+}
+
+.sizeFull .featureContent {
+  inset: 0 auto 0 0;
+  justify-content: center;
+  width: min(100%, 42rem);
+}
+
+.featureTitle {
+  margin: 0;
+  font-family: $font-headline-stack;
+  font-size: clamp(1.25rem, 2.4vw, 1.6rem);
+  font-weight: $font-weight-medium;
+  line-height: $line-height-snug;
+  letter-spacing: $letter-spacing-tight;
+  color: $color-on-primary;
+}
+
+.featureDescription {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.95rem;
+  line-height: $line-height-relaxed;
+  max-width: 32rem;
+}
+
+.sizeFull .featureDescription {
+  max-width: 36rem;
+  font-size: 1rem;
+}
+
+// --- Footer ----------------------------------------------------------------
+
+.footer {
+  margin-top: auto;
+  background: $color-surface-container-high;
+  border-top: 1px solid $color-outline-variant;
+}
+
+.footerInner {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+  padding: $space-md var(--margin-mobile);
+  color: $color-on-surface-variant;
+}
+
+.footerBrandGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.footerBrand {
+  font-family: $font-headline-stack;
+  font-size: 1rem;
+  font-weight: $font-weight-medium;
+  color: $color-primary;
+}
+
+.footerCopy {
+  font-size: 0.85rem;
+  line-height: $line-height-normal;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-sm;
+}
+
+.footerLink {
+  color: $color-on-surface-variant;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.footerLink:hover,
+.footerLink:focus-visible {
+  color: $color-secondary;
+  text-decoration: none;
+}
+
+.footerIcons {
+  display: flex;
+  gap: $space-sm;
+  align-items: center;
+}
+
+// --- Responsive ------------------------------------------------------------
+
+@media (min-width: 720px) {
+  .topBarInner {
+    padding: $space-sm var(--margin-desktop);
+  }
+
+  .hero {
+    padding: $space-xl var(--margin-desktop);
+  }
+
+  .heroInner {
+    gap: $space-xl;
+  }
+
+  .heroVisual {
+    min-height: 32rem;
+  }
+
+  .heroFloat {
+    right: 2rem;
+  }
+
+  .features {
+    padding: $space-xl var(--margin-desktop);
+  }
+
+  .featuresGrid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-areas:
+      "wide wide wide wide wide wide wide wide compact compact compact compact"
+      "full full full full full full full full full full full full";
+    align-items: stretch;
+  }
+
+  .sizeWide {
+    grid-area: wide;
+    min-height: 25rem;
+  }
+
+  .sizeCompact {
+    grid-area: compact;
+    min-height: 25rem;
+  }
+
+  .sizeFull {
+    grid-area: full;
+    min-height: 19rem;
+  }
+
+  .footerInner {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: $space-md var(--margin-desktop);
+  }
+
+  .footerLinks {
+    justify-content: center;
+  }
+}
+
+@media (min-width: 1024px) {
+  .searchPill {
+    display: flex;
+  }
+
+  .topBarActions {
+    margin-left: 0;
+  }
+
+  .heroInner {
+    grid-template-columns: minmax(0, 5.5fr) minmax(0, 6.5fr);
+    gap: clamp(3rem, 6vw, 6rem);
+  }
+
+  .heroVisual {
+    min-height: 47rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink,
+  .iconButton,
+  .primaryCta,
+  .secondaryCta,
+  .footerLink {
+    transition: none;
+  }
 }

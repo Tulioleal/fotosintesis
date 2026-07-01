@@ -1,5 +1,103 @@
 @use "./tokens" as *;
 
+:root {
+  // Colors
+  --color-surface: #{$color-surface};
+  --color-surface-dim: #{$color-surface-dim};
+  --color-surface-bright: #{$color-surface-bright};
+  --color-surface-container-lowest: #{$color-surface-container-lowest};
+  --color-surface-container-low: #{$color-surface-container-low};
+  --color-surface-container: #{$color-surface-container};
+  --color-surface-container-high: #{$color-surface-container-high};
+  --color-surface-container-highest: #{$color-surface-container-highest};
+  --color-on-surface: #{$color-on-surface};
+  --color-on-surface-variant: #{$color-on-surface-variant};
+  --color-inverse-surface: #{$color-inverse-surface};
+  --color-inverse-on-surface: #{$color-inverse-on-surface};
+  --color-outline: #{$color-outline};
+  --color-outline-variant: #{$color-outline-variant};
+  --color-surface-tint: #{$color-surface-tint};
+
+  --color-primary: #{$color-primary};
+  --color-on-primary: #{$color-on-primary};
+  --color-primary-container: #{$color-primary-container};
+  --color-on-primary-container: #{$color-on-primary-container};
+  --color-inverse-primary: #{$color-inverse-primary};
+
+  --color-secondary: #{$color-secondary};
+  --color-on-secondary: #{$color-on-secondary};
+  --color-secondary-container: #{$color-secondary-container};
+  --color-on-secondary-container: #{$color-on-secondary-container};
+
+  --color-tertiary: #{$color-tertiary};
+  --color-on-tertiary: #{$color-on-tertiary};
+  --color-tertiary-container: #{$color-tertiary-container};
+  --color-on-tertiary-container: #{$color-on-tertiary-container};
+
+  --color-error: #{$color-error};
+  --color-on-error: #{$color-on-error};
+  --color-error-container: #{$color-error-container};
+  --color-on-error-container: #{$color-on-error-container};
+
+  // Semantic aliases
+  --color-background: #{$color-background};
+  --color-on-background: #{$color-on-background};
+  --color-foreground: #{$color-foreground};
+  --color-muted: #{$color-muted};
+  --color-accent: #{$color-accent};
+  --color-surface-variant: #{$color-surface-variant};
+
+  // Spacing
+  --space-base: #{$space-base};
+  --space-xs: #{$space-xs};
+  --space-sm: #{$space-sm};
+  --space-md: #{$space-md};
+  --space-lg: #{$space-lg};
+  --space-xl: #{$space-xl};
+  --gutter: #{$gutter};
+  --gutter-desktop: #{$gutter-desktop};
+  --margin-mobile: #{$margin-mobile};
+  --margin-desktop: #{$margin-desktop};
+  --content-width-sm: #{$content-width-sm};
+  --content-width-md: #{$content-width-md};
+  --content-width-lg: #{$content-width-lg};
+  --content-width-xl: #{$content-width-xl};
+
+  // Radii
+  --radius-sm: #{$radius-sm};
+  --radius-default: #{$radius-default};
+  --radius-md: #{$radius-md};
+  --radius-lg: #{$radius-lg};
+  --radius-xl: #{$radius-xl};
+  --radius-pill: #{$radius-pill};
+
+  // Typography
+  --font-headline-stack: #{$font-headline-stack};
+  --font-body-stack: #{$font-body-stack};
+
+  // Focus
+  --focus-ring-color: #{$focus-ring-color};
+  --focus-ring-width: #{$focus-ring-width};
+
+  // Soft fills
+  --color-surface-tertiary-soft: #{$surface-tertiary-soft};
+  --color-surface-tertiary-medium: #{$surface-tertiary-medium};
+  --color-surface-tertiary-strong: #{$surface-tertiary-strong};
+  --color-surface-primary-soft: #{$surface-primary-soft};
+  --color-surface-secondary-soft: #{$surface-secondary-soft};
+  --color-surface-secondary-medium: #{$surface-secondary-medium};
+  --color-surface-secondary-strong: #{$surface-secondary-strong};
+  --color-surface-error-soft: #{$surface-error-soft};
+  --color-surface-error-medium: #{$surface-error-medium};
+  --color-surface-error-strong: #{$surface-error-strong};
+  --color-surface-glass-fill: #{$surface-glass-fill};
+  --color-surface-quiet-fill: #{$surface-quiet-fill};
+  --color-border-on-surface: #{$border-on-surface};
+  --color-border-on-surface-strong: #{$border-on-surface-strong};
+  --color-shadow-reference-hover: #{$shadow-reference-hover};
+  --color-shadow-reference-soft: #{$shadow-reference-soft};
+}
+
 * {
   box-sizing: border-box;
 }
@@ -11,8 +109,45 @@ body {
 }
 
 body {
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: $font-body-stack;
+  font-weight: $font-weight-light;
+  font-size: $font-size-body-md;
+  line-height: $line-height-relaxed;
+  color: $color-on-surface;
   background: $color-background;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: $font-headline-stack;
+  font-weight: $font-weight-medium;
+  color: $color-on-surface;
+  margin: 0;
+}
+
+h1 {
+  font-size: $font-size-headline-lg;
+  line-height: $line-height-tight;
+  letter-spacing: $letter-spacing-tight;
+}
+
+h2 {
+  font-size: $font-size-headline-md;
+  line-height: $line-height-snug;
+}
+
+h3 {
+  font-size: $font-size-headline-sm;
+  line-height: $line-height-normal;
+}
+
+p {
+  margin: 0;
 }
 
 button,
@@ -20,4 +155,40 @@ input,
 textarea,
 select {
   font: inherit;
+  color: inherit;
+}
+
+a {
+  color: $color-primary;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: $focus-ring-width solid $color-secondary;
+  outline-offset: 2px;
+  border-radius: $radius-sm;
+}
+
+::selection {
+  background: rgba(72, 100, 75, 0.22);
+  color: $color-on-surface;
+}
+
+img,
+video,
+svg {
+  max-width: 100%;
+  display: block;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  height: auto;
 }
