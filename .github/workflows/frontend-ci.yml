@@ -1,0 +1,119 @@
+name: frontend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "frontend/Dockerfile"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+        default: dev
+      frontend_image_tag:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGION: us-central1
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  ARTIFACT_REGISTRY_URL: ${{ vars.ARTIFACT_REGISTRY_URL }}
+  CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.CI_SERVICE_ACCOUNT_EMAIL }}
+  WIF_PROVIDER_ID: ${{ vars.WIF_PROVIDER_ID }}
+
+jobs:
+  validate:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit tests
+        run: pnpm test
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.FRONTEND_API_BASE_URL || 'http://localhost:8000' }}
+          AUTH_SECRET: ${{ secrets.FRONTEND_BUILD_AUTH_SECRET }}
+          AUTH_TRUST_HOST: "true"
+        run: pnpm build
+
+  build:
+    name: Build and push frontend image
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
+          service_account: ${{ env.CI_SERVICE_ACCOUNT_EMAIL }}
+      - name: Set image tag
+        id: meta
+        run: |
+          # Tag every image with the full 40-character Git commit SHA.
+          # The deploy workflow refuses `latest` and any tag that does not
+          # match this format, so the registry only contains immutable,
+          # traceable artifacts.
+          echo "image_tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ARTIFACT_REGISTRY_URL }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          tags: ${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-dev:
+    name: Deploy frontend to dev
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      frontend_image_tag: ${{ needs.build.outputs.image_tag }}
+      trigger_source: frontend-ci
+    secrets: inherit

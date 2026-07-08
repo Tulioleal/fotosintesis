@@ -27,6 +27,11 @@ spec:
             - name: http
               containerPort: 3000
           env:
+            - name: API_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: API_BASE_URL
             - name: NEXT_PUBLIC_API_BASE_URL
               valueFrom:
                 configMapKeyRef:

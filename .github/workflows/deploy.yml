@@ -1,0 +1,578 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      backend_image_tag:
+        description: "Full 40-character Git commit SHA. Optional for auto-dev deploys; the workflow reuses the tag of the currently deployed backend image when this is empty."
+        required: false
+        type: string
+      frontend_image_tag:
+        description: "Full 40-character Git commit SHA. Optional for auto-dev deploys; the workflow reuses the tag of the currently deployed frontend image when this is empty."
+        required: false
+        type: string
+      trigger_source:
+        required: false
+        type: string
+        default: manual
+    outputs:
+      backend_smoke_result:
+        description: "Result of the in-cluster backend health check."
+        value: ${{ jobs.deploy.outputs.backend_smoke_result }}
+      frontend_smoke_result:
+        description: "Result of the public frontend smoke check."
+        value: ${{ jobs.deploy.outputs.frontend_smoke_result }}
+      migration_result:
+        description: "Result of the migration Job wait."
+        value: ${{ jobs.deploy.outputs.migration_result }}
+      rollout_result:
+        description: "Result of the backend and frontend rollout waits."
+        value: ${{ jobs.deploy.outputs.rollout_result }}
+      required_keys_result:
+        description: "Result of the provider API key secret projection check."
+        value: ${{ jobs.deploy.outputs.required_keys_result }}
+      backend_image_tag:
+        description: "Backend image tag that was rendered into manifests."
+        value: ${{ jobs.deploy.outputs.backend_image_tag }}
+      frontend_image_tag:
+        description: "Frontend image tag that was rendered into manifests."
+        value: ${{ jobs.deploy.outputs.frontend_image_tag }}
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment. Production deploys require the `prod` GitHub Environment approval."
+        required: true
+        type: choice
+        default: dev
+        options:
+          - dev
+          - prod
+      backend_image_tag:
+        description: "Full 40-character Git commit SHA of the backend image. Must be a 40-character Git commit SHA, never `latest`."
+        required: true
+        type: string
+      frontend_image_tag:
+        description: "Full 40-character Git commit SHA of the frontend image. Must be a 40-character Git commit SHA, never `latest`."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  deployments: write
+
+concurrency:
+  group: deploy-${{ inputs.environment }}-${{ inputs.trigger_source || 'manual' }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: 1.10.7
+  # Repository-level variables the deploy workflow always relies on. Validate
+  # them up front so a missing configuration fails fast with a clear message.
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || '' }}
+  WIF_PROVIDER_ID: ${{ vars.WIF_PROVIDER_ID || '' }}
+  DEPLOY_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEPLOY_SERVICE_ACCOUNT_EMAIL || '' }}
+  FRONTEND_API_BASE_URL: ${{ vars.FRONTEND_API_BASE_URL || '' }}
+  FRONTEND_SERVER_API_BASE_URL: ${{ vars.FRONTEND_SERVER_API_BASE_URL || 'http://fotosintesis-backend:8000' }}
+  MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER || 'mock' }}
+  VISION_PROVIDER: ${{ vars.VISION_PROVIDER || 'mock' }}
+  JUDGE_PROVIDER: ${{ vars.JUDGE_PROVIDER || 'mock' }}
+  SEARCH_PROVIDER: ${{ vars.SEARCH_PROVIDER || 'mock' }}
+  EMBEDDING_PROVIDER: ${{ vars.EMBEDDING_PROVIDER || 'mock' }}
+  MODEL_PROVIDERS: ${{ vars.MODEL_PROVIDERS || '' }}
+  VISION_PROVIDERS: ${{ vars.VISION_PROVIDERS || '' }}
+  JUDGE_PROVIDERS: ${{ vars.JUDGE_PROVIDERS || '' }}
+  SEARCH_PROVIDERS: ${{ vars.SEARCH_PROVIDERS || '' }}
+  OPENAI_TEXT_MODEL: ${{ vars.OPENAI_TEXT_MODEL || 'gpt-5.4' }}
+  OPENAI_VISION_MODEL: ${{ vars.OPENAI_VISION_MODEL || 'gpt-5.4' }}
+  OPENAI_JUDGE_MODEL: ${{ vars.OPENAI_JUDGE_MODEL || 'gpt-5.4' }}
+  OPENAI_SEARCH_MODEL: ${{ vars.OPENAI_SEARCH_MODEL || 'gpt-5.4' }}
+  OPENAI_EMBEDDING_MODEL: ${{ vars.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small' }}
+  GEMINI_TEXT_MODEL: ${{ vars.GEMINI_TEXT_MODEL || 'gemini-2.5-flash' }}
+  GEMINI_VISION_MODEL: ${{ vars.GEMINI_VISION_MODEL || 'gemini-2.5-flash' }}
+  GEMINI_JUDGE_MODEL: ${{ vars.GEMINI_JUDGE_MODEL || 'gemini-2.5-flash' }}
+  GEMINI_SEARCH_MODEL: ${{ vars.GEMINI_SEARCH_MODEL || 'gemini-2.5-flash' }}
+  EMBEDDING_DIMENSION: ${{ vars.EMBEDDING_DIMENSION || '8' }}
+  FRONTEND_EXPOSURE_MODE: ${{ vars.FRONTEND_EXPOSURE_MODE || 'ip-http' }}
+  FRONTEND_HOSTNAME: ${{ vars.FRONTEND_HOSTNAME || '' }}
+  MANAGED_CERTIFICATE_NAME: ${{ vars.MANAGED_CERTIFICATE_NAME || 'fotosintesis-managed-cert' }}
+  CLOUD_SQL_PROXY_IMAGE: ${{ vars.CLOUD_SQL_PROXY_IMAGE || 'gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.15.2' }}
+  CLOUD_SQL_PROXY_PORT: ${{ vars.CLOUD_SQL_PROXY_PORT || '5432' }}
+  DATABASE_URL_SECRET_KEY: ${{ vars.DATABASE_URL_SECRET_KEY || 'database-url' }}
+  AUTH_SECRET_SECRET_KEY: ${{ vars.AUTH_SECRET_SECRET_KEY || 'auth-secret' }}
+  DEFAULT_REPLICAS_DEV: ${{ vars.DEFAULT_REPLICAS_DEV || '1' }}
+  DEFAULT_REPLICAS_PROD: ${{ vars.DEFAULT_REPLICAS_PROD || '2' }}
+  # Service-account -> namespace service-account allow-list for one-off
+  # kubectl runs (e.g. backend smoke check pods). The cluster's IAM
+  # configuration still governs what the SA can do in GCP.
+  BACKEND_KUBERNETES_SERVICE_ACCOUNT: fotosintesis-backend
+  FRONTEND_KUBERNETES_SERVICE_ACCOUNT: fotosintesis-frontend
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.environment }} (${{ inputs.trigger_source || 'manual' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      backend_smoke_result: ${{ steps.backend-smoke.outputs.result }}
+      frontend_smoke_result: ${{ steps.frontend-smoke.outputs.result }}
+      migration_result: ${{ steps.migration.outputs.result || 'skipped' }}
+      rollout_result: ${{ steps.rollout.outputs.result || 'skipped' }}
+      required_keys_result: ${{ steps.required-keys.outputs.result || 'skipped' }}
+      backend_image_tag: ${{ steps.render.outputs.backend_image_tag }}
+      frontend_image_tag: ${{ steps.render.outputs.frontend_image_tag }}
+    steps:
+      - name: Validate required variables
+        env:
+          FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
+          FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
+          MANAGED_CERTIFICATE_NAME: ${{ env.MANAGED_CERTIFICATE_NAME }}
+        run: |
+          missing=0
+          case "$FRONTEND_EXPOSURE_MODE" in
+            hostname-https|ip-http) ;;
+            *)
+              echo "::error::FRONTEND_EXPOSURE_MODE must be hostname-https or ip-http." >&2
+              exit 1
+              ;;
+          esac
+
+          required_vars="TF_STATE_BUCKET WIF_PROVIDER_ID DEPLOY_SERVICE_ACCOUNT_EMAIL"
+          if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
+            required_vars="$required_vars FRONTEND_HOSTNAME MANAGED_CERTIFICATE_NAME"
+          fi
+
+          for v in $required_vars; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Repository variable for $v is not set." >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Set the missing repository variables under Settings -> Secrets and variables -> Actions -> Variables." >&2
+            exit 1
+          fi
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT_EMAIL }}
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TF_VERSION }}
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Initialize OpenTofu with the remote backend
+        working-directory: infra/opentofu/envs/${{ inputs.environment }}
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          tofu init \
+            -input=false \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=fotosintesis/${{ inputs.environment }}"
+      - name: Read OpenTofu outputs
+        id: tofu-outputs
+        working-directory: infra/opentofu/envs/${{ inputs.environment }}
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          tofu output -json > outputs.json
+          # Required outputs the render step consumes. Fail fast when the
+          # OpenTofu state does not yet expose a value (e.g. the env was
+          # never applied) so the deploy never renders a half-configured
+          # manifest.
+          for key in artifact_repository_url backend_service_account_email frontend_service_account_email cloud_sql_database_name cloud_sql_instance_connection_name frontend_static_ip_name frontend_static_ip_address gke_cluster_name gke_cluster_location kubernetes_namespace object_storage_bucket project_id runtime_secret_name; do
+            value=$(jq -r --arg k "$key" '.[$k].value // empty' outputs.json)
+            if [ -z "$value" ]; then
+              echo "::error::OpenTofu output $key is missing or empty." >&2
+              exit 1
+            fi
+            echo "TF_OUT_${key}=${value}" >> "$GITHUB_OUTPUT"
+          done
+      - name: Authenticate to GKE
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          echo "$GOOGLE_OAUTH_ACCESS_TOKEN" | gcloud auth login --brief --no-launch-browser
+          gcloud config set project "$TF_OUT_PROJECT_ID"
+          gcloud container clusters get-credentials "$TF_OUT_GKE_CLUSTER_NAME" \
+            --region "$TF_OUT_GKE_CLUSTER_LOCATION"
+      - name: Resolve and validate image tags
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+          INPUT_BACKEND_TAG: ${{ inputs.backend_image_tag }}
+          INPUT_FRONTEND_TAG: ${{ inputs.frontend_image_tag }}
+        run: |
+          set -euo pipefail
+          sha40='^[0-9a-f]{40}$'
+
+          # Fetch the currently-deployed image tag for a deployment, or
+          # print "" when the deployment is missing. Path-filter-restricted
+          # auto-dev deploys leave the unchanged service alone and reuse
+          # its current tag so the deploy can complete with one new image.
+          current_tag() {
+            local deployment="$1"
+            kubectl get "deployment/${deployment}" -n "$NAMESPACE" \
+              -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
+              | awk -F: '{print $2}'
+          }
+
+          resolve_one() {
+            local label="$1"
+            local input="$2"
+            local deployment="$3"
+            if [ -n "$input" ]; then
+              printf '%s' "$input"
+              return
+            fi
+            current_tag "$deployment"
+          }
+
+          reject_tag() {
+            local label="$1"
+            local value="$2"
+            if [ -z "$value" ]; then
+              echo "::error::$label is empty after resolution. Pass a 40-character Git commit SHA or use the auto-dev resolve flow against an environment that already runs the service." >&2
+              exit 1
+            fi
+            if [ "$value" = "latest" ]; then
+              echo "::error::$label is set to 'latest'. Production deploys require a 40-character Git commit SHA, never 'latest'." >&2
+              exit 1
+            fi
+            if ! printf '%s' "$value" | grep -Eq "$sha40"; then
+              echo "::error::$label ('$value') is not a 40-character Git commit SHA." >&2
+              exit 1
+            fi
+          }
+
+          BACKEND_IMAGE_TAG=$(resolve_one BACKEND_IMAGE_TAG "$INPUT_BACKEND_TAG" fotosintesis-backend)
+          FRONTEND_IMAGE_TAG=$(resolve_one FRONTEND_IMAGE_TAG "$INPUT_FRONTEND_TAG" fotosintesis-frontend)
+
+          reject_tag BACKEND_IMAGE_TAG "$BACKEND_IMAGE_TAG"
+          reject_tag FRONTEND_IMAGE_TAG "$FRONTEND_IMAGE_TAG"
+
+          {
+            echo "backend_image_tag=${BACKEND_IMAGE_TAG}"
+            echo "frontend_image_tag=${FRONTEND_IMAGE_TAG}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Render Kubernetes manifests
+        id: render
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+          TF_OUT_ARTIFACT_REGISTRY_URL: ${{ steps.tofu-outputs.outputs.artifact_repository_url }}
+          TF_OUT_BACKEND_GCP_SERVICE_ACCOUNT_EMAIL: ${{ steps.tofu-outputs.outputs.backend_service_account_email }}
+          TF_OUT_FRONTEND_GCP_SERVICE_ACCOUNT_EMAIL: ${{ steps.tofu-outputs.outputs.frontend_service_account_email }}
+          TF_OUT_OBJECT_STORAGE_BUCKET: ${{ steps.tofu-outputs.outputs.object_storage_bucket }}
+          TF_OUT_CLOUD_SQL_INSTANCE_CONNECTION_NAME: ${{ steps.tofu-outputs.outputs.cloud_sql_instance_connection_name }}
+          TF_OUT_CLOUD_SQL_DATABASE_NAME: ${{ steps.tofu-outputs.outputs.cloud_sql_database_name }}
+          TF_OUT_STATIC_IP_NAME: ${{ steps.tofu-outputs.outputs.frontend_static_ip_name }}
+          TF_OUT_PROJECT_ID: ${{ steps.tofu-outputs.outputs.project_id }}
+          BACKEND_IMAGE_TAG: ${{ steps.resolve.outputs.backend_image_tag }}
+          FRONTEND_IMAGE_TAG: ${{ steps.resolve.outputs.frontend_image_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p .generated/k8s/"$ENVIRONMENT"/rendered
+          values_file=".generated/k8s/$ENVIRONMENT/values.env"
+          {
+            echo "NAMESPACE=${TF_OUT_NAMESPACE}"
+            echo "APP_ENV=${ENVIRONMENT}"
+            echo "IMAGE_REGISTRY=${TF_OUT_ARTIFACT_REGISTRY_URL}"
+            echo "BACKEND_IMAGE_TAG=${BACKEND_IMAGE_TAG}"
+            echo "FRONTEND_IMAGE_TAG=${FRONTEND_IMAGE_TAG}"
+            if [ "$ENVIRONMENT" = "prod" ]; then
+              echo "BACKEND_REPLICAS=${DEFAULT_REPLICAS_PROD}"
+              echo "FRONTEND_REPLICAS=${DEFAULT_REPLICAS_PROD}"
+            else
+              echo "BACKEND_REPLICAS=${DEFAULT_REPLICAS_DEV}"
+              echo "FRONTEND_REPLICAS=${DEFAULT_REPLICAS_DEV}"
+            fi
+            echo "FRONTEND_SERVICE_TYPE=ClusterIP"
+            echo "FRONTEND_API_BASE_URL=${FRONTEND_API_BASE_URL}"
+            echo "FRONTEND_SERVER_API_BASE_URL=${FRONTEND_SERVER_API_BASE_URL}"
+            echo "FRONTEND_EXPOSURE_MODE=${FRONTEND_EXPOSURE_MODE}"
+            echo "FRONTEND_HOSTNAME=${FRONTEND_HOSTNAME}"
+            echo "STATIC_IP_NAME=${TF_OUT_STATIC_IP_NAME}"
+            echo "MANAGED_CERTIFICATE_NAME=${MANAGED_CERTIFICATE_NAME}"
+            echo "BACKEND_GCP_SERVICE_ACCOUNT_EMAIL=${TF_OUT_BACKEND_GCP_SERVICE_ACCOUNT_EMAIL}"
+            echo "FRONTEND_GCP_SERVICE_ACCOUNT_EMAIL=${TF_OUT_FRONTEND_GCP_SERVICE_ACCOUNT_EMAIL}"
+            echo "OBJECT_STORAGE_PROVIDER=gcs"
+            echo "OBJECT_STORAGE_BUCKET=${TF_OUT_OBJECT_STORAGE_BUCKET}"
+            echo "CLOUD_SQL_INSTANCE_CONNECTION_NAME=${TF_OUT_CLOUD_SQL_INSTANCE_CONNECTION_NAME}"
+            echo "CLOUD_SQL_DATABASE_NAME=${TF_OUT_CLOUD_SQL_DATABASE_NAME}"
+            echo "CLOUD_SQL_PROXY_IMAGE=${CLOUD_SQL_PROXY_IMAGE}"
+            echo "CLOUD_SQL_PROXY_PORT=${CLOUD_SQL_PROXY_PORT}"
+            echo "DATABASE_URL_SECRET_KEY=${DATABASE_URL_SECRET_KEY}"
+            echo "AUTH_SECRET_SECRET_KEY=${AUTH_SECRET_SECRET_KEY}"
+            echo "RUNTIME_SECRET_NAME=fotosintesis-runtime"
+            echo "EXTERNAL_SECRETS_STORE_NAME=fotosintesis-secret-store"
+            echo "EXTERNAL_SECRETS_REFRESH_INTERVAL=5m"
+            echo "GCP_PROJECT_ID=${TF_OUT_PROJECT_ID}"
+            echo "MODEL_PROVIDER=${MODEL_PROVIDER}"
+            echo "VISION_PROVIDER=${VISION_PROVIDER}"
+            echo "JUDGE_PROVIDER=${JUDGE_PROVIDER}"
+            echo "SEARCH_PROVIDER=${SEARCH_PROVIDER}"
+            echo "EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}"
+            echo "MODEL_PROVIDERS=${MODEL_PROVIDERS}"
+            echo "VISION_PROVIDERS=${VISION_PROVIDERS}"
+            echo "JUDGE_PROVIDERS=${JUDGE_PROVIDERS}"
+            echo "SEARCH_PROVIDERS=${SEARCH_PROVIDERS}"
+            echo "OPENAI_TEXT_MODEL=${OPENAI_TEXT_MODEL}"
+            echo "OPENAI_VISION_MODEL=${OPENAI_VISION_MODEL}"
+            echo "OPENAI_JUDGE_MODEL=${OPENAI_JUDGE_MODEL}"
+            echo "OPENAI_SEARCH_MODEL=${OPENAI_SEARCH_MODEL}"
+            echo "OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}"
+            echo "GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL}"
+            echo "GEMINI_VISION_MODEL=${GEMINI_VISION_MODEL}"
+            echo "GEMINI_JUDGE_MODEL=${GEMINI_JUDGE_MODEL}"
+            echo "GEMINI_SEARCH_MODEL=${GEMINI_SEARCH_MODEL}"
+            echo "EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}"
+          } > "$values_file"
+          sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
+
+          {
+            echo "backend_image_tag=${BACKEND_IMAGE_TAG}"
+            echo "frontend_image_tag=${FRONTEND_IMAGE_TAG}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Apply namespace, service accounts, config
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/00-namespace.yaml
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/10-service-accounts.yaml
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/20-config.yaml
+      - name: Install or upgrade External Secrets Operator
+        env:
+          ESO_VERSION: ${{ vars.EXTERNAL_SECRETS_OPERATOR_VERSION || '0.10.4' }}
+        run: |
+          kubectl apply --server-side -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/crds/bundle.yaml"
+          kubectl apply -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/standard.yaml"
+          kubectl -n external-secrets rollout status deploy/external-secrets --timeout=300s
+          kubectl wait --for=condition=Available --timeout=300s \
+            -n external-secrets deploy/external-secrets
+      - name: Wait for External Secrets to project runtime Secret
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+          TF_OUT_RUNTIME_SECRET_NAME: ${{ steps.tofu-outputs.outputs.runtime_secret_name }}
+        run: |
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/80-external-secrets.yaml
+          for i in $(seq 1 30); do
+            if kubectl get secret "$TF_OUT_RUNTIME_SECRET_NAME" -n "$TF_OUT_NAMESPACE" >/dev/null 2>&1; then
+              echo "Runtime secret projected"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Runtime secret was not projected in time" >&2
+          exit 1
+      - id: required-keys
+        name: Verify required provider API key secrets are projected
+        env:
+          MODEL_PROVIDER: ${{ env.MODEL_PROVIDER }}
+          VISION_PROVIDER: ${{ env.VISION_PROVIDER }}
+          JUDGE_PROVIDER: ${{ env.JUDGE_PROVIDER }}
+          SEARCH_PROVIDER: ${{ env.SEARCH_PROVIDER }}
+          EMBEDDING_PROVIDER: ${{ env.EMBEDDING_PROVIDER }}
+          MODEL_PROVIDERS: ${{ env.MODEL_PROVIDERS }}
+          VISION_PROVIDERS: ${{ env.VISION_PROVIDERS }}
+          JUDGE_PROVIDERS: ${{ env.JUDGE_PROVIDERS }}
+          SEARCH_PROVIDERS: ${{ env.SEARCH_PROVIDERS }}
+          TF_OUT_RUNTIME_SECRET_NAME: ${{ steps.tofu-outputs.outputs.runtime_secret_name }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+          missing=0
+
+          check_provider_key() {
+            local role="$1"
+            local provider="$2"
+            local key=""
+
+            case "$provider" in
+              ""|mock)
+                return 0
+                ;;
+              openai)
+                key="openai-api-key"
+                ;;
+              gemini)
+                key="gemini-api-key"
+                ;;
+              *)
+                echo "::error::$role has unknown provider '$provider'. Expected one of: mock, openai, gemini." >&2
+                missing=1
+                return 0
+                ;;
+            esac
+
+            if ! kubectl get secret "$TF_OUT_RUNTIME_SECRET_NAME" -n "$TF_OUT_NAMESPACE" \
+                -o jsonpath="{.data.$key}" 2>/dev/null | grep -q .; then
+              echo "::error::$role=$provider requires secret key '$key' in $TF_OUT_RUNTIME_SECRET_NAME (namespace $TF_OUT_NAMESPACE)." >&2
+              missing=1
+            fi
+          }
+
+          check_provider_family() {
+            local role="$1"
+            local family="$2"
+            if [ -z "$family" ]; then
+              return 0
+            fi
+            # The provider family is a comma-separated list of provider
+            # names. Each provider must have a corresponding API key in
+            # the runtime Secret.
+            IFS=',' read -r -a providers <<< "$family"
+            for provider in "${providers[@]}"; do
+              check_provider_key "$role" "$provider"
+            done
+          }
+
+          check_provider_family MODEL_PROVIDERS "$MODEL_PROVIDERS"
+          check_provider_family VISION_PROVIDERS "$VISION_PROVIDERS"
+          check_provider_family JUDGE_PROVIDERS "$JUDGE_PROVIDERS"
+          check_provider_family SEARCH_PROVIDERS "$SEARCH_PROVIDERS"
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::ExternalSecret $TF_OUT_RUNTIME_SECRET_NAME is missing one or more required provider API key entries, or provider configuration is invalid. See docs/deployment/external-secrets.md." >&2
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "Required provider API keys are present"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - name: Apply backend and migrations
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/50-migrations.yaml
+      - id: migration
+        name: Wait for migrations
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          kubectl wait --for=condition=complete --timeout=600s \
+            -n "$TF_OUT_NAMESPACE" job/fotosintesis-migrations
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - name: Apply frontend, ingress, certificate
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
+        run: |
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml
+          if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
+            kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/60-managed-certificate.yaml
+          fi
+          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/70-ingress.yaml
+      - id: rollout
+        name: Wait for rollouts
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          kubectl rollout status deployment/fotosintesis-backend -n "$TF_OUT_NAMESPACE" --timeout=600s
+          kubectl rollout status deployment/fotosintesis-frontend -n "$TF_OUT_NAMESPACE" --timeout=600s
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - id: backend-smoke
+        name: Backend health smoke check (in-cluster curl)
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+          SMOKE_NAME="fotosintesis-backend-smoke"
+          kubectl delete pod -n "$TF_OUT_NAMESPACE" "$SMOKE_NAME" --ignore-not-found
+          # Use an in-cluster curl pod so the call comes from a place that
+          # can resolve the cluster DNS name. The pod is removed after the
+          # check regardless of the result.
+          if ! kubectl run "$SMOKE_NAME" \
+              -n "$TF_OUT_NAMESPACE" \
+              --image=curlimages/curl:8.10.1 \
+              --restart=Never \
+              --rm \
+              --wait \
+              --command -- curl --silent --show-error --fail \
+              --max-time 30 \
+              "http://fotosintesis-backend.$TF_OUT_NAMESPACE.svc.cluster.local:8000/health"; then
+            echo "::error::Backend health check failed" >&2
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Backend health check passed"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - id: frontend-smoke
+        name: Frontend public smoke check
+        env:
+          FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
+          FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
+          STATIC_IP_ADDRESS: ${{ steps.tofu-outputs.outputs.frontend_static_ip_address }}
+        run: |
+          set -euo pipefail
+          if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
+            url="https://$FRONTEND_HOSTNAME/"
+          else
+            url="http://$STATIC_IP_ADDRESS/"
+          fi
+
+          for i in $(seq 1 60); do
+            if curl --silent --show-error --fail --output /dev/null \
+                --max-time 10 "$url"; then
+              echo "Frontend public endpoint OK: $url"
+              echo "result=pass" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Waiting for frontend public endpoint: $url"
+            sleep 10
+          done
+          echo "::error::Frontend public endpoint did not become ready: $url" >&2
+          echo "result=fail" >> "$GITHUB_OUTPUT"
+          exit 1
+      - name: Summary
+        if: always()
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual' }}
+          BACKEND_IMAGE_TAG: ${{ steps.render.outputs.backend_image_tag }}
+          FRONTEND_IMAGE_TAG: ${{ steps.render.outputs.frontend_image_tag }}
+          MIGRATION: ${{ steps.migration.outputs.result || 'skipped' }}
+          ROLLOUT: ${{ steps.rollout.outputs.result || 'skipped' }}
+          REQUIRED_KEYS: ${{ steps.required-keys.outputs.result || 'skipped' }}
+          BACKEND_SMOKE: ${{ steps.backend-smoke.outputs.result || 'skipped' }}
+          FRONTEND_SMOKE: ${{ steps.frontend-smoke.outputs.result || 'skipped' }}
+          GKE_CLUSTER_NAME: ${{ steps.tofu-outputs.outputs.gke_cluster_name }}
+          GKE_CLUSTER_LOCATION: ${{ steps.tofu-outputs.outputs.gke_cluster_location }}
+          NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+          GCP_PROJECT_ID: ${{ steps.tofu-outputs.outputs.project_id }}
+          FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
+          FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
+          STATIC_IP_ADDRESS: ${{ steps.tofu-outputs.outputs.frontend_static_ip_address }}
+        run: |
+          {
+            echo "## Deploy summary"
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Environment | \`${ENVIRONMENT}\` |"
+            echo "| Trigger source | \`${TRIGGER_SOURCE}\` |"
+            echo "| Backend image tag | \`${BACKEND_IMAGE_TAG}\` |"
+            echo "| Frontend image tag | \`${FRONTEND_IMAGE_TAG}\` |"
+            echo "| GCP project | \`${GCP_PROJECT_ID}\` |"
+            echo "| GKE cluster | \`${GKE_CLUSTER_NAME}\` (${GKE_CLUSTER_LOCATION}) |"
+            echo "| Namespace | \`${NAMESPACE}\` |"
+            echo "| Frontend exposure mode | \`${FRONTEND_EXPOSURE_MODE}\` |"
+            echo "| Frontend hostname | \`${FRONTEND_HOSTNAME}\` |"
+            echo "| Frontend static IP | \`${STATIC_IP_ADDRESS}\` |"
+            echo "| Migration Job | ${MIGRATION} |"
+            echo "| Backend/frontend rollouts | ${ROLLOUT} |"
+            echo "| Required provider API keys | ${REQUIRED_KEYS} |"
+            echo "| Backend in-cluster smoke | ${BACKEND_SMOKE} |"
+            echo "| Frontend public smoke | ${FRONTEND_SMOKE} |"
+          } >> "$GITHUB_STEP_SUMMARY"

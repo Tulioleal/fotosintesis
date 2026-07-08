@@ -35,3 +35,11 @@ resource "google_service_account_iam_member" "frontend_workload_identity" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.kubernetes_namespace}/${var.frontend_kubernetes_service_account}]"
 }
+
+resource "google_project_iam_member" "cross_project_artifactregistry_readers" {
+  for_each = toset(var.cross_project_artifactregistry_readers)
+
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${each.value}"
+}

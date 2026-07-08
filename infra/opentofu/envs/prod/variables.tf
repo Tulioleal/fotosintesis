@@ -137,3 +137,15 @@ variable "notification_email" {
   type    = string
   default = ""
 }
+
+variable "frontend_static_ip_name" {
+  type        = string
+  default     = "fotosintesis-prod-frontend-ip"
+  description = "Name of the reserved global static IP for the prod frontend ingress. Must match the Ingress annotation `kubernetes.io/ingress.global-static-ip-name`."
+}
+
+variable "prod_promotion_service_account_email" {
+  type        = string
+  default     = ""
+  description = "Optional. The prod root does not need to grant cross-project reader access; this is left for the dev root to expose instead. Keep the default empty value to disable the binding."
+}

@@ -17,6 +17,7 @@ spec:
       labels:
         app.kubernetes.io/name: fotosintesis-backend
         app.kubernetes.io/part-of: fotosintesis-ai
+        iam.gke.io/workload-identity: fotosintesis-backend
     spec:
       serviceAccountName: fotosintesis-backend
       containers:
@@ -36,7 +37,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: __RUNTIME_SECRET_NAME__
-                  key: database-url
+                  key: __DATABASE_URL_SECRET_KEY__
+            - name: OBJECT_STORAGE_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OBJECT_STORAGE_PROVIDER
             - name: OBJECT_STORAGE_BUCKET
               valueFrom:
                 configMapKeyRef:
@@ -77,6 +83,26 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: EMBEDDING_PROVIDER
+            - name: MODEL_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: MODEL_PROVIDERS
+            - name: VISION_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: VISION_PROVIDERS
+            - name: JUDGE_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: JUDGE_PROVIDERS
+            - name: SEARCH_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: SEARCH_PROVIDERS
             - name: OPENAI_TEXT_MODEL
               valueFrom:
                 configMapKeyRef:
@@ -143,6 +169,29 @@ spec:
             httpGet:
               path: /health
               port: http
+        - name: cloud-sql-proxy
+          image: __CLOUD_SQL_PROXY_IMAGE__
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--structured-logs"
+            - "--port=__CLOUD_SQL_PROXY_PORT__"
+            - "__CLOUD_SQL_INSTANCE_CONNECTION_NAME__"
+          ports:
+            - name: cloudsql
+              containerPort: __CLOUD_SQL_PROXY_PORT__
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
 ---
 apiVersion: v1
 kind: Service

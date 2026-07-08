@@ -1,0 +1,15 @@
+dev_project_id     = "replace-with-dev-gcp-project"
+dev_project_number = "replace-with-dev-gcp-project-number"
+prod_project_id     = "replace-with-prod-gcp-project"
+prod_project_number = "replace-with-prod-gcp-project-number"
+region             = "us-central1"
+
+github_owner      = "replace-with-github-owner"
+github_repository = "replace-with-github-repository"
+
+# Map of role label -> IAM principal granted roles/storage.admin on the
+# bootstrap state bucket. Use one entry per human or group that needs
+# recovery access to bootstrap state.
+bootstrap_admin_members = {
+  admin = "user:replace-with-bootstrap-admin@example.com"
+}

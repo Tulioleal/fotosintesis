@@ -137,3 +137,15 @@ variable "notification_email" {
   type    = string
   default = ""
 }
+
+variable "frontend_static_ip_name" {
+  type        = string
+  default     = "fotosintesis-dev-frontend-ip"
+  description = "Name of the reserved global static IP for the dev frontend ingress. Must match the Ingress annotation `kubernetes.io/ingress.global-static-ip-name`."
+}
+
+variable "prod_promotion_service_account_email" {
+  type        = string
+  default     = ""
+  description = "Email of the prod CI service account. The dev project grants it `roles/artifactregistry.reader` so a single OIDC token can both verify dev source images and copy them into the prod registry. Map from GitHub repository variable DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL (mapped to TF_VAR_prod_promotion_service_account_email)."
+}

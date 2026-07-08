@@ -76,10 +76,20 @@ module "iam" {
   kubernetes_namespace                = var.kubernetes_namespace
   backend_kubernetes_service_account  = var.backend_kubernetes_service_account
   frontend_kubernetes_service_account = var.frontend_kubernetes_service_account
+  cross_project_artifactregistry_readers = compact([
+    var.prod_promotion_service_account_email,
+  ])
 }
 
 module "monitoring" {
   source             = "../../modules/monitoring"
   project_id         = var.project_id
   notification_email = var.notification_email
+}
+
+module "static_ip" {
+  source     = "../../modules/static-ip"
+  project_id = var.project_id
+  name       = var.frontend_static_ip_name
+  labels     = local.labels
 }
