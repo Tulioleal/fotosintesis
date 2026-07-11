@@ -1,7 +1,14 @@
 # GitHub Environments
 
 The repository uses two GitHub Environments to separate automatic dev
-deploys from approval-gated prod deploys.
+deploys from approval-gated prod deploys. Environments enforce deployment
+protection rules; deployment configuration is stored in repository
+variables, not in environment-scoped variables.
+
+Bootstrap publishes the non-secret `DEV_*` and `PROD_*` foundation
+variables during its local apply. Each successful environment IaC apply
+then synchronizes non-sensitive environment outputs to repository
+variables. Runtime secret values remain in GCP Secret Manager.
 
 ## `dev` environment
 
@@ -12,8 +19,8 @@ deploys from approval-gated prod deploys.
   successful `main` build for backend and frontend, and of the
   OpenTofu auto-apply for the dev root. The `deploy.yml` job references
   `environment: dev` for the auto-dev path.
-- **Required secrets/variables:** none. Variables come from repository
-  variables and the dev env-root OpenTofu outputs.
+- **Required secrets/variables:** no environment-scoped values. Bootstrap
+  and the IaC post-apply sync jobs publish repository variables.
 
 ## `prod` environment
 
@@ -27,8 +34,8 @@ deploys from approval-gated prod deploys.
   `iac.yml` (`manual`), `release.yml` (`promote-images`, `deploy-prod`,
   `summary`), and `deploy.yml` (when called with `environment: prod`)
   references this environment.
-- **Required secrets/variables:** none (all values come from repository
-  variables and the prod env-root OpenTofu outputs).
+- **Required secrets/variables:** no environment-scoped values. Bootstrap
+  and the IaC post-apply sync jobs publish repository variables.
 
 ## Setting up a new environment
 
@@ -38,10 +45,12 @@ deploys from approval-gated prod deploys.
    reviewers).
 4. Save. The `iac.yml` and `deploy.yml` workflows reference the
    environment by name in their `environment:` keys, so GitHub will
-   enforce the rules automatically.
+   enforce the rules automatically. Apply bootstrap first so its GitHub
+   provider can publish the foundation repository variables.
 
 ## Verifying the configuration
 
 After configuring both environments, run a manual `iac.yml` dispatch
-with `environment=prod` and `tofu_command=plan`. The dispatch should
-require the configured reviewer approval before the plan job starts.
+with `environment=dev` and `tofu_command=plan` to confirm dev can
+authenticate without approval. Then run a prod plan and confirm the
+configured reviewer approval is required before its job starts.

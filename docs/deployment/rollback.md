@@ -5,6 +5,12 @@ Database migrations are forward-only for this round; incompatible
 migration failures require a database restore or a reviewed
 forward-fix migration.
 
+The image-listing command below uses `PROD_ARTIFACT_REGISTRY_URL` and
+`PROD_GCP_PROJECT_ID`. Bootstrap publishes the project ID, and a
+successful prod `iac.yml` apply publishes the registry URL. Run that
+apply first if either variable is missing. Use the corresponding `DEV_*`
+variables when investigating a dev rollback.
+
 ## Image tag rollback
 
 To roll back the backend or frontend to a previously deployed 40-character

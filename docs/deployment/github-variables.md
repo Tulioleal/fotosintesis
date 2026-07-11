@@ -1,10 +1,10 @@
 # GitHub Repository and Environment Variables
 
-The deploy, OpenTofu, and release workflows read foundation values from
-GitHub repository variables. Per-environment values are stored as GitHub
-Environment variables. The two-tier design lets the bootstrap root own
-foundation IAM/state/WIF without leaking it into environment-level
-configuration.
+The deploy, OpenTofu, and release workflows read configuration from
+GitHub repository variables. GitHub Environments provide deployment
+protection rules, not environment-scoped configuration. This keeps
+bootstrap-owned foundation IAM/state/WIF values distinct from
+post-apply environment outputs and operator-provided runtime settings.
 
 ## Ownership
 

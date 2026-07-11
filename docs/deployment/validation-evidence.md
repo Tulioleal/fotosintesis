@@ -1,18 +1,18 @@
 # Validation Evidence
 
 This file is the evidence template the operator fills in after running
-the dev end-to-end and prod release flows. Each gate must report
+the dev end-to-end and prod release flows. Each gate should report
 `pass` and reference a real GitHub Actions run URL (or an approved
-dry-run URL) before the `gcp-deployment-platform` change is archived.
+dry-run URL).
 
 Use the table format below. Replace `<run-url>` and `<commit-sha>`
 placeholders with the actual values from the run.
 
 ## Sandbox dry-run
 
-The CI workflows fill this section automatically. Operators should
-verify the run URLs land here after the first push to `main` with the
-new workflow files.
+CI workflows do not write to this file. Operators record the relevant
+run URLs and results after the first push to `main` with the workflow
+files.
 
 | Check | Result | Run URL | Notes |
 | --- | --- | --- | --- |
@@ -31,9 +31,10 @@ new workflow files.
 | --- | --- | --- | --- |
 | Bootstrap dev project API enablement | pass | <bootstrap-output or run-url> | Document project number. |
 | Bootstrap dev state bucket created | pass | <bucket-name> | Bootstrap output `dev_state_bucket`. |
-| GitHub dev environment variables populated | pass | <variable-list or run-url> | Eight variables per runbook. |
+| Foundation variables published | pass | <bootstrap apply or variable list> | Bootstrap publishes the `DEV_*` foundation variables. |
+| Dev output variables synchronized | pass | <iac apply run-url> | The successful IaC apply publishes `DEV_ARTIFACT_REGISTRY_URL`, storage, static IP, and other non-sensitive outputs. |
 | Secret Manager entries present | pass | <secret-list or run-url> | At least one version per container. |
-| Dev IaC `iac.yml` plan/apply | pass | <run-url> | iac.yml main-dev-plan + apply-dev-main. |
+| Dev IaC `iac.yml` plan/apply | pass | <run-url> | Uses `DEV_IAC_SERVICE_ACCOUNT_EMAIL`; successful apply runs output sync. |
 | Backend image build (`backend:<sha>`) | pass | <run-url> | backend-ci.yml build job. |
 | Frontend image build (`frontend:<sha>`) | pass | <run-url> | frontend-ci.yml build job (skip if path filter excluded it). |
 | Backend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
@@ -51,10 +52,12 @@ new workflow files.
 | --- | --- | --- | --- |
 | Bootstrap prod project API enablement | pass | <bootstrap-output or run-url> | Document project number. |
 | Bootstrap prod state bucket created | pass | <bucket-name> | Bootstrap output `prod_state_bucket`. |
+| Foundation variables published | pass | <bootstrap apply or variable list> | Bootstrap publishes the `PROD_*` foundation variables. |
 | GitHub prod environment reviewer configured | pass | <reviewer-list> | Required by GitHub Environment protection. |
 | Secret Manager entries present | pass | <secret-list or run-url> | At least one version per container. |
 | DNS points at the prod static IP | pass | <hostname + lookup> | Required for `hostname-https`. |
-| Prod IaC `iac.yml` plan/apply | pass | <run-url> | iac.yml manual job. |
+| Prod IaC `iac.yml` plan/apply | pass | <run-url> | Uses `PROD_IAC_SERVICE_ACCOUNT_EMAIL`; successful apply runs output sync. |
+| Prod output variables synchronized | pass | <iac apply run-url> | Publishes `PROD_ARTIFACT_REGISTRY_URL`, storage, static IP, and other non-sensitive outputs. |
 | Verify source images (dev tags) | pass | <run-url> | release.yml verify-source-images. |
 | Promote images to prod registry | pass | <run-url> | release.yml promote-images. |
 | Deploy prod (manifests) | pass | <run-url> | release.yml deploy-prod. |

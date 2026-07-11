@@ -1,35 +1,50 @@
-## Purpose
+## ADDED Requirements
 
-Define MVP testing, deployment and operational documentation requirements for Fotosintesis AI.
+### Requirement: GitHub Actions deployment automation
+The system SHALL provide GitHub Actions workflows for backend CI, frontend CI, OpenTofu infrastructure, environment deployment, and production release promotion.
 
-## Requirements
+#### Scenario: Workflow set is present
+- **WHEN** deployment automation files are inspected
+- **THEN** the repository includes workflows for backend validation/build, frontend validation/build, OpenTofu plan/apply, Kubernetes deployment, and production release promotion
 
-### Requirement: Backend tests
+#### Scenario: Dev deployment follows successful main builds
+- **WHEN** backend or frontend image builds succeed on `main`
+- **THEN** the relevant workflow triggers or calls the dev deployment flow with immutable Git SHA image tags
 
-The system SHALL include backend unit and integration tests for core MVP domains and API endpoints.
+### Requirement: HTTPS frontend ingress
+The system SHALL expose the frontend through GKE HTTPS Ingress using a reserved static IP and managed certificate configuration.
 
-#### Scenario: Backend tests run locally
+#### Scenario: Frontend ingress is rendered
+- **WHEN** Kubernetes manifests are rendered for an environment with a public frontend host
+- **THEN** the rendered resources include frontend Ingress, managed certificate configuration, and static IP reference values for that environment
 
-- **WHEN** the documented backend test command runs
-- **THEN** it executes unit and integration coverage using mocks where real providers are unavailable
+#### Scenario: DNS setup is documented
+- **WHEN** deployment documentation is inspected
+- **THEN** it explains that DNS must point the configured hostname to the reserved static IP before HTTPS smoke checks can pass in `hostname-https` mode, and that `ip-http` mode uses direct HTTP access through the reserved static IP
 
-### Requirement: Frontend tests
+### Requirement: External Secrets runtime secret projection
+The system SHALL use External Secrets Operator to project GCP Secret Manager secret values into Kubernetes runtime secrets.
 
-The system SHALL include frontend component tests for critical forms, screens and UI states.
+#### Scenario: External secret resources are rendered
+- **WHEN** Kubernetes manifests are rendered for an environment
+- **THEN** they include SecretStore or ClusterSecretStore configuration and ExternalSecret resources that map required Secret Manager values to the runtime Kubernetes Secret name consumed by workloads
 
-#### Scenario: Component tests run locally
+#### Scenario: Secret values are not committed
+- **WHEN** deployment manifests, OpenTofu files, workflow files, and docs are inspected
+- **THEN** they do not include provider API keys, database passwords, session secrets, or other secret values
 
-- **WHEN** the documented frontend component test command runs
-- **THEN** it verifies forms, Home, candidate selection, profile, garden, reminders and light meter states
+### Requirement: Cloud SQL proxy workload connectivity
+The system SHALL run backend and migration workloads with Cloud SQL Auth Proxy connectivity to the environment Cloud SQL instance.
 
-### Requirement: End-to-end tests
+#### Scenario: Backend includes Cloud SQL proxy
+- **WHEN** backend Kubernetes manifests are rendered for GCP deployment
+- **THEN** the backend pod specification includes Cloud SQL Auth Proxy configuration using the environment Cloud SQL instance connection name and Workload Identity service account
 
-The system SHALL include Playwright tests for primary MVP journeys and fallback flows.
+#### Scenario: Migration job includes Cloud SQL proxy
+- **WHEN** migration Job manifests are rendered for GCP deployment
+- **THEN** the migration pod can connect to the same Cloud SQL instance through Cloud SQL Auth Proxy before running Alembic migrations
 
-#### Scenario: E2E suite runs
-
-- **WHEN** the Playwright suite runs against the local stack
-- **THEN** it verifies auth, Home navigation, identification to profile, garden save, reminder creation, assistant RAG and light fallback
+## MODIFIED Requirements
 
 ### Requirement: Deployment artifacts
 
@@ -39,15 +54,6 @@ The system SHALL include Kubernetes/GKE manifests for frontend, backend and runt
 
 - **WHEN** deployment artifacts are inspected
 - **THEN** they define frontend, backend and required supporting resources with configurable environment values, including runtime config, Workload Identity service accounts, External Secrets references, Cloud SQL proxy configuration, migration execution, and frontend ingress resources
-
-### Requirement: Setup and operations documentation
-
-The system SHALL document local setup, environment variables, mocks, provider configuration, evaluation run and deployment path.
-
-#### Scenario: New developer follows setup docs
-
-- **WHEN** a developer follows the documented local setup
-- **THEN** they can run the stack with mocks and understand how to configure real providers later
 
 ### Requirement: Infrastructure as Code provisioning
 
@@ -99,7 +105,7 @@ The system SHALL use plain Kubernetes manifests, not Helm, for application workl
 
 #### Scenario: Helm is not required for app workloads
 
-- **WHEN** a developer follows the documented deployment path
+- **WHEN** a developer follows the documented application deployment path
 - **THEN** no Helm chart is required to deploy the Fotosintesis application workloads
 
 ### Requirement: Deployment consumes OpenTofu outputs
@@ -143,47 +149,3 @@ The deployment artifacts SHALL keep real secrets out of source control and SHALL
 
 - **WHEN** deployment files are inspected
 - **THEN** any example Secret is outside applied manifest directories or clearly documented as a non-applied example, runtime manifests reference secret names without committing secret values, and ExternalSecret resources refer to Secret Manager keys rather than embedding secret values
-
-### Requirement: GitHub Actions deployment automation
-The system SHALL provide GitHub Actions workflows for backend CI, frontend CI, OpenTofu infrastructure, environment deployment, and production release promotion.
-
-#### Scenario: Workflow set is present
-- **WHEN** deployment automation files are inspected
-- **THEN** the repository includes workflows for backend validation/build, frontend validation/build, OpenTofu plan/apply, Kubernetes deployment, and production release promotion
-
-#### Scenario: Dev deployment follows successful main builds
-- **WHEN** backend or frontend image builds succeed on `main`
-- **THEN** the relevant workflow triggers or calls the dev deployment flow with immutable Git SHA image tags
-
-### Requirement: HTTPS frontend ingress
-The system SHALL expose the frontend through GKE HTTPS Ingress using a reserved static IP and managed certificate configuration.
-
-#### Scenario: Frontend ingress is rendered
-- **WHEN** Kubernetes manifests are rendered for an environment with a public frontend host
-- **THEN** the rendered resources include frontend Ingress, managed certificate configuration, and static IP reference values for that environment
-
-#### Scenario: DNS setup is documented
-- **WHEN** deployment documentation is inspected
-- **THEN** it explains that DNS must point the configured hostname to the reserved static IP before HTTPS smoke checks can pass in `hostname-https` mode, and that `ip-http` mode uses direct HTTP access through the reserved static IP
-
-### Requirement: External Secrets runtime secret projection
-The system SHALL use External Secrets Operator to project GCP Secret Manager secret values into Kubernetes runtime secrets.
-
-#### Scenario: External secret resources are rendered
-- **WHEN** Kubernetes manifests are rendered for an environment
-- **THEN** they include SecretStore or ClusterSecretStore configuration and ExternalSecret resources that map required Secret Manager values to the runtime Kubernetes Secret name consumed by workloads
-
-#### Scenario: Secret values are not committed
-- **WHEN** deployment manifests, OpenTofu files, workflow files, and docs are inspected
-- **THEN** they do not include provider API keys, database passwords, session secrets, or other secret values
-
-### Requirement: Cloud SQL proxy workload connectivity
-The system SHALL run backend and migration workloads with Cloud SQL Auth Proxy connectivity to the environment Cloud SQL instance.
-
-#### Scenario: Backend includes Cloud SQL proxy
-- **WHEN** backend Kubernetes manifests are rendered for GCP deployment
-- **THEN** the backend pod specification includes Cloud SQL Auth Proxy configuration using the environment Cloud SQL instance connection name and Workload Identity service account
-
-#### Scenario: Migration job includes Cloud SQL proxy
-- **WHEN** migration Job manifests are rendered for GCP deployment
-- **THEN** the migration pod can connect to the same Cloud SQL instance through Cloud SQL Auth Proxy before running Alembic migrations
