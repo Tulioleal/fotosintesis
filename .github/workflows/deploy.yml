@@ -394,9 +394,9 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/00-namespace.yaml
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/10-service-accounts.yaml
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/20-config.yaml
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/00-namespace.yaml"
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/10-service-accounts.yaml"
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/20-config.yaml"
       - name: Install or upgrade External Secrets Operator
         env:
           ESO_VERSION: ${{ vars.EXTERNAL_SECRETS_OPERATOR_VERSION || '0.10.4' }}
@@ -412,8 +412,8 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
           TF_OUT_RUNTIME_SECRET_NAME: ${{ steps.tofu-outputs.outputs.runtime_secret_name }}
         run: |
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/80-external-secrets.yaml
-          for i in $(seq 1 30); do
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/80-external-secrets.yaml"
+          for _ in $(seq 1 30); do
             if kubectl get secret "$TF_OUT_RUNTIME_SECRET_NAME" -n "$TF_OUT_NAMESPACE" >/dev/null 2>&1; then
               echo "Runtime secret projected"
               exit 0
@@ -503,8 +503,8 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/50-migrations.yaml
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/50-migrations.yaml"
       - id: migration
         name: Wait for migrations
         env:
@@ -518,11 +518,11 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
         run: |
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml"
           if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
-            kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/60-managed-certificate.yaml
+            kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/60-managed-certificate.yaml"
           fi
-          kubectl apply -f .generated/k8s/$ENVIRONMENT/rendered/70-ingress.yaml
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/70-ingress.yaml"
       - id: rollout
         name: Wait for rollouts
         env:
@@ -571,7 +571,7 @@ jobs:
             url="http://$STATIC_IP_ADDRESS/"
           fi
 
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl --silent --show-error --fail --output /dev/null \
                 --max-time 10 "$url"; then
               echo "Frontend public endpoint OK: $url"
