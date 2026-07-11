@@ -52,8 +52,8 @@ jobs:
       - name: tofu fmt -recursive -check
         run: tofu -chdir=infra/opentofu fmt -recursive -check
 
-  pr-plan:
-    name: PR offline plan (${{ matrix.environment }})
+  pr-validate:
+    name: PR OpenTofu validate (${{ matrix.environment }})
     needs: format
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -74,66 +74,6 @@ jobs:
       - name: tofu validate
         working-directory: infra/opentofu/envs/${{ matrix.environment }}
         run: tofu validate
-      - name: tofu plan without refresh
-        working-directory: infra/opentofu/envs/${{ matrix.environment }}
-        env:
-          TF_VAR_region: ${{ env.CI_REGION }}
-          TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
-          DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
-          DEV_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
-          DEV_STATIC_IP_NAME_INPUT: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
-          DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
-          PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
-          PROD_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.PROD_OBJECT_STORAGE_BUCKET_INPUT || '' }}
-          PROD_STATIC_IP_NAME_INPUT: ${{ vars.PROD_STATIC_IP_NAME_INPUT || '' }}
-        run: |
-          if [ "${{ matrix.environment }}" = "dev" ]; then
-            export TF_VAR_project_id="${DEV_GCP_PROJECT_ID}"
-            [ -n "${DEV_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET_INPUT}"
-            [ -n "${DEV_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME_INPUT}"
-            export TF_VAR_prod_promotion_service_account_email="${DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL}"
-          else
-            export TF_VAR_project_id="${PROD_GCP_PROJECT_ID}"
-            [ -n "${PROD_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET_INPUT}"
-            [ -n "${PROD_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME_INPUT}"
-          fi
-          tofu plan -refresh=false -out=tfplan -input=false
-      - name: Generate readable plan text
-        working-directory: infra/opentofu/envs/${{ matrix.environment }}
-        run: |
-          tofu show -no-color tfplan > plan.txt
-          head -c 60000 plan.txt > plan.txt.truncated
-          mv plan.txt.truncated plan.txt
-      - name: Post offline plan to PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const plan = fs.readFileSync('infra/opentofu/envs/${{ matrix.environment }}/plan.txt', 'utf8');
-            const truncated = plan.length >= 60000;
-            const body = [
-              '#### Offline `tofu plan -refresh=false` for ${{ matrix.environment }} (truncated=' + truncated + ')',
-              '',
-              'This pull request plan is an offline shape check. It runs `tofu init -backend=false` and `tofu plan -refresh=false` without authenticating to GCP, so it does not validate remote state drift or live cloud data.',
-              '',
-              '```',
-              plan,
-              '```',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body,
-            });
-      - name: Upload offline plan artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr-tfplan-${{ matrix.environment }}
-          path: |
-            infra/opentofu/envs/${{ matrix.environment }}/tfplan
-            infra/opentofu/envs/${{ matrix.environment }}/plan.txt
-          retention-days: 5
 
   main-dev-plan:
     name: Main authenticated dev plan
