@@ -2,16 +2,39 @@
 
 Cloud infrastructure is managed with OpenTofu in `infra/opentofu`. Kubernetes workloads are deployed with plain manifests in `deploy/k8s`. Docker Compose remains only for local development.
 
+The deployment platform splits state into three roots: `infra/opentofu/bootstrap` (local-operator-only, local-state-only, foundation trust path) and `infra/opentofu/envs/{dev,prod}` (remote-state, applied through GitHub Actions). The bootstrap root is the only OpenTofu apply a human runs; the env roots are applied through GitHub Actions under OIDC.
+
+The foundation GitHub repository variables (state buckets, project IDs, CI/deploy/IaC service-account emails, WIF provider IDs) are published by the bootstrap root through the GitHub provider. The per-environment output variables (artifact registry URLs, Cloud SQL connection names, GKE cluster info, runtime secret name) are published by `iac.yml` post-apply sync jobs. Operators set only provisioning inputs and runtime configuration.
+
 ## Prerequisites
 
-- OpenTofu installed as `tofu`.
+- OpenTofu installed as `tofu` (`>= 1.8.0`).
 - Google Cloud credentials with permission to manage GKE, Artifact Registry, Cloud SQL, Cloud Storage, Secret Manager, IAM and Cloud Monitoring.
-- A GCS bucket for remote OpenTofu state.
-- `gcloud` and `kubectl` installed for deployment.
+- `gcloud` and `kubectl` installed for local development and troubleshooting.
+- A fine-grained GitHub personal access token scoped to the target repository with **Actions variables: Write** for the bootstrap root. Export it as `GITHUB_TOKEN` before running `tofu apply` against the bootstrap root. The token never lands in `terraform.tfvars`, OpenTofu outputs, or state.
 
-## Remote State
+## Bootstrap
 
-Each environment includes `backend.tf.example`.
+The `infra/opentofu/bootstrap` root is applied once by a human operator from a workstation with administrator credentials. It owns the dev/prod state buckets, the Workload Identity pool/providers, the per-project CI/deploy/IaC service accounts, and the foundation GitHub repository variables. Bootstrap state is local; there is no `backend` block and no migration.
+
+```bash
+gcloud auth application-default login
+gcloud config set project "$DEV_PROJECT_ID"
+export GITHUB_TOKEN="<fine-grained PAT with Actions variables: Write>"
+
+cd infra/opentofu/bootstrap
+tofu init
+tofu fmt -recursive
+tofu validate
+tofu plan -var-file=terraform.tfvars
+tofu apply -var-file=terraform.tfvars
+```
+
+Subsequent `tofu plan/apply` for the bootstrap root is idempotent. Keep `terraform.tfstate` (and `terraform.tfstate.backup`) in a private, backed-up directory on the operator workstation.
+
+## Remote State (env roots)
+
+Each environment root includes `backend.tf.example`.
 
 ```bash
 cd infra/opentofu/envs/dev
@@ -20,39 +43,41 @@ cp backend.tf.example backend.tf
 
 Edit `backend.tf` with the state bucket and prefix for the environment. Do not commit credentials or generated state files.
 
+The env roots are applied through `iac.yml` under OIDC. The dev plan/apply path authenticates as `DEV_IAC_SERVICE_ACCOUNT_EMAIL`; the prod manual apply path authenticates as `PROD_IAC_SERVICE_ACCOUNT_EMAIL`. After a successful apply, `iac.yml` post-apply sync jobs publish the per-environment outputs to repository variables. The sync jobs use a fixed allow-list of non-sensitive outputs, reject anything marked sensitive, never echo the output JSON to logs, and have `actions: write` permission only for the sync steps.
+
 ## Plan And Apply
 
-Use the environment directory you want to manage:
+The recommended way to apply each env root is through `iac.yml`. Operators can also drive the env roots from a workstation with `gcloud` for first-time debugging:
 
 ```bash
 cd infra/opentofu/envs/dev
 tofu init
 tofu fmt -recursive
 tofu validate
-tofu plan -var-file=terraform.tfvars.example
-tofu apply -var-file=terraform.tfvars.example
+tofu plan -var-file=terraform.tfvars
+tofu apply -var-file=terraform.tfvars
 ```
 
 For production, use `infra/opentofu/envs/prod` and a production tfvars file. Keep production `deletion_protection = true` unless a planned teardown has been approved.
 
 ## Secrets
 
-OpenTofu creates Secret Manager secret containers only. Secret values are intentionally not committed.
+OpenTofu creates Secret Manager secret containers only. The `secret_ids` default in `infra/opentofu/envs/{dev,prod}/variables.tf` is the four containers required by `deploy/k8s/base/80-external-secrets.yaml`: `fotosintesis-database-url`, `fotosintesis-auth-secret`, `fotosintesis-openai-api-key`, and `fotosintesis-gemini-api-key`. The legacy `fotosintesis-object-storage-access-key`, `fotosintesis-object-storage-secret-key`, and `fotosintesis-provider-api-keys` containers are no longer created; GKE access to GCS uses Workload Identity.
 
 Populate values out of band, for example:
 
 ```bash
-printf '%s' "$DATABASE_URL" | gcloud secrets versions add fotosintesis-database-url --data-file=-
-printf '%s' "$AUTH_SECRET" | gcloud secrets versions add fotosintesis-auth-secret --data-file=-
+printf '%s' "$DATABASE_URL" | gcloud secrets versions add fotosintesis-database-url \
+  --project="$PROJECT_ID" --data-file=-
+printf '%s' "$AUTH_SECRET" | gcloud secrets versions add fotosintesis-auth-secret \
+  --project="$PROJECT_ID" --data-file=-
+printf '%s' "$OPENAI_API_KEY" | gcloud secrets versions add fotosintesis-openai-api-key \
+  --project="$PROJECT_ID" --data-file=-
+printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add fotosintesis-gemini-api-key \
+  --project="$PROJECT_ID" --data-file=-
 ```
 
-The Kubernetes manifests reference a runtime Secret named `fotosintesis-runtime` by default. Create it from approved runtime values or with an External Secrets controller if one is installed. The example at `deploy/k8s/examples/runtime-secret.example.yaml` is non-applied documentation only and must not contain real secrets.
-
-```bash
-kubectl -n fotosintesis create secret generic fotosintesis-runtime \
-  --from-literal=database-url="$DATABASE_URL" \
-  --from-literal=auth-secret="$AUTH_SECRET"
-```
+The Kubernetes manifests reference a runtime Secret named `fotosintesis-runtime` by default. The `deploy.yml` workflow installs the External Secrets Operator and projects the Secret Manager values into the cluster through the `SecretStore` and `ExternalSecret` resources in `80-external-secrets.yaml`. The example at `deploy/k8s/examples/runtime-secret.example.yaml` is non-applied documentation only and must not contain real secrets.
 
 ## Deploy To GKE
 
@@ -73,6 +98,8 @@ docker build -t "$REGISTRY/frontend:latest" frontend
 docker push "$REGISTRY/backend:latest"
 docker push "$REGISTRY/frontend:latest"
 ```
+
+The CI workflows (`backend-ci.yml`, `frontend-ci.yml`) build and push the images with a 40-character Git commit SHA tag, not `latest`. They authenticate as `DEV_CI_SERVICE_ACCOUNT_EMAIL` through the dev WIF provider.
 
 Create an environment values file from OpenTofu outputs:
 

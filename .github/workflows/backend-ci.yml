@@ -32,11 +32,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGION: us-central1
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  ARTIFACT_REGISTRY_URL: ${{ vars.ARTIFACT_REGISTRY_URL }}
-  CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.CI_SERVICE_ACCOUNT_EMAIL }}
-  WIF_PROVIDER_ID: ${{ vars.WIF_PROVIDER_ID }}
+  ARTIFACT_REGISTRY_URL: ${{ vars.DEV_ARTIFACT_REGISTRY_URL }}
+  CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+  WIF_PROVIDER_ID: ${{ vars.DEV_WIF_PROVIDER_ID }}
 
 jobs:
   validate:

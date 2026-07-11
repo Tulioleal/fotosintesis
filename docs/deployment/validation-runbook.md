@@ -40,13 +40,15 @@ end-to-end evidence:
    `compute.googleapis.com`, `cloudresourcemanager.googleapis.com`.
 3. **Dev state bucket** is created by bootstrap and the dev OpenTofu
    root has been initialized under the `fotosintesis/dev` prefix.
-4. **GitHub dev environment variables** are populated from bootstrap
-   outputs: `GCP_PROJECT_ID`, `ARTIFACT_REGISTRY_URL`,
-   `CI_SERVICE_ACCOUNT_EMAIL`, `WIF_PROVIDER_ID`,
-   `DEPLOY_SERVICE_ACCOUNT_EMAIL`, `TF_STATE_BUCKET`,
-   `FRONTEND_HOSTNAME`, `MANAGED_CERTIFICATE_NAME`. Release source
-   variables (`DEV_ARTIFACT_REGISTRY_URL`, `DEV_GCP_PROJECT_ID`) are
-   populated when release validation needs them.
+4. **GitHub foundation variables** are published by the bootstrap
+   root: `DEV_TF_STATE_BUCKET`, `DEV_GCP_PROJECT_ID`,
+   `DEV_GCP_PROJECT_NUMBER`, `DEV_CI_SERVICE_ACCOUNT_EMAIL`,
+   `DEV_DEPLOY_SERVICE_ACCOUNT_EMAIL`, `DEV_IAC_SERVICE_ACCOUNT_EMAIL`,
+   `DEV_WIF_PROVIDER_ID`, `DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL`.
+   **Per-environment output variables** (`DEV_ARTIFACT_REGISTRY_URL`,
+   `DEV_OBJECT_STORAGE_BUCKET`, `DEV_STATIC_IP_NAME`, etc.) are
+   published by the iac.yml post-apply sync job after a successful
+   dev apply.
 5. **Secret Manager entries** exist with at least one version for
    `fotosintesis-database-url`, `fotosintesis-auth-secret`,
    `fotosintesis-openai-api-key`, and `fotosintesis-gemini-api-key`.
@@ -63,10 +65,15 @@ end-to-end evidence:
 
 1. Trigger `iac.yml` on `main` (or dispatch manually with
    `environment: dev`, `tofu_command: apply`) to ensure the dev env
-   root is up to date. Record the run URL.
+   root is up to date. The apply authenticates as
+   `DEV_IAC_SERVICE_ACCOUNT_EMAIL`. The post-apply sync job then
+   publishes the dev outputs to repository variables. Record the run
+   URL.
 2. Push a backend (or frontend) change to `main` so `backend-ci.yml`
    (or `frontend-ci.yml`) builds the image and triggers `deploy.yml`.
-   Record the run URLs.
+   `backend-ci.yml` and `frontend-ci.yml` authenticate as
+   `DEV_CI_SERVICE_ACCOUNT_EMAIL` (the image-CI account, not the IaC
+   account). Record the run URLs.
 3. Confirm the deploy summary records:
    - Backend image tag and frontend image tag (40-character Git commit
      SHAs).
@@ -98,11 +105,18 @@ The prod operator must confirm:
 ## Prod release evidence
 
 1. Trigger `iac.yml` against `prod` with `tofu_command: apply` and the
-   configured reviewer approval. Record the run URL.
+   configured reviewer approval. The apply authenticates as
+   `PROD_IAC_SERVICE_ACCOUNT_EMAIL`; the post-apply sync job then
+   publishes the prod outputs to repository variables. Record the run
+   URL.
 2. Trigger `release.yml` with the two 40-character SHAs that passed
-   dev. The `verify-source-images`, `promote-images`, and
-   `deploy-prod` jobs run in sequence; the `summary` job aggregates
-   the per-gate results.
+   dev. `verify-source-images` authenticates as
+   `DEV_CI_SERVICE_ACCOUNT_EMAIL` and confirms the tags exist in the
+   dev registry. `promote-images` authenticates as
+   `PROD_CI_SERVICE_ACCOUNT_EMAIL` and copies them to the prod
+   registry. `deploy-prod` authenticates as
+   `PROD_DEPLOY_SERVICE_ACCOUNT_EMAIL` and runs the prod apply. The
+   `summary` job aggregates the per-gate results.
 3. Confirm the summary records:
    - Verify source images: `success`.
    - Promote images: `success`.
@@ -112,7 +126,7 @@ The prod operator must confirm:
    under "Prod release."
 
 The prod evidence satisfies task 7.8 only when every gate reports
-`pass` and the run URLs are recorded.
+`pass` and the live run URLs are recorded.
 
 ## Sandbox-only run URLs
 

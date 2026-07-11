@@ -7,6 +7,7 @@ resource "google_sql_database_instance" "postgres" {
 
   settings {
     tier              = var.tier
+    edition           = var.edition
     availability_type = var.availability_type
     disk_type         = "PD_SSD"
     disk_size         = var.disk_size_gb
@@ -17,7 +18,7 @@ resource "google_sql_database_instance" "postgres" {
     }
 
     ip_configuration {
-      ipv4_enabled = false
+      ipv4_enabled = var.ipv4_enabled
     }
 
     user_labels = var.labels

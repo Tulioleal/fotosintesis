@@ -8,22 +8,30 @@ the External Secrets Operator.
 
 The env roots create one container per required secret in the project.
 The full list is `var.secret_ids` in `infra/opentofu/envs/{dev,prod}`
-and includes:
+and matches the `80-external-secrets.yaml` manifest exactly:
 
 - `fotosintesis-database-url` -> `database-url` in the runtime Secret.
 - `fotosintesis-auth-secret` -> `auth-secret` in the runtime Secret.
 - `fotosintesis-openai-api-key` -> `openai-api-key` in the runtime
-  Secret (optional; only required when an OpenAI family provider is
-  configured).
+  Secret (required when an OpenAI family provider is configured;
+  operators populate a `mock-not-used` placeholder for mock providers).
 - `fotosintesis-gemini-api-key` -> `gemini-api-key` in the runtime
-  Secret (optional; only required when a Gemini family provider is
-  configured).
+  Secret (required when a Gemini family provider is configured;
+  operators populate a `mock-not-used` placeholder for mock providers).
 
-The default dev secret list also includes placeholder
-`fotosintesis-object-storage-access-key` and
-`fotosintesis-object-storage-secret-key` containers for legacy
-configurations. GKE access to GCS uses Workload Identity, so static
-storage keys are not required for the current runtime.
+The legacy `fotosintesis-object-storage-access-key`,
+`fotosintesis-object-storage-secret-key`, and
+`fotosintesis-provider-api-keys` containers are no longer created by
+the env roots. GKE access to GCS uses Workload Identity, so static
+storage keys are not required for the current runtime. The
+`fotosintesis-provider-api-keys` container was a single-secret
+fallback that the new per-provider containers (`openai-api-key` and
+`gemini-api-key`) replace.
+
+If legacy containers still exist in a project from a previous
+deployment, operators can remove them with
+`gcloud secrets delete <name> --project=<project>` after the
+env root is updated to the new `secret_ids` set.
 
 ## Populate secret values manually
 
@@ -72,7 +80,8 @@ conflicts with ESO on Secret reconciliation.
 ## What is NOT in source control
 
 - Secret Manager values.
-- GitHub Actions secrets.
+- GitHub Actions secrets (other than the NextAuth build-time
+  placeholder `FRONTEND_BUILD_AUTH_SECRET`).
 - GCP service account JSON keys.
 
 The workflow files, OpenTofu files, and rendered manifests never embed

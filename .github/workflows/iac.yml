@@ -80,22 +80,22 @@ jobs:
           TF_VAR_region: ${{ env.CI_REGION }}
           TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
           DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
-          DEV_OBJECT_STORAGE_BUCKET: ${{ vars.DEV_OBJECT_STORAGE_BUCKET }}
-          DEV_STATIC_IP_NAME: ${{ vars.DEV_STATIC_IP_NAME }}
+          DEV_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          DEV_STATIC_IP_NAME_INPUT: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
           DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
           PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
-          PROD_OBJECT_STORAGE_BUCKET: ${{ vars.PROD_OBJECT_STORAGE_BUCKET }}
-          PROD_STATIC_IP_NAME: ${{ vars.PROD_STATIC_IP_NAME }}
+          PROD_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.PROD_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          PROD_STATIC_IP_NAME_INPUT: ${{ vars.PROD_STATIC_IP_NAME_INPUT || '' }}
         run: |
           if [ "${{ matrix.environment }}" = "dev" ]; then
             export TF_VAR_project_id="${DEV_GCP_PROJECT_ID}"
-            export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET}"
-            export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME}"
+            [ -n "${DEV_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET_INPUT}"
+            [ -n "${DEV_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME_INPUT}"
             export TF_VAR_prod_promotion_service_account_email="${DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL}"
           else
             export TF_VAR_project_id="${PROD_GCP_PROJECT_ID}"
-            export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET}"
-            export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME}"
+            [ -n "${PROD_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET_INPUT}"
+            [ -n "${PROD_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME_INPUT}"
           fi
           tofu plan -refresh=false -out=tfplan -input=false
       - name: Generate readable plan text
@@ -153,7 +153,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.DEV_WIF_PROVIDER_ID }}
-          service_account: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+          service_account: ${{ vars.DEV_IAC_SERVICE_ACCOUNT_EMAIL }}
       - name: tofu init
         working-directory: infra/opentofu/envs/dev
         run: |
@@ -169,8 +169,8 @@ jobs:
           TF_VAR_project_id: ${{ vars.DEV_GCP_PROJECT_ID }}
           TF_VAR_region: ${{ env.CI_REGION }}
           TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
-          TF_VAR_object_storage_bucket: ${{ vars.DEV_OBJECT_STORAGE_BUCKET }}
-          TF_VAR_frontend_static_ip_name: ${{ vars.DEV_STATIC_IP_NAME }}
+          TF_VAR_object_storage_bucket: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          TF_VAR_frontend_static_ip_name: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
           TF_VAR_prod_promotion_service_account_email: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
         run: tofu plan -out=tfplan -input=false
       - name: Generate readable plan text
@@ -203,7 +203,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.DEV_WIF_PROVIDER_ID }}
-          service_account: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+          service_account: ${{ vars.DEV_IAC_SERVICE_ACCOUNT_EMAIL }}
       - name: tofu init
         working-directory: infra/opentofu/envs/dev
         run: |
@@ -219,6 +219,142 @@ jobs:
         working-directory: infra/opentofu/envs/dev
         run: tofu apply -input=false -auto-approve tfplan
 
+  sync-dev-outputs:
+    name: Sync dev outputs to repository variables
+    needs: apply-dev-main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.apply-dev-main.result == 'success'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TF_VERSION }}
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.DEV_WIF_PROVIDER_ID }}
+          service_account: ${{ vars.DEV_IAC_SERVICE_ACCOUNT_EMAIL }}
+      - name: tofu init
+        working-directory: infra/opentofu/envs/dev
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          tofu init \
+            -input=false \
+            -backend-config="bucket=${{ vars.DEV_TF_STATE_BUCKET }}" \
+            -backend-config="prefix=fotosintesis/dev"
+      - name: Synchronize non-sensitive dev outputs
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          working_dir=infra/opentofu/envs/dev
+          cd "$working_dir"
+          tofu output -json > outputs.json
+          # Fixed allow-list of non-sensitive outputs. The iac.yml sync
+          # contract never publishes anything marked sensitive, and the
+          # JSON is consumed by jq (not echoed to logs).
+          for entry in \
+            "DEV_ARTIFACT_REGISTRY_URL:artifact_repository_url" \
+            "DEV_GCP_PROJECT_ID:project_id" \
+            "DEV_BACKEND_SERVICE_ACCOUNT_EMAIL:backend_service_account_email" \
+            "DEV_FRONTEND_SERVICE_ACCOUNT_EMAIL:frontend_service_account_email" \
+            "DEV_OBJECT_STORAGE_BUCKET:object_storage_bucket" \
+            "DEV_CLOUD_SQL_DATABASE_NAME:cloud_sql_database_name" \
+            "DEV_CLOUD_SQL_INSTANCE_CONNECTION_NAME:cloud_sql_instance_connection_name" \
+            "DEV_GKE_CLUSTER_NAME:gke_cluster_name" \
+            "DEV_GKE_CLUSTER_LOCATION:gke_cluster_location" \
+            "DEV_KUBERNETES_NAMESPACE:kubernetes_namespace" \
+            "DEV_RUNTIME_SECRET_NAME:runtime_secret_name" \
+            "DEV_STATIC_IP_NAME:frontend_static_ip_name" \
+            "DEV_STATIC_IP_ADDRESS:frontend_static_ip_address"; do
+            github_name="${entry%%:*}"
+            tofu_name="${entry#*:}"
+            value=$(jq -r --arg k "$tofu_name" '.[$k].value // empty' outputs.json)
+            if [ -z "$value" ]; then
+              echo "::error::Output $tofu_name is missing or empty; refusing to publish partial $github_name." >&2
+              exit 1
+            fi
+            # Reject any output marked sensitive — the iac.yml sync
+            # contract only publishes non-sensitive values.
+            sensitive=$(jq -r --arg k "$tofu_name" '.[$k].sensitive // false' outputs.json)
+            if [ "$sensitive" = "true" ]; then
+              echo "::error::Output $tofu_name is marked sensitive; refusing to publish as $github_name." >&2
+              exit 1
+            fi
+          done
+
+          # Publish container name list as a compact JSON object.
+          container_names_json=$(jq -c '.secret_names.value | to_entries | map({key: .key, value: .value}) | from_entries' outputs.json)
+
+          for entry in \
+            "DEV_ARTIFACT_REGISTRY_URL:artifact_repository_url" \
+            "DEV_GCP_PROJECT_ID:project_id" \
+            "DEV_BACKEND_SERVICE_ACCOUNT_EMAIL:backend_service_account_email" \
+            "DEV_FRONTEND_SERVICE_ACCOUNT_EMAIL:frontend_service_account_email" \
+            "DEV_OBJECT_STORAGE_BUCKET:object_storage_bucket" \
+            "DEV_CLOUD_SQL_DATABASE_NAME:cloud_sql_database_name" \
+            "DEV_CLOUD_SQL_INSTANCE_CONNECTION_NAME:cloud_sql_instance_connection_name" \
+            "DEV_GKE_CLUSTER_NAME:gke_cluster_name" \
+            "DEV_GKE_CLUSTER_LOCATION:gke_cluster_location" \
+            "DEV_KUBERNETES_NAMESPACE:kubernetes_namespace" \
+            "DEV_RUNTIME_SECRET_NAME:runtime_secret_name" \
+            "DEV_STATIC_IP_NAME:frontend_static_ip_name" \
+            "DEV_STATIC_IP_ADDRESS:frontend_static_ip_address"; do
+            github_name="${entry%%:*}"
+            tofu_name="${entry#*:}"
+            value=$(jq -r --arg k "$tofu_name" '.[$k].value' outputs.json)
+            api_status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              -X PATCH \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
+              -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
+            if [ "$api_status" != "204" ]; then
+              create_status=$(curl --silent --show-error --output /dev/null \
+                --write-out '%{http_code}' \
+                -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+                -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
+              if [ "$create_status" != "201" ]; then
+                echo "::error::Failed to publish $github_name (patch=$api_status create=$create_status)." >&2
+                exit 1
+              fi
+            fi
+            echo "Published $github_name"
+          done
+
+          # Publish secret_names as a compact JSON object containing only container names.
+          api_status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            -X PATCH \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables/DEV_SECRET_NAMES" \
+            -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
+          if [ "$api_status" != "204" ]; then
+            create_status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+              -d "$(jq -n --arg n "DEV_SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
+            if [ "$create_status" != "201" ]; then
+              echo "::error::Failed to publish DEV_SECRET_NAMES (patch=$api_status create=$create_status)." >&2
+              exit 1
+            fi
+          fi
+          echo "Published DEV_SECRET_NAMES"
+
   manual:
     name: Manual ${{ inputs.tofu_command }} (${{ inputs.environment }})
     if: github.event_name == 'workflow_dispatch'
@@ -233,31 +369,63 @@ jobs:
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: ${{ env.TF_VERSION }}
-      - id: auth-dev
-        if: inputs.environment == 'dev'
+      - id: env-vars
+        name: Resolve env-scoped foundation variables
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEV_WIF: ${{ vars.DEV_WIF_PROVIDER_ID }}
+          PROD_WIF: ${{ vars.PROD_WIF_PROVIDER_ID }}
+          DEV_IAC_SA: ${{ vars.DEV_IAC_SERVICE_ACCOUNT_EMAIL }}
+          PROD_IAC_SA: ${{ vars.PROD_IAC_SERVICE_ACCOUNT_EMAIL }}
+          DEV_STATE: ${{ vars.DEV_TF_STATE_BUCKET }}
+          PROD_STATE: ${{ vars.PROD_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          missing=0
+          case "$ENVIRONMENT" in
+            dev)
+              ENV_WIF="$DEV_WIF"
+              ENV_IAC_SA="$DEV_IAC_SA"
+              ENV_STATE="$DEV_STATE"
+              ;;
+            prod)
+              ENV_WIF="$PROD_WIF"
+              ENV_IAC_SA="$PROD_IAC_SA"
+              ENV_STATE="$PROD_STATE"
+              ;;
+            *)
+              echo "::error::Unsupported environment '$ENVIRONMENT'." >&2
+              exit 1
+              ;;
+          esac
+          for pair in \
+            "ENV_WIF_PROVIDER_ID:$ENV_WIF" \
+            "ENV_IAC_SERVICE_ACCOUNT_EMAIL:$ENV_IAC_SA" \
+            "ENV_TF_STATE_BUCKET:$ENV_STATE"; do
+            label="${pair%%:*}"
+            value="${pair#*:}"
+            if [ -z "$value" ]; then
+              echo "::error::Repository variable for $label is not set. Bootstrap publishes the foundation variables; check that the bootstrap root has been applied." >&2
+              missing=1
+            fi
+            echo "$label=$value" >> "$GITHUB_OUTPUT"
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+      - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.DEV_WIF_PROVIDER_ID }}
-          service_account: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
-      - id: auth-prod
-        if: inputs.environment == 'prod'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.PROD_WIF_PROVIDER_ID }}
-          service_account: ${{ vars.PROD_CI_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ steps.env-vars.outputs.ENV_WIF_PROVIDER_ID }}
+          service_account: ${{ steps.env-vars.outputs.ENV_IAC_SERVICE_ACCOUNT_EMAIL }}
       - name: tofu init
         working-directory: infra/opentofu/envs/${{ inputs.environment }}
         env:
-          DEV_TF_STATE_BUCKET: ${{ vars.DEV_TF_STATE_BUCKET }}
-          PROD_TF_STATE_BUCKET: ${{ vars.PROD_TF_STATE_BUCKET }}
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          if [ "${{ inputs.environment }}" = "dev" ]; then
-            TF_STATE_BUCKET="${DEV_TF_STATE_BUCKET}"
-          else
-            TF_STATE_BUCKET="${PROD_TF_STATE_BUCKET}"
-          fi
           tofu init \
-            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -input=false \
+            -backend-config="bucket=${{ steps.env-vars.outputs.ENV_TF_STATE_BUCKET }}" \
             -backend-config="prefix=fotosintesis/${{ inputs.environment }}"
       - name: tofu validate
         working-directory: infra/opentofu/envs/${{ inputs.environment }}
@@ -268,25 +436,194 @@ jobs:
           TF_VAR_region: ${{ env.CI_REGION }}
           TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
           DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
-          DEV_OBJECT_STORAGE_BUCKET: ${{ vars.DEV_OBJECT_STORAGE_BUCKET }}
-          DEV_STATIC_IP_NAME: ${{ vars.DEV_STATIC_IP_NAME }}
+          DEV_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          DEV_STATIC_IP_NAME_INPUT: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
           DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
           PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
-          PROD_OBJECT_STORAGE_BUCKET: ${{ vars.PROD_OBJECT_STORAGE_BUCKET }}
-          PROD_STATIC_IP_NAME: ${{ vars.PROD_STATIC_IP_NAME }}
+          PROD_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.PROD_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          PROD_STATIC_IP_NAME_INPUT: ${{ vars.PROD_STATIC_IP_NAME_INPUT || '' }}
         run: |
           if [ "${{ inputs.environment }}" = "dev" ]; then
             export TF_VAR_project_id="${DEV_GCP_PROJECT_ID}"
-            export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET}"
-            export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME}"
+            [ -n "${DEV_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET_INPUT}"
+            [ -n "${DEV_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME_INPUT}"
             export TF_VAR_prod_promotion_service_account_email="${DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL}"
           else
             export TF_VAR_project_id="${PROD_GCP_PROJECT_ID}"
-            export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET}"
-            export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME}"
+            [ -n "${PROD_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET_INPUT}"
+            [ -n "${PROD_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME_INPUT}"
           fi
           tofu plan -out=tfplan -input=false
       - name: tofu apply
         if: inputs.tofu_command == 'apply'
         working-directory: infra/opentofu/envs/${{ inputs.environment }}
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: tofu apply -input=false -auto-approve tfplan
+
+  sync-manual-outputs:
+    name: Sync ${{ inputs.environment }} outputs after manual apply
+    needs: manual
+    if: github.event_name == 'workflow_dispatch' && inputs.tofu_command == 'apply' && needs.manual.result == 'success'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TF_VERSION }}
+      - id: env-vars
+        name: Resolve env-scoped foundation variables
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEV_WIF: ${{ vars.DEV_WIF_PROVIDER_ID }}
+          PROD_WIF: ${{ vars.PROD_WIF_PROVIDER_ID }}
+          DEV_IAC_SA: ${{ vars.DEV_IAC_SERVICE_ACCOUNT_EMAIL }}
+          PROD_IAC_SA: ${{ vars.PROD_IAC_SERVICE_ACCOUNT_EMAIL }}
+          DEV_STATE: ${{ vars.DEV_TF_STATE_BUCKET }}
+          PROD_STATE: ${{ vars.PROD_TF_STATE_BUCKET }}
+        run: |
+          set -euo pipefail
+          case "$ENVIRONMENT" in
+            dev)
+              ENV_WIF="$DEV_WIF"
+              ENV_IAC_SA="$DEV_IAC_SA"
+              ENV_STATE="$DEV_STATE"
+              PREFIX="DEV_"
+              ;;
+            prod)
+              ENV_WIF="$PROD_WIF"
+              ENV_IAC_SA="$PROD_IAC_SA"
+              ENV_STATE="$PROD_STATE"
+              PREFIX="PROD_"
+              ;;
+            *)
+              echo "::error::Unsupported environment '$ENVIRONMENT'." >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "ENV_WIF_PROVIDER_ID=$ENV_WIF"
+            echo "ENV_IAC_SERVICE_ACCOUNT_EMAIL=$ENV_IAC_SA"
+            echo "ENV_TF_STATE_BUCKET=$ENV_STATE"
+            echo "PREFIX=$PREFIX"
+          } >> "$GITHUB_OUTPUT"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ steps.env-vars.outputs.ENV_WIF_PROVIDER_ID }}
+          service_account: ${{ steps.env-vars.outputs.ENV_IAC_SERVICE_ACCOUNT_EMAIL }}
+      - name: tofu init
+        working-directory: infra/opentofu/envs/${{ inputs.environment }}
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          tofu init \
+            -input=false \
+            -backend-config="bucket=${{ steps.env-vars.outputs.ENV_TF_STATE_BUCKET }}" \
+            -backend-config="prefix=fotosintesis/${{ inputs.environment }}"
+      - name: Synchronize non-sensitive outputs
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PREFIX: ${{ steps.env-vars.outputs.PREFIX }}
+        run: |
+          set -euo pipefail
+          working_dir=infra/opentofu/envs/${{ inputs.environment }}
+          cd "$working_dir"
+          tofu output -json > outputs.json
+
+          for entry in \
+            "ARTIFACT_REGISTRY_URL:artifact_repository_url" \
+            "GCP_PROJECT_ID:project_id" \
+            "BACKEND_SERVICE_ACCOUNT_EMAIL:backend_service_account_email" \
+            "FRONTEND_SERVICE_ACCOUNT_EMAIL:frontend_service_account_email" \
+            "OBJECT_STORAGE_BUCKET:object_storage_bucket" \
+            "CLOUD_SQL_DATABASE_NAME:cloud_sql_database_name" \
+            "CLOUD_SQL_INSTANCE_CONNECTION_NAME:cloud_sql_instance_connection_name" \
+            "GKE_CLUSTER_NAME:gke_cluster_name" \
+            "GKE_CLUSTER_LOCATION:gke_cluster_location" \
+            "KUBERNETES_NAMESPACE:kubernetes_namespace" \
+            "RUNTIME_SECRET_NAME:runtime_secret_name" \
+            "STATIC_IP_NAME:frontend_static_ip_name" \
+            "STATIC_IP_ADDRESS:frontend_static_ip_address"; do
+            github_name="${PREFIX}${entry%%:*}"
+            tofu_name="${entry#*:}"
+            value=$(jq -r --arg k "$tofu_name" '.[$k].value // empty' outputs.json)
+            if [ -z "$value" ]; then
+              echo "::error::Output $tofu_name is missing or empty; refusing to publish partial $github_name." >&2
+              exit 1
+            fi
+            sensitive=$(jq -r --arg k "$tofu_name" '.[$k].sensitive // false' outputs.json)
+            if [ "$sensitive" = "true" ]; then
+              echo "::error::Output $tofu_name is marked sensitive; refusing to publish as $github_name." >&2
+              exit 1
+            fi
+          done
+
+          container_names_json=$(jq -c '.secret_names.value | to_entries | map({key: .key, value: .value}) | from_entries' outputs.json)
+
+          for entry in \
+            "ARTIFACT_REGISTRY_URL:artifact_repository_url" \
+            "GCP_PROJECT_ID:project_id" \
+            "BACKEND_SERVICE_ACCOUNT_EMAIL:backend_service_account_email" \
+            "FRONTEND_SERVICE_ACCOUNT_EMAIL:frontend_service_account_email" \
+            "OBJECT_STORAGE_BUCKET:object_storage_bucket" \
+            "CLOUD_SQL_DATABASE_NAME:cloud_sql_database_name" \
+            "CLOUD_SQL_INSTANCE_CONNECTION_NAME:cloud_sql_instance_connection_name" \
+            "GKE_CLUSTER_NAME:gke_cluster_name" \
+            "GKE_CLUSTER_LOCATION:gke_cluster_location" \
+            "KUBERNETES_NAMESPACE:kubernetes_namespace" \
+            "RUNTIME_SECRET_NAME:runtime_secret_name" \
+            "STATIC_IP_NAME:frontend_static_ip_name" \
+            "STATIC_IP_ADDRESS:frontend_static_ip_address"; do
+            github_name="${PREFIX}${entry%%:*}"
+            tofu_name="${entry#*:}"
+            value=$(jq -r --arg k "$tofu_name" '.[$k].value' outputs.json)
+            api_status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              -X PATCH \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
+              -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
+            if [ "$api_status" != "204" ]; then
+              create_status=$(curl --silent --show-error --output /dev/null \
+                --write-out '%{http_code}' \
+                -X POST \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+                -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
+              if [ "$create_status" != "201" ]; then
+                echo "::error::Failed to publish $github_name (patch=$api_status create=$create_status)." >&2
+                exit 1
+              fi
+            fi
+            echo "Published $github_name"
+          done
+
+          api_status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            -X PATCH \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables/${PREFIX}SECRET_NAMES" \
+            -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
+          if [ "$api_status" != "204" ]; then
+            create_status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+              -d "$(jq -n --arg n "${PREFIX}SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
+            if [ "$create_status" != "201" ]; then
+              echo "::error::Failed to publish ${PREFIX}SECRET_NAMES (patch=$api_status create=$create_status)." >&2
+              exit 1
+            fi
+          fi
+          echo "Published ${PREFIX}SECRET_NAMES"

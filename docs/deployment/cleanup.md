@@ -9,7 +9,9 @@ The dev environment uses `deletion_protection = false` everywhere
 deletion protection is supported (Cloud SQL, GKE, application
 object-storage bucket, state buckets). The dev state bucket uses
 `force_destroy = true` so a `tofu destroy` can remove a non-empty
-bucket. The bootstrap state bucket is **never** force-destroyed.
+bucket. The bootstrap root does not own a state bucket — bootstrap
+state stays on the operator workstation, so there is no bootstrap
+state to clean up.
 
 To tear down a dev environment:
 
@@ -30,9 +32,9 @@ This removes:
 - The frontend static IP.
 - The runtime workload service accounts and their IAM bindings.
 
-The bootstrap-managed resources (state bucket, Workload Identity pool
-and provider, CI/deploy service accounts, project API enablement) are
-**not** removed by the dev env destroy. They live in the bootstrap
+The bootstrap-managed resources (state buckets, Workload Identity pool
+and provider, CI/deploy/IaC service accounts, project API enablement)
+are **not** removed by the dev env destroy. They live in the bootstrap
 root and are reused when a new dev environment is created.
 
 ## Production safeguards
@@ -66,19 +68,28 @@ To tear down a production environment:
 
 ## Bootstrap state
 
-The bootstrap state bucket is the deployment platform's trust path. It
-is never force-destroyed, even on dev environments. To reset the
-bootstrap state:
+The bootstrap root is local-state-only. Bootstrap state lives on the
+operator workstation (the recommended layout is a private, backed-up
+directory such as `~/fotosintesis-bootstrap-state/`), not in a GCS
+bucket. To reset the bootstrap state:
 
 1. Authenticate as a `bootstrap_admin_members` principal.
-2. `tofu destroy` in `infra/opentofu/bootstrap`. The bootstrap state
-   bucket has `force_destroy = false`; if the bucket is non-empty the
-   destroy will fail, by design.
-3. Manually empty the bootstrap state bucket with
-   `gcloud storage rm -r gs://<bucket>/...` if you are absolutely sure
-   you want to start over.
-4. Re-apply the bootstrap root with the new `terraform.tfvars` and
-   migrate state again as documented in `bootstrap.md`.
+2. `tofu destroy` in `infra/opentofu/bootstrap`. Because the bootstrap
+   root does not own a state bucket, the destroy will not need to
+   empty one. (Destroying the bootstrap root removes the
+   Workload Identity pool, provider, and CI/deploy/IaC service
+   accounts, but the dev/prod state buckets are owned by the bootstrap
+   root and are removed along with everything else.)
+3. Delete the local `terraform.tfstate` and `terraform.tfstate.backup`
+   files if you want to start over with no prior state.
+4. Re-apply the bootstrap root with the new `terraform.tfvars` and a
+   fresh `GITHUB_TOKEN` in the operator's environment.
+
+If the local state file is lost, recovery requires re-applying the
+bootstrap root from scratch. `bootstrap_admin_members` is the recovery
+path: those principals can read and rewrite the dev/prod state buckets
+and re-create the bootstrap-owned resources. Without admin members,
+state loss is unrecoverable.
 
 ## DNS records
 

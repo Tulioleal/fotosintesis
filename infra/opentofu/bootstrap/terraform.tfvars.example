@@ -8,8 +8,8 @@ github_owner      = "replace-with-github-owner"
 github_repository = "replace-with-github-repository"
 
 # Map of role label -> IAM principal granted roles/storage.admin on the
-# bootstrap state bucket. Use one entry per human or group that needs
-# recovery access to bootstrap state.
+# dev and prod state buckets. Use one entry per human or group that needs
+# recovery access to bootstrap-managed state.
 bootstrap_admin_members = {
   admin = "user:replace-with-bootstrap-admin@example.com"
 }

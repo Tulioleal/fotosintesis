@@ -23,14 +23,12 @@ concurrency:
 env:
   DEV_ARTIFACT_REGISTRY_URL: ${{ vars.DEV_ARTIFACT_REGISTRY_URL }}
   PROD_ARTIFACT_REGISTRY_URL: ${{ vars.PROD_ARTIFACT_REGISTRY_URL }}
-  CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.CI_SERVICE_ACCOUNT_EMAIL }}
-  WIF_PROVIDER_ID: ${{ vars.WIF_PROVIDER_ID }}
+  DEV_CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+  PROD_CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.PROD_CI_SERVICE_ACCOUNT_EMAIL }}
+  DEV_WIF_PROVIDER_ID: ${{ vars.DEV_WIF_PROVIDER_ID }}
+  PROD_WIF_PROVIDER_ID: ${{ vars.PROD_WIF_PROVIDER_ID }}
   DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
   PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
-  DEPLOY_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEPLOY_SERVICE_ACCOUNT_EMAIL }}
-  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
-  GKE_CLUSTER_LOCATION: ${{ vars.GKE_CLUSTER_LOCATION }}
-  NAMESPACE: ${{ vars.NAMESPACE }}
 
 jobs:
   verify-source-images:
@@ -52,12 +50,20 @@ jobs:
             echo "::error::DEV_GCP_PROJECT_ID is required for release source image verification." >&2
             exit 1
           fi
+          if [ -z "$DEV_CI_SERVICE_ACCOUNT_EMAIL" ]; then
+            echo "::error::DEV_CI_SERVICE_ACCOUNT_EMAIL is required for release source image verification." >&2
+            exit 1
+          fi
+          if [ -z "$DEV_WIF_PROVIDER_ID" ]; then
+            echo "::error::DEV_WIF_PROVIDER_ID is required for release source image verification." >&2
+            exit 1
+          fi
           echo "source_registry=$DEV_ARTIFACT_REGISTRY_URL" >> "$GITHUB_OUTPUT"
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
-          service_account: ${{ env.CI_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ env.DEV_WIF_PROVIDER_ID }}
+          service_account: ${{ env.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.DEV_GCP_PROJECT_ID }}
@@ -119,11 +125,19 @@ jobs:
             echo "::error::PROD_ARTIFACT_REGISTRY_URL is required for release image promotion." >&2
             exit 1
           fi
+          if [ -z "$PROD_CI_SERVICE_ACCOUNT_EMAIL" ]; then
+            echo "::error::PROD_CI_SERVICE_ACCOUNT_EMAIL is required for release image promotion." >&2
+            exit 1
+          fi
+          if [ -z "$PROD_WIF_PROVIDER_ID" ]; then
+            echo "::error::PROD_WIF_PROVIDER_ID is required for release image promotion." >&2
+            exit 1
+          fi
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
-          service_account: ${{ env.CI_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ env.PROD_WIF_PROVIDER_ID }}
+          service_account: ${{ env.PROD_CI_SERVICE_ACCOUNT_EMAIL }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to source registry
@@ -207,8 +221,6 @@ jobs:
             echo "| Frontend image tag | \`${FRONTEND_TAG}\` |"
             echo "| Verified source registry | \`${SOURCE_REGISTRY}\` |"
             echo "| Promoted prod registry | \`${PROD_REGISTRY}\` |"
-            echo "| GKE cluster | \`${GKE_CLUSTER_NAME}\` (${GKE_CLUSTER_LOCATION}) |"
-            echo "| Namespace | \`${NAMESPACE}\` |"
             echo "| Verify source images | ${VERIFY} |"
             echo "| Promote images | ${PROMOTE} |"
             echo "| Deploy prod | ${DEPLOY} |"

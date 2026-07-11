@@ -4,11 +4,20 @@ The platform splits the application lifecycle into three workflow
 families:
 
 - `backend-ci.yml` / `frontend-ci.yml` - source validation, image
-  build, dev deploy trigger.
-- `iac.yml` - OpenTofu fmt/validate/plan and per-environment apply.
+  build, dev deploy trigger. Both authenticate as
+  `DEV_CI_SERVICE_ACCOUNT_EMAIL` (the image-CI account, not the IaC
+  account).
+- `iac.yml` - OpenTofu fmt/validate/plan, per-environment apply, and
+  post-apply sync jobs that publish per-environment outputs to
+  repository variables. Plan/apply paths authenticate as
+  `DEV_IAC_SERVICE_ACCOUNT_EMAIL` or `PROD_IAC_SERVICE_ACCOUNT_EMAIL`
+  (the dedicated IaC identities, not the image-CI account).
 - `deploy.yml` - Kubernetes manifest render, secret projection wait,
-  migration, rollout, smoke checks.
+  migration, rollout, smoke checks. Authenticates as
+  `DEV_DEPLOY_SERVICE_ACCOUNT_EMAIL` or `PROD_DEPLOY_SERVICE_ACCOUNT_EMAIL`.
 - `release.yml` - production image promotion and prod deploy.
+  `verify-source-images` authenticates as `DEV_CI_SERVICE_ACCOUNT_EMAIL`;
+  `promote-images` authenticates as `PROD_CI_SERVICE_ACCOUNT_EMAIL`.
 
 ## Image tag contract
 
@@ -66,8 +75,11 @@ Production deploys are a manual two-step process:
    - `backend_image_tag: <40-character SHA that passed dev>`
    - `frontend_image_tag: <40-character SHA that passed dev>`
 
-   The `verify-source-images` job confirms the tags exist in the dev
-   registry before `promote-images` copies them to the prod registry.
+   The `verify-source-images` job authenticates as
+   `DEV_CI_SERVICE_ACCOUNT_EMAIL` through the dev WIF provider and
+   confirms the tags exist in the dev registry before `promote-images`
+   authenticates as `PROD_CI_SERVICE_ACCOUNT_EMAIL` through the prod
+   WIF provider and copies them to the prod registry.
 
 2. **Apply** the prod manifest via `deploy.yml` (called by
    `release.yml`'s `deploy-prod` job with `environment: prod`). The

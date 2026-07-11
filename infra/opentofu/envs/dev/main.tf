@@ -30,6 +30,7 @@ module "gke" {
   source              = "../../modules/gke"
   project_id          = var.project_id
   region              = var.region
+  location            = var.gke_location
   cluster_name        = var.cluster_name
   node_count          = var.node_count
   machine_type        = var.machine_type
@@ -44,8 +45,10 @@ module "cloud_sql" {
   instance_name       = var.database_instance_name
   database_name       = var.database_name
   tier                = var.database_tier
+  edition             = var.database_edition
   availability_type   = var.database_availability_type
   disk_size_gb        = var.database_disk_size_gb
+  ipv4_enabled        = var.database_ipv4_enabled
   deletion_protection = var.deletion_protection
   labels              = local.labels
 }
@@ -79,6 +82,8 @@ module "iam" {
   cross_project_artifactregistry_readers = compact([
     var.prod_promotion_service_account_email,
   ])
+
+  depends_on = [module.gke]
 }
 
 module "monitoring" {

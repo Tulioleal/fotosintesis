@@ -10,6 +10,12 @@ resource "google_service_account" "deploy" {
   display_name = "Fotosintesis deploy service account"
 }
 
+resource "google_service_account" "iac" {
+  project      = var.project_id
+  account_id   = var.iac_service_account_id
+  display_name = "Fotosintesis IaC service account"
+}
+
 resource "google_project_iam_member" "ci" {
   for_each = var.ci_roles
 
@@ -26,6 +32,14 @@ resource "google_project_iam_member" "deploy" {
   member  = google_service_account.deploy.member
 }
 
+resource "google_project_iam_member" "iac" {
+  for_each = var.iac_roles
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.iac.member
+}
+
 resource "google_service_account_iam_member" "ci_workload_identity" {
   for_each = var.ci_principal_sets
 
@@ -38,6 +52,14 @@ resource "google_service_account_iam_member" "deploy_workload_identity" {
   for_each = var.deploy_principal_sets
 
   service_account_id = google_service_account.deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = each.value
+}
+
+resource "google_service_account_iam_member" "iac_workload_identity" {
+  for_each = var.iac_principal_sets
+
+  service_account_id = google_service_account.iac.name
   role               = "roles/iam.workloadIdentityUser"
   member             = each.value
 }

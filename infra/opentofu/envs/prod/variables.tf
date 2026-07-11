@@ -37,6 +37,12 @@ variable "machine_type" {
   default = "e2-standard-2"
 }
 
+variable "gke_location" {
+  type        = string
+  default     = null
+  description = "Optional GKE location override. Prod may intentionally leave this unset to keep a regional cluster; set to a zone only if you want a zonal prod cluster."
+}
+
 variable "deletion_protection" {
   type    = bool
   default = true
@@ -57,6 +63,18 @@ variable "database_tier" {
   default = "db-custom-2-7680"
 }
 
+variable "database_edition" {
+  type        = string
+  default     = "ENTERPRISE"
+  description = "Cloud SQL edition for the environment. Prod keeps the default ENTERPRISE; switch to ENTERPRISE_PLUS only with a db-perf-optimized-* tier."
+}
+
+variable "database_ipv4_enabled" {
+  type        = bool
+  default     = true
+  description = "Whether the prod Cloud SQL instance has public IPv4 connectivity. Set to false to force private IP or PSC; otherwise the Cloud SQL Auth Proxy sidecar requires public IPv4."
+}
+
 variable "database_availability_type" {
   type    = string
   default = "REGIONAL"
@@ -68,8 +86,9 @@ variable "database_disk_size_gb" {
 }
 
 variable "object_storage_bucket" {
-  type    = string
-  default = "replace-with-prod-fotosintesis-storage"
+  type        = string
+  default     = "fotosintesis-prod-storage"
+  description = "Application GCS bucket name for the prod environment. Operators must override this through TF_VAR_object_storage_bucket (from the PROD_OBJECT_STORAGE_BUCKET_INPUT repository variable) on the first apply because the bucket name must be globally unique and the env root cannot pre-populate it safely."
 }
 
 variable "storage_location" {
@@ -87,9 +106,8 @@ variable "secret_ids" {
   default = [
     "fotosintesis-database-url",
     "fotosintesis-auth-secret",
-    "fotosintesis-object-storage-access-key",
-    "fotosintesis-object-storage-secret-key",
-    "fotosintesis-provider-api-keys",
+    "fotosintesis-openai-api-key",
+    "fotosintesis-gemini-api-key",
   ]
 }
 

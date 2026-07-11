@@ -72,9 +72,10 @@ env:
   TF_VERSION: 1.10.7
   # Repository-level variables the deploy workflow always relies on. Validate
   # them up front so a missing configuration fails fast with a clear message.
-  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET || '' }}
-  WIF_PROVIDER_ID: ${{ vars.WIF_PROVIDER_ID || '' }}
-  DEPLOY_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEPLOY_SERVICE_ACCOUNT_EMAIL || '' }}
+  # Per-environment identifiers are pinned to the matching env: dev workflows
+  # always use DEV_*, prod workflows always use PROD_*. The values are
+  # published by either the bootstrap root (foundation) or the iac.yml
+  # post-apply sync job (per-environment outputs).
   FRONTEND_API_BASE_URL: ${{ vars.FRONTEND_API_BASE_URL || '' }}
   FRONTEND_SERVER_API_BASE_URL: ${{ vars.FRONTEND_SERVER_API_BASE_URL || 'http://fotosintesis-backend:8000' }}
   MODEL_PROVIDER: ${{ vars.MODEL_PROVIDER || 'mock' }}
@@ -125,13 +126,72 @@ jobs:
       backend_image_tag: ${{ steps.render.outputs.backend_image_tag }}
       frontend_image_tag: ${{ steps.render.outputs.frontend_image_tag }}
     steps:
-      - name: Validate required variables
+      - name: Resolve env-scoped foundation and sync variables
+        id: env-vars
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DEV_WIF: ${{ vars.DEV_WIF_PROVIDER_ID }}
+          PROD_WIF: ${{ vars.PROD_WIF_PROVIDER_ID }}
+          DEV_DEPLOY_SA: ${{ vars.DEV_DEPLOY_SERVICE_ACCOUNT_EMAIL }}
+          PROD_DEPLOY_SA: ${{ vars.PROD_DEPLOY_SERVICE_ACCOUNT_EMAIL }}
+          DEV_STATE: ${{ vars.DEV_TF_STATE_BUCKET }}
+          PROD_STATE: ${{ vars.PROD_TF_STATE_BUCKET }}
+          DEV_REGISTRY: ${{ vars.DEV_ARTIFACT_REGISTRY_URL }}
+          PROD_REGISTRY: ${{ vars.PROD_ARTIFACT_REGISTRY_URL }}
+          DEV_BUCKET: ${{ vars.DEV_OBJECT_STORAGE_BUCKET }}
+          PROD_BUCKET: ${{ vars.PROD_OBJECT_STORAGE_BUCKET }}
+          DEV_IP: ${{ vars.DEV_STATIC_IP_NAME }}
+          PROD_IP: ${{ vars.PROD_STATIC_IP_NAME }}
+        run: |
+          set -euo pipefail
+          missing=0
+          case "$ENVIRONMENT" in
+            dev)
+              ENV_WIF="$DEV_WIF"
+              ENV_DEPLOY_SA="$DEV_DEPLOY_SA"
+              ENV_STATE="$DEV_STATE"
+              ENV_REGISTRY="$DEV_REGISTRY"
+              ENV_BUCKET="$DEV_BUCKET"
+              ENV_IP="$DEV_IP"
+              ;;
+            prod)
+              ENV_WIF="$PROD_WIF"
+              ENV_DEPLOY_SA="$PROD_DEPLOY_SA"
+              ENV_STATE="$PROD_STATE"
+              ENV_REGISTRY="$PROD_REGISTRY"
+              ENV_BUCKET="$PROD_BUCKET"
+              ENV_IP="$PROD_IP"
+              ;;
+            *)
+              echo "::error::Unsupported environment '$ENVIRONMENT'." >&2
+              exit 1
+              ;;
+          esac
+          for pair in \
+            "ENV_WIF_PROVIDER_ID:$ENV_WIF" \
+            "ENV_DEPLOY_SERVICE_ACCOUNT_EMAIL:$ENV_DEPLOY_SA" \
+            "ENV_TF_STATE_BUCKET:$ENV_STATE" \
+            "ENV_ARTIFACT_REGISTRY_URL:$ENV_REGISTRY" \
+            "ENV_OBJECT_STORAGE_BUCKET:$ENV_BUCKET" \
+            "ENV_STATIC_IP_NAME:$ENV_IP"; do
+            label="${pair%%:*}"
+            value="${pair#*:}"
+            if [ -z "$value" ]; then
+              echo "::error::Repository variable for $label is not set. Bootstrap and the iac.yml post-apply sync job publish the foundation and per-environment variables; check that the bootstrap root has been applied and the matching iac.yml apply has completed." >&2
+              missing=1
+            fi
+            echo "$label=$value" >> "$GITHUB_OUTPUT"
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Validate required operator variables
         env:
           FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
           FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
           MANAGED_CERTIFICATE_NAME: ${{ env.MANAGED_CERTIFICATE_NAME }}
         run: |
-          missing=0
+          set -euo pipefail
           case "$FRONTEND_EXPOSURE_MODE" in
             hostname-https|ip-http) ;;
             *)
@@ -139,27 +199,15 @@ jobs:
               exit 1
               ;;
           esac
-
-          required_vars="TF_STATE_BUCKET WIF_PROVIDER_ID DEPLOY_SERVICE_ACCOUNT_EMAIL"
-          if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
-            required_vars="$required_vars FRONTEND_HOSTNAME MANAGED_CERTIFICATE_NAME"
-          fi
-
-          for v in $required_vars; do
-            if [ -z "${!v}" ]; then
-              echo "::error::Repository variable for $v is not set." >&2
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::Set the missing repository variables under Settings -> Secrets and variables -> Actions -> Variables." >&2
+          if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ] && [ -z "$FRONTEND_HOSTNAME" ]; then
+            echo "::error::FRONTEND_HOSTNAME is required when FRONTEND_EXPOSURE_MODE=hostname-https." >&2
             exit 1
           fi
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
-          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT_EMAIL }}
+          workload_identity_provider: ${{ steps.env-vars.outputs.ENV_WIF_PROVIDER_ID }}
+          service_account: ${{ steps.env-vars.outputs.ENV_DEPLOY_SERVICE_ACCOUNT_EMAIL }}
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
@@ -173,7 +221,7 @@ jobs:
         run: |
           tofu init \
             -input=false \
-            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="bucket=${{ steps.env-vars.outputs.ENV_TF_STATE_BUCKET }}" \
             -backend-config="prefix=fotosintesis/${{ inputs.environment }}"
       - name: Read OpenTofu outputs
         id: tofu-outputs
