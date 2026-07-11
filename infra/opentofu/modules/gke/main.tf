@@ -4,10 +4,14 @@ resource "google_service_account" "nodes" {
   display_name = "Fotosintesis GKE nodes"
 }
 
+locals {
+  location = coalesce(var.location, var.region)
+}
+
 resource "google_container_cluster" "primary" {
   project                  = var.project_id
   name                     = var.cluster_name
-  location                 = var.region
+  location                 = local.location
   remove_default_node_pool = true
   initial_node_count       = 1
   deletion_protection      = var.deletion_protection
@@ -25,12 +29,24 @@ resource "google_container_cluster" "primary" {
       enabled = true
     }
   }
+
+  timeouts {
+    create = "60m"
+    update = "60m"
+    delete = "60m"
+  }
+}
+
+resource "google_project_iam_member" "nodes_artifact_registry_reader" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = google_service_account.nodes.member
 }
 
 resource "google_container_node_pool" "primary" {
   project    = var.project_id
   name       = "${var.cluster_name}-pool"
-  location   = var.region
+  location   = local.location
   cluster    = google_container_cluster.primary.name
   node_count = var.node_count
 

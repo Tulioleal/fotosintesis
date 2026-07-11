@@ -1,0 +1,100 @@
+{
+  "dev_ci_service_account_email": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-ci-dev@fotosintesis-dev.iam.gserviceaccount.com"
+  },
+  "dev_deploy_service_account_email": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-deploy-dev@fotosintesis-dev.iam.gserviceaccount.com"
+  },
+  "dev_enabled_services": {
+    "sensitive": false,
+    "type": [
+      "list",
+      "string"
+    ],
+    "value": [
+      "artifactregistry.googleapis.com",
+      "cloudresourcemanager.googleapis.com",
+      "compute.googleapis.com",
+      "container.googleapis.com",
+      "iam.googleapis.com",
+      "iamcredentials.googleapis.com",
+      "monitoring.googleapis.com",
+      "secretmanager.googleapis.com",
+      "sqladmin.googleapis.com",
+      "storage.googleapis.com"
+    ]
+  },
+  "dev_project_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-dev"
+  },
+  "dev_project_number": {
+    "sensitive": false,
+    "type": "string",
+    "value": "186432033183"
+  },
+  "dev_state_bucket": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-dev-tfstate"
+  },
+  "dev_wif_provider_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "projects/186432033183/locations/global/workloadIdentityPools/github-actions/providers/github"
+  },
+  "prod_ci_service_account_email": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-ci-prod@fotosintesis-prod.iam.gserviceaccount.com"
+  },
+  "prod_deploy_service_account_email": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-deploy-prod@fotosintesis-prod.iam.gserviceaccount.com"
+  },
+  "prod_enabled_services": {
+    "sensitive": false,
+    "type": [
+      "list",
+      "string"
+    ],
+    "value": [
+      "artifactregistry.googleapis.com",
+      "cloudresourcemanager.googleapis.com",
+      "compute.googleapis.com",
+      "container.googleapis.com",
+      "iam.googleapis.com",
+      "iamcredentials.googleapis.com",
+      "monitoring.googleapis.com",
+      "secretmanager.googleapis.com",
+      "sqladmin.googleapis.com",
+      "storage.googleapis.com"
+    ]
+  },
+  "prod_project_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-prod"
+  },
+  "prod_project_number": {
+    "sensitive": false,
+    "type": "string",
+    "value": "821118638332"
+  },
+  "prod_state_bucket": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fotosintesis-prod-tfstate"
+  },
+  "prod_wif_provider_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "projects/821118638332/locations/global/workloadIdentityPools/github-actions/providers/github"
+  }
+}

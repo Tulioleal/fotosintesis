@@ -1,0 +1,232 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_image_tag:
+        description: Backend Git SHA tag to promote
+        required: true
+        type: string
+      frontend_image_tag:
+        description: Frontend Git SHA tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+env:
+  DEV_ARTIFACT_REGISTRY_URL: ${{ vars.DEV_ARTIFACT_REGISTRY_URL }}
+  PROD_ARTIFACT_REGISTRY_URL: ${{ vars.PROD_ARTIFACT_REGISTRY_URL }}
+  DEV_CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+  PROD_CI_SERVICE_ACCOUNT_EMAIL: ${{ vars.PROD_CI_SERVICE_ACCOUNT_EMAIL }}
+  DEV_WIF_PROVIDER_ID: ${{ vars.DEV_WIF_PROVIDER_ID }}
+  PROD_WIF_PROVIDER_ID: ${{ vars.PROD_WIF_PROVIDER_ID }}
+  DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
+  PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
+
+jobs:
+  verify-source-images:
+    name: Verify source images
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      source_registry: ${{ steps.release-vars.outputs.source_registry }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: release-vars
+        name: Validate release source variables
+        run: |
+          if [ -z "$DEV_ARTIFACT_REGISTRY_URL" ]; then
+            echo "::error::DEV_ARTIFACT_REGISTRY_URL is required for release source image verification." >&2
+            exit 1
+          fi
+          if [ -z "$DEV_GCP_PROJECT_ID" ]; then
+            echo "::error::DEV_GCP_PROJECT_ID is required for release source image verification." >&2
+            exit 1
+          fi
+          if [ -z "$DEV_CI_SERVICE_ACCOUNT_EMAIL" ]; then
+            echo "::error::DEV_CI_SERVICE_ACCOUNT_EMAIL is required for release source image verification." >&2
+            exit 1
+          fi
+          if [ -z "$DEV_WIF_PROVIDER_ID" ]; then
+            echo "::error::DEV_WIF_PROVIDER_ID is required for release source image verification." >&2
+            exit 1
+          fi
+          echo "source_registry=$DEV_ARTIFACT_REGISTRY_URL" >> "$GITHUB_OUTPUT"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.DEV_WIF_PROVIDER_ID }}
+          service_account: ${{ env.DEV_CI_SERVICE_ACCOUNT_EMAIL }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.DEV_GCP_PROJECT_ID }}
+      - name: Reject empty or mutable tags
+        env:
+          BACKEND_TAG: ${{ inputs.backend_image_tag }}
+          FRONTEND_TAG: ${{ inputs.frontend_image_tag }}
+        run: |
+          # Production releases are immutable-tag-only. The dispatch
+          # inputs are already marked required, but we re-check here so a
+          # caller cannot slip `latest`, a branch name, or a non-SHA
+          # string into the release pipeline.
+          for pair in "BACKEND_TAG:$BACKEND_TAG" "FRONTEND_TAG:$FRONTEND_TAG"; do
+            label="${pair%%:*}"
+            value="${pair#*:}"
+            if [ -z "$value" ]; then
+              echo "::error::$label is empty. Production release requires both backend and frontend image tags." >&2
+              exit 1
+            fi
+            if [ "$value" = "latest" ]; then
+              echo "::error::$label is set to 'latest'. Production release requires a 40-character Git commit SHA, never 'latest'." >&2
+              exit 1
+            fi
+            if ! printf '%s' "$value" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::$label ('$value') is not a 40-character Git commit SHA." >&2
+              exit 1
+            fi
+          done
+      - name: Verify backend tag
+        env:
+          SOURCE_REGISTRY: ${{ steps.release-vars.outputs.source_registry }}
+        run: |
+          gcloud artifacts docker tags list "$SOURCE_REGISTRY/backend" \
+            --project="$DEV_GCP_PROJECT_ID" --format='value(tag)' \
+            | grep -Fxq "${{ inputs.backend_image_tag }}" \
+            || (echo "Backend tag ${{ inputs.backend_image_tag }} not found in $SOURCE_REGISTRY/backend" >&2; exit 1)
+      - name: Verify frontend tag
+        env:
+          SOURCE_REGISTRY: ${{ steps.release-vars.outputs.source_registry }}
+        run: |
+          gcloud artifacts docker tags list "$SOURCE_REGISTRY/frontend" \
+            --project="$DEV_GCP_PROJECT_ID" --format='value(tag)' \
+            | grep -Fxq "${{ inputs.frontend_image_tag }}" \
+            || (echo "Frontend tag ${{ inputs.frontend_image_tag }} not found in $SOURCE_REGISTRY/frontend" >&2; exit 1)
+
+  promote-images:
+    name: Promote images to prod registry
+    needs: verify-source-images
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Validate release destination variables
+        run: |
+          if [ -z "${{ needs.verify-source-images.outputs.source_registry }}" ]; then
+            echo "::error::verify-source-images did not expose a source registry." >&2
+            exit 1
+          fi
+          if [ -z "$PROD_ARTIFACT_REGISTRY_URL" ]; then
+            echo "::error::PROD_ARTIFACT_REGISTRY_URL is required for release image promotion." >&2
+            exit 1
+          fi
+          if [ -z "$PROD_CI_SERVICE_ACCOUNT_EMAIL" ]; then
+            echo "::error::PROD_CI_SERVICE_ACCOUNT_EMAIL is required for release image promotion." >&2
+            exit 1
+          fi
+          if [ -z "$PROD_WIF_PROVIDER_ID" ]; then
+            echo "::error::PROD_WIF_PROVIDER_ID is required for release image promotion." >&2
+            exit 1
+          fi
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.PROD_WIF_PROVIDER_ID }}
+          service_account: ${{ env.PROD_CI_SERVICE_ACCOUNT_EMAIL }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to source registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ needs.verify-source-images.outputs.source_registry }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Login to prod registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.PROD_ARTIFACT_REGISTRY_URL }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Copy backend tag
+        env:
+          SOURCE_REGISTRY: ${{ needs.verify-source-images.outputs.source_registry }}
+          PROD_REGISTRY: ${{ env.PROD_ARTIFACT_REGISTRY_URL }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$PROD_REGISTRY/backend:${{ inputs.backend_image_tag }}" \
+            "$SOURCE_REGISTRY/backend:${{ inputs.backend_image_tag }}"
+      - name: Copy frontend tag
+        env:
+          SOURCE_REGISTRY: ${{ needs.verify-source-images.outputs.source_registry }}
+          PROD_REGISTRY: ${{ env.PROD_ARTIFACT_REGISTRY_URL }}
+        run: |
+          docker buildx imagetools create \
+            --tag "$PROD_REGISTRY/frontend:${{ inputs.frontend_image_tag }}" \
+            "$SOURCE_REGISTRY/frontend:${{ inputs.frontend_image_tag }}"
+
+  deploy-prod:
+    name: Deploy to prod
+    needs: promote-images
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      backend_image_tag: ${{ inputs.backend_image_tag }}
+      frontend_image_tag: ${{ inputs.frontend_image_tag }}
+      trigger_source: release
+    secrets: inherit
+
+  summary:
+    name: Release summary
+    needs: [verify-source-images, promote-images, deploy-prod]
+    if: always()
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Enforce deploy result
+        env:
+          DEPLOY: ${{ needs.deploy-prod.result }}
+        run: |
+          if [ "$DEPLOY" != "success" ]; then
+            echo "::error::Deploy step did not succeed (result=$DEPLOY). Inspect the deploy-prod job log for details." >&2
+            exit 1
+          fi
+      - name: Write summary
+        env:
+          BACKEND_TAG: ${{ inputs.backend_image_tag }}
+          FRONTEND_TAG: ${{ inputs.frontend_image_tag }}
+          VERIFY: ${{ needs.verify-source-images.result }}
+          PROMOTE: ${{ needs.promote-images.result }}
+          DEPLOY: ${{ needs.deploy-prod.result }}
+          OPERATOR: ${{ github.actor }}
+          # Per-step results surfaced by deploy.yml.
+          DEPLOY_MIGRATION: ${{ needs.deploy-prod.outputs.migration_result }}
+          DEPLOY_ROLLOUT: ${{ needs.deploy-prod.outputs.rollout_result }}
+          DEPLOY_REQUIRED_KEYS: ${{ needs.deploy-prod.outputs.required_keys_result }}
+          DEPLOY_BACKEND_SMOKE: ${{ needs.deploy-prod.outputs.backend_smoke_result }}
+          DEPLOY_FRONTEND_SMOKE: ${{ needs.deploy-prod.outputs.frontend_smoke_result }}
+          SOURCE_REGISTRY: ${{ needs.verify-source-images.outputs.source_registry }}
+          PROD_REGISTRY: ${{ env.PROD_ARTIFACT_REGISTRY_URL }}
+        run: |
+          {
+            echo "## Production release summary"
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Release operator | \`${OPERATOR}\` |"
+            echo "| Backend image tag | \`${BACKEND_TAG}\` |"
+            echo "| Frontend image tag | \`${FRONTEND_TAG}\` |"
+            echo "| Verified source registry | \`${SOURCE_REGISTRY}\` |"
+            echo "| Promoted prod registry | \`${PROD_REGISTRY}\` |"
+            echo "| Verify source images | ${VERIFY} |"
+            echo "| Promote images | ${PROMOTE} |"
+            echo "| Deploy prod | ${DEPLOY} |"
+            echo "| - deploy migration | ${DEPLOY_MIGRATION} |"
+            echo "| - deploy rollouts | ${DEPLOY_ROLLOUT} |"
+            echo "| - deploy required provider API keys | ${DEPLOY_REQUIRED_KEYS} |"
+            echo "| - deploy backend in-cluster smoke | ${DEPLOY_BACKEND_SMOKE} |"
+            echo "| - deploy frontend public smoke | ${DEPLOY_FRONTEND_SMOKE} |"
+          } >> "$GITHUB_STEP_SUMMARY"

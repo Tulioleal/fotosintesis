@@ -65,9 +65,9 @@ pnpm --filter frontend test:e2e
 
 ## Cloud Deployment
 
-OpenTofu infrastructure lives in `infra/opentofu`, with environment roots under `infra/opentofu/envs/dev` and `infra/opentofu/envs/prod`. Plain Kubernetes manifests live in `deploy/k8s` and consume OpenTofu outputs for GKE, image registry, database, storage and workload identity values.
+OpenTofu infrastructure lives in `infra/opentofu`, with the foundation bootstrap root at `infra/opentofu/bootstrap` and environment roots under `infra/opentofu/envs/dev` and `infra/opentofu/envs/prod`. The bootstrap root is local-operator-only and local-state-only: it owns the dev/prod state buckets, Workload Identity pool/providers, CI/deploy/IaC service accounts, and the foundation GitHub repository variables (published through the GitHub provider). The env roots are applied through GitHub Actions under OIDC; `iac.yml` post-apply sync jobs publish the per-environment outputs to repository variables. Plain Kubernetes manifests live in `deploy/k8s` and consume OpenTofu outputs for GKE, image registry, database, storage and workload identity values.
 
-See `DOCS/deployment.md` for `tofu init`, `tofu plan`, `tofu apply`, deployment, rollback and `tofu destroy` procedures.
+See `DOCS/deployment.md` for `tofu init`, `tofu plan`, `tofu apply`, deployment, rollback and `tofu destroy` procedures. See [`docs/deployment/`](./docs/deployment/) for the foundation bootstrap, environment contract, external secrets, deploy-and-release, and validation runbook walkthroughs.
 
 ## OpenAPI TypeScript Client
 

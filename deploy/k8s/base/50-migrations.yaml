@@ -13,6 +13,7 @@ spec:
       labels:
         app.kubernetes.io/name: fotosintesis-migrations
         app.kubernetes.io/part-of: fotosintesis-ai
+        iam.gke.io/workload-identity: fotosintesis-backend
     spec:
       restartPolicy: OnFailure
       serviceAccountName: fotosintesis-backend
@@ -26,4 +27,29 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: __RUNTIME_SECRET_NAME__
-                  key: database-url
+                  key: __DATABASE_URL_SECRET_KEY__
+            - name: OBJECT_STORAGE_PROVIDER
+              value: __OBJECT_STORAGE_PROVIDER__
+        - name: cloud-sql-proxy
+          image: __CLOUD_SQL_PROXY_IMAGE__
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--structured-logs"
+            - "--port=__CLOUD_SQL_PROXY_PORT__"
+            - "__CLOUD_SQL_INSTANCE_CONNECTION_NAME__"
+          ports:
+            - name: cloudsql
+              containerPort: __CLOUD_SQL_PROXY_PORT__
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

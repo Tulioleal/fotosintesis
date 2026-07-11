@@ -27,6 +27,27 @@ coverage/
 playwright-report/
 test-results/
 
+# OpenTofu / Terraform
+# Real values, never commit. Keep *.tfvars.example and backend.tf.example tracked.
+infra/opentofu/**/terraform.tfvars
+infra/opentofu/**/terraform.tfvars.json
+infra/opentofu/**/backend.tf
+infra/opentofu/**/.terraform/
+infra/opentofu/**/*.tfstate
+infra/opentofu/**/*.tfstate.backup
+infra/opentofu/**/*.tfplan
+infra/opentofu/**/tfplan
+infra/opentofu/**/.terraform.tfstate.lock.info
+infra/opentofu/**/*.auto.tfvars
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
 # Environment and secrets
 .env
 .env.*
@@ -78,3 +99,4 @@ TODO.txt
 */REFERENCES/*
 */todo/*
 frontend/e2e/.care-tools-credentials.json
+docs/deploy-walkthrough.md

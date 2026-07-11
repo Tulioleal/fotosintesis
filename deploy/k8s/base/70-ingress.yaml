@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fotosintesis-frontend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-frontend
+    app.kubernetes.io/part-of: fotosintesis-ai
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: __STATIC_IP_NAME__
+    networking.gke.io/managed-certificates: __MANAGED_CERTIFICATE_NAME__
+spec:
+  defaultBackend:
+    service:
+      name: fotosintesis-frontend
+      port:
+        number: 80
+  rules:
+    - host: __FRONTEND_HOSTNAME__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fotosintesis-frontend
+                port:
+                  number: 80

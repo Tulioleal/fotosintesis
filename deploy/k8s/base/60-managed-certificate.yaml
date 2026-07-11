@@ -1,0 +1,11 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: __MANAGED_CERTIFICATE_NAME__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-frontend-cert
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  domains:
+    - __FRONTEND_HOSTNAME__

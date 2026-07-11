@@ -5,13 +5,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     app_name: str = "Fotosintesis AI API"
     environment: str = Field(default="local", validation_alias="APP_ENV")
     cors_origins: list[str] = ["http://localhost:3000"]
     database_url: str = "postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis"
     object_storage_bucket: str = "fotosintesis-local"
+    object_storage_provider: str = Field(default="local", validation_alias="OBJECT_STORAGE_PROVIDER")
+    object_storage_local_root: str = Field(
+        default="storage-data", validation_alias="OBJECT_STORAGE_LOCAL_ROOT"
+    )
+    object_storage_access_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_ACCESS_KEY")
+    object_storage_secret_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_SECRET_KEY")
+    object_storage_endpoint: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_ENDPOINT")
+    gcp_project_id: str | None = Field(default=None, validation_alias="GCP_PROJECT_ID")
     model_provider: str = "mock"
     vision_provider: str = "mock"
     judge_provider: str = "mock"

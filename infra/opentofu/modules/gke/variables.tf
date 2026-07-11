@@ -6,6 +6,12 @@ variable "region" {
   type = string
 }
 
+variable "location" {
+  type        = string
+  default     = null
+  description = "GKE cluster and node pool location. Defaults to var.region. Use a zone such as us-central1-a for low-cost dev clusters."
+}
+
 variable "cluster_name" {
   type = string
 }

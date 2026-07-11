@@ -23,8 +23,10 @@ services:
     environment:
       APP_ENV: local
       DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@postgres:5432/fotosintesis
-      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_PROVIDER: local
       OBJECT_STORAGE_BUCKET: fotosintesis-local
+      OBJECT_STORAGE_LOCAL_ROOT: storage-data
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
       OBJECT_STORAGE_ACCESS_KEY: minioadmin
       OBJECT_STORAGE_SECRET_KEY: minioadmin
     ports:
