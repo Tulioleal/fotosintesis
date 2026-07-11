@@ -38,7 +38,7 @@ jobs:
     outputs:
       source_registry: ${{ steps.release-vars.outputs.source_registry }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: release-vars
         name: Validate release source variables
         run: |
