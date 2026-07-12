@@ -381,20 +381,24 @@ jobs:
           TF_VAR_region: ${{ env.CI_REGION }}
           TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
           DEV_GCP_PROJECT_ID: ${{ vars.DEV_GCP_PROJECT_ID }}
+          DEV_GKE_LOCATION_INPUT: ${{ vars.DEV_GKE_LOCATION_INPUT || 'us-central1-a' }}
           DEV_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
           DEV_STATIC_IP_NAME_INPUT: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
           DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
           PROD_GCP_PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID }}
+          PROD_GKE_LOCATION_INPUT: ${{ vars.PROD_GKE_LOCATION_INPUT || '' }}
           PROD_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.PROD_OBJECT_STORAGE_BUCKET_INPUT || '' }}
           PROD_STATIC_IP_NAME_INPUT: ${{ vars.PROD_STATIC_IP_NAME_INPUT || '' }}
         run: |
           if [ "${{ inputs.environment }}" = "dev" ]; then
             export TF_VAR_project_id="${DEV_GCP_PROJECT_ID}"
+            export TF_VAR_gke_location="${DEV_GKE_LOCATION_INPUT}"
             [ -n "${DEV_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET_INPUT}"
             [ -n "${DEV_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME_INPUT}"
             export TF_VAR_prod_promotion_service_account_email="${DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL}"
           else
             export TF_VAR_project_id="${PROD_GCP_PROJECT_ID}"
+            [ -n "${PROD_GKE_LOCATION_INPUT}" ] && export TF_VAR_gke_location="${PROD_GKE_LOCATION_INPUT}"
             [ -n "${PROD_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${PROD_OBJECT_STORAGE_BUCKET_INPUT}"
             [ -n "${PROD_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${PROD_STATIC_IP_NAME_INPUT}"
           fi

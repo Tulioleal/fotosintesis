@@ -74,6 +74,7 @@ from repository variables through `iac.yml`.
 | --- | --- |
 | `project_id` | Provider project, all module inputs. |
 | `region` | GKE, Artifact Registry, Cloud SQL region. |
+| `gke_location` | Optional GKE location override. Dev workflows default to `us-central1-a` to keep dev zonal and reduce SSD quota pressure. Set explicitly for prod if a non-regional location is desired. |
 | `artifact_repository_id` | Artifact Registry repository name. |
 | `cluster_name` | GKE cluster name. |
 | `database_instance_name` | Cloud SQL instance name. |
