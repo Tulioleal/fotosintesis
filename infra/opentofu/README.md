@@ -6,8 +6,12 @@ Use one environment at a time:
 
 ```bash
 cd infra/opentofu/envs/dev
-tofu init
-tofu plan -var-file=terraform.tfvars.example
+tofu init \
+  -backend-config="bucket=${DEV_TF_STATE_BUCKET}" \
+  -backend-config="prefix=fotosintesis/dev"
+tofu plan -var-file=terraform.tfvars
 ```
 
-For remote state, copy `backend.tf.example` to `backend.tf` in the environment directory and replace the bucket/prefix values with your own state bucket.
+Each env root declares `backend "gcs" {}`. Bucket and prefix are supplied
+via `-backend-config` at init time. Do not commit credentials or generated
+state files.

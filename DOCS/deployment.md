@@ -34,16 +34,26 @@ Subsequent `tofu plan/apply` for the bootstrap root is idempotent. Keep `terrafo
 
 ## Remote State (env roots)
 
-Each environment root includes `backend.tf.example`.
+Each environment root declares `backend "gcs" {}`. Bucket and prefix are
+supplied at init time via `-backend-config`. The env roots are applied
+through `iac.yml` under OIDC. The dev plan/apply path authenticates as
+`DEV_IAC_SERVICE_ACCOUNT_EMAIL`; the prod manual apply path authenticates
+as `PROD_IAC_SERVICE_ACCOUNT_EMAIL`. After a successful apply, `iac.yml`
+post-apply sync jobs publish the per-environment outputs to repository
+variables. The sync jobs use a fixed allow-list of non-sensitive outputs,
+reject anything marked sensitive, never echo the output JSON to logs, and
+have `actions: write` permission only for the sync steps.
+
+Local debugging example for dev:
 
 ```bash
 cd infra/opentofu/envs/dev
-cp backend.tf.example backend.tf
+tofu init \
+  -backend-config="bucket=${DEV_TF_STATE_BUCKET}" \
+  -backend-config="prefix=fotosintesis/dev"
 ```
 
-Edit `backend.tf` with the state bucket and prefix for the environment. Do not commit credentials or generated state files.
-
-The env roots are applied through `iac.yml` under OIDC. The dev plan/apply path authenticates as `DEV_IAC_SERVICE_ACCOUNT_EMAIL`; the prod manual apply path authenticates as `PROD_IAC_SERVICE_ACCOUNT_EMAIL`. After a successful apply, `iac.yml` post-apply sync jobs publish the per-environment outputs to repository variables. The sync jobs use a fixed allow-list of non-sensitive outputs, reject anything marked sensitive, never echo the output JSON to logs, and have `actions: write` permission only for the sync steps.
+Do not commit credentials or generated state files.
 
 ## Plan And Apply
 
