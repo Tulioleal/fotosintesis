@@ -199,6 +199,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN || github.token }}
         run: |
           set -euo pipefail
+          if [ -z "${ACTIONS_VARIABLES_TOKEN:-}" ]; then
+            echo "::error::ACTIONS_VARIABLES_TOKEN is required to publish repository variables. Store a fine-grained PAT as this repository secret with repository Variables read/write permission." >&2
+            exit 1
+          fi
           working_dir=infra/opentofu/envs/dev
           cd "$working_dir"
           tofu output -json > outputs.json
@@ -258,7 +262,7 @@ jobs:
             api_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X PATCH \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
               -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
@@ -266,7 +270,7 @@ jobs:
               create_status=$(curl --silent --show-error --output /dev/null \
                 --write-out '%{http_code}' \
                 -X POST \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
                 -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
@@ -283,7 +287,7 @@ jobs:
           api_status=$(curl --silent --show-error --output /dev/null \
             --write-out '%{http_code}' \
             -X PATCH \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/variables/DEV_SECRET_NAMES" \
             -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
@@ -291,7 +295,7 @@ jobs:
             create_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X POST \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
               -d "$(jq -n --arg n "DEV_SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
@@ -482,9 +486,13 @@ jobs:
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           PREFIX: ${{ steps.env-vars.outputs.PREFIX }}
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN || github.token }}
+          ACTIONS_VARIABLES_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${ACTIONS_VARIABLES_TOKEN:-}" ]; then
+            echo "::error::ACTIONS_VARIABLES_TOKEN is required to publish repository variables. Store a fine-grained PAT as this repository secret with repository Variables read/write permission." >&2
+            exit 1
+          fi
           working_dir=infra/opentofu/envs/${{ inputs.environment }}
           cd "$working_dir"
           tofu output -json > outputs.json
@@ -539,7 +547,7 @@ jobs:
             api_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X PATCH \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
               -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
@@ -547,7 +555,7 @@ jobs:
               create_status=$(curl --silent --show-error --output /dev/null \
                 --write-out '%{http_code}' \
                 -X POST \
-                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
                 -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
@@ -563,7 +571,7 @@ jobs:
           api_status=$(curl --silent --show-error --output /dev/null \
             --write-out '%{http_code}' \
             -X PATCH \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/variables/${PREFIX}SECRET_NAMES" \
             -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
@@ -571,7 +579,7 @@ jobs:
             create_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X POST \
-              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $ACTIONS_VARIABLES_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
               -d "$(jq -n --arg n "${PREFIX}SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
