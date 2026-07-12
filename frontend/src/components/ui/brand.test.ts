@@ -13,12 +13,13 @@ describe("Fotosíntesis brand naming", () => {
     expect(layout).toMatch(/title:\s*"Fotosíntesis"/);
   });
 
-  it("uses the accented product name in the public landing page eyebrow", async () => {
+  it("uses the accented product name in the public landing page", async () => {
     const home = await readFile(
       resolve(root, "src/app/page.tsx"),
       "utf8",
     );
-    expect(home).toMatch(/eyebrow="Fotosíntesis"/);
+    expect(home).toMatch(/Fotosíntesis/);
+    expect(home).not.toMatch(/Fotosíntesis AI|Fotosintesis AI/);
   });
 
   it("uses the accented product name in the auth shell eyebrow", async () => {

@@ -26,6 +26,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  deployments: write
 
 concurrency:
   group: backend-ci-${{ github.ref }}

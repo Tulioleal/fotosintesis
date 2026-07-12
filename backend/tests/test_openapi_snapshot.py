@@ -9,7 +9,6 @@ is supposed to be behavior-preserving.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -18,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.main import app  # noqa: E402
+from scripts.check_openapi_diff import current_openapi, render_openapi  # noqa: E402
 
 BASELINE_PATH = ROOT / "openapi-baseline.json"
 
@@ -28,7 +27,7 @@ def test_openapi_schema_matches_baseline() -> None:
         f"OpenAPI baseline missing at {BASELINE_PATH}. "
         "Run `python3 scripts/check_openapi_diff.py --update` to create it."
     )
-    current_text = json.dumps(app.openapi(), indent=2, sort_keys=True) + "\n"
+    current_text = render_openapi(current_openapi())
     baseline_text = BASELINE_PATH.read_text(encoding="utf-8")
     assert current_text == baseline_text, (
         "OpenAPI schema drift detected. Run "

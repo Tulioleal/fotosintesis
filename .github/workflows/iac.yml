@@ -196,6 +196,7 @@ jobs:
       - name: Synchronize non-sensitive dev outputs
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           working_dir=infra/opentofu/envs/dev
@@ -479,6 +480,7 @@ jobs:
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           PREFIX: ${{ steps.env-vars.outputs.PREFIX }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           working_dir=infra/opentofu/envs/${{ inputs.environment }}

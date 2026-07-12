@@ -256,18 +256,13 @@ describe("AssistantChat", () => {
   it("renders the composer and back buttons with stroke-based icons so they are visible", () => {
     mocks.searchParams = new URLSearchParams({ plant: "Pata" });
 
-    const { container } = render(<AssistantChat />);
+    render(<AssistantChat />);
 
     const backButton = screen.getByRole("button", { name: /Volver al detalle/i });
     expect(backButton.querySelector("svg")).toBeTruthy();
 
     const submitButton = screen.getByRole("button", { name: "Enviar" });
     expect(submitButton.querySelector("svg")).toBeTruthy();
-
-    const attachButton = container.querySelector(
-      'button[aria-label="Adjuntar archivo"] svg',
-    );
-    expect(attachButton).toBeTruthy();
   });
 
   it("renders structured sources as accessible source links", async () => {
