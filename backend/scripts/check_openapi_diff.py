@@ -38,7 +38,34 @@ BASELINE_PATH = ROOT / "openapi-baseline.json"
 
 def current_openapi() -> dict:
     """Return the OpenAPI schema produced by the running app, normalized."""
-    return app.openapi()
+    return normalize_openapi(app.openapi())
+
+
+def normalize_openapi(schema: dict) -> dict:
+    """Remove OpenAPI generator noise that varies across dependency versions."""
+    normalized = json.loads(json.dumps(schema))
+
+    validation_error = normalized.get("components", {}).get("schemas", {}).get("ValidationError")
+    if isinstance(validation_error, dict):
+        properties = validation_error.get("properties")
+        if isinstance(properties, dict):
+            properties.pop("ctx", None)
+            properties.pop("input", None)
+
+    _normalize_file_upload_schema(normalized)
+    return normalized
+
+
+def _normalize_file_upload_schema(value: object) -> None:
+    if isinstance(value, dict):
+        if value.get("type") == "string" and value.get("contentMediaType") == "application/octet-stream":
+            value.pop("contentMediaType", None)
+            value.setdefault("format", "binary")
+        for item in value.values():
+            _normalize_file_upload_schema(item)
+    elif isinstance(value, list):
+        for item in value:
+            _normalize_file_upload_schema(item)
 
 
 def render_openapi(schema: dict) -> str:
