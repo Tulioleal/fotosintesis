@@ -109,10 +109,15 @@ jobs:
           TF_VAR_project_id: ${{ vars.DEV_GCP_PROJECT_ID }}
           TF_VAR_region: ${{ env.CI_REGION }}
           TF_VAR_notification_email: ${{ env.CI_NOTIFICATION_EMAIL }}
-          TF_VAR_object_storage_bucket: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
-          TF_VAR_frontend_static_ip_name: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
+          TF_VAR_gke_location: ${{ vars.DEV_GKE_LOCATION_INPUT || 'us-central1-a' }}
+          DEV_OBJECT_STORAGE_BUCKET_INPUT: ${{ vars.DEV_OBJECT_STORAGE_BUCKET_INPUT || '' }}
+          DEV_STATIC_IP_NAME_INPUT: ${{ vars.DEV_STATIC_IP_NAME_INPUT || '' }}
           TF_VAR_prod_promotion_service_account_email: ${{ vars.DEV_PROD_PROMOTION_SERVICE_ACCOUNT_EMAIL || '' }}
-        run: tofu plan -out=tfplan -input=false
+        run: |
+          set -euo pipefail
+          [ -n "${DEV_OBJECT_STORAGE_BUCKET_INPUT}" ] && export TF_VAR_object_storage_bucket="${DEV_OBJECT_STORAGE_BUCKET_INPUT}"
+          [ -n "${DEV_STATIC_IP_NAME_INPUT}" ] && export TF_VAR_frontend_static_ip_name="${DEV_STATIC_IP_NAME_INPUT}"
+          tofu plan -out=tfplan -input=false
       - name: Generate readable plan text
         working-directory: infra/opentofu/envs/dev
         run: tofu show -no-color tfplan > plan.txt
