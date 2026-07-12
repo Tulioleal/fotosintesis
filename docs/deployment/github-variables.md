@@ -56,12 +56,12 @@ non-sensitive outputs to repository variables. Sensitive outputs are
 rejected and the output JSON is never echoed to logs. The jobs only
 run after a successful apply (auto-apply on main for dev, manual apply
 for dev or prod); they never run after plan-only, PR, failed, or
-cancelled workflows. The post-apply sync jobs prefer the repository
+cancelled workflows. The post-apply sync jobs require the repository
 secret `ACTIONS_VARIABLES_TOKEN`, which must be a fine-grained PAT
 restricted to the target repository with repository Variables write
-permission. The built-in GitHub Actions token is only a fallback and
-may receive `403` on the repository variables API depending on repository
-permissions. The post-apply sync jobs have `actions: write` permission;
+permission. If the secret is missing, the job fails early with a clear
+error. The built-in GitHub Actions token is not used for repository
+variable sync. The post-apply sync jobs have `actions: write` permission;
 no other iac.yml job has that permission.
 
 | Variable | Source output |
