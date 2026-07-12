@@ -13,7 +13,7 @@ post-apply environment outputs and operator-provided runtime settings.
 | Bootstrap (local apply, publishes through the GitHub provider) | Foundation identifiers, state buckets, CI/deploy/IaC service-account emails, WIF provider IDs, project IDs and numbers, prod promotion service account. |
 | iac.yml post-apply sync jobs | Per-environment outputs: artifact registry URLs, workload service-account emails, object-storage bucket, Cloud SQL database/connection names, GKE cluster name and location, Kubernetes namespace, runtime secret name, static IP name and address, secret-names JSON. |
 | Operator (hand-set) | Provisioning inputs and runtime configuration: GCP region, notification email, frontend exposure mode, hostname, managed certificate, object-storage bucket inputs (first apply), static-IP name inputs (first apply), replica counts, model names and selection, embedding dimension, External Secrets Operator version, Cloud SQL proxy image and port, secret keys, frontend API URLs. |
-| GitHub Actions secret | `FRONTEND_BUILD_AUTH_SECRET` (NextAuth build-time placeholder only). Runtime secret values live in GCP Secret Manager. |
+| GitHub Actions secret | `ACTIONS_VARIABLES_TOKEN` for post-apply repository variable sync, and `FRONTEND_BUILD_AUTH_SECRET` as a NextAuth build-time placeholder only. Runtime secret values live in GCP Secret Manager. |
 
 ## Foundation (published by bootstrap)
 
@@ -56,8 +56,13 @@ non-sensitive outputs to repository variables. Sensitive outputs are
 rejected and the output JSON is never echoed to logs. The jobs only
 run after a successful apply (auto-apply on main for dev, manual apply
 for dev or prod); they never run after plan-only, PR, failed, or
-cancelled workflows. The post-apply sync jobs have `actions: write`
-permission; no other iac.yml job has that permission.
+cancelled workflows. The post-apply sync jobs prefer the repository
+secret `ACTIONS_VARIABLES_TOKEN`, which must be a fine-grained PAT
+restricted to the target repository with repository Variables write
+permission. The built-in GitHub Actions token is only a fallback and
+may receive `403` on the repository variables API depending on repository
+permissions. The post-apply sync jobs have `actions: write` permission;
+no other iac.yml job has that permission.
 
 | Variable | Source output |
 | --- | --- |

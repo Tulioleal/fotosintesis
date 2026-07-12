@@ -42,9 +42,11 @@ synchronized values to repository variables prefixed with `DEV_` or
 - `DEV_SECRET_NAMES` / `PROD_SECRET_NAMES` (compact JSON, container names only)
 
 The sync jobs use a fixed allow-list of non-sensitive outputs, reject
-anything marked sensitive, never echo the output JSON to logs, and
-have `actions: write` permission. They only run after a successful
-apply (auto-apply on main for dev, manual apply for dev or prod).
+anything marked sensitive, and never echo the output JSON to logs. They
+write repository variables with the `ACTIONS_VARIABLES_TOKEN` repository
+secret, which must be a fine-grained PAT with repository Variables write
+permission. They only run after a successful apply (auto-apply on main
+for dev, manual apply for dev or prod).
 
 ## Foundation outputs (from bootstrap)
 

@@ -196,7 +196,7 @@ jobs:
       - name: Synchronize non-sensitive dev outputs
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN || github.token }}
         run: |
           set -euo pipefail
           working_dir=infra/opentofu/envs/dev
@@ -258,7 +258,7 @@ jobs:
             api_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X PATCH \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
               -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
@@ -266,12 +266,13 @@ jobs:
               create_status=$(curl --silent --show-error --output /dev/null \
                 --write-out '%{http_code}' \
                 -X POST \
-                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
                 -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
               if [ "$create_status" != "201" ]; then
                 echo "::error::Failed to publish $github_name (patch=$api_status create=$create_status)." >&2
+                echo "::error::Repository variable sync requires a fine-grained PAT stored as ACTIONS_VARIABLES_TOKEN with repository Variables write permission." >&2
                 exit 1
               fi
             fi
@@ -282,7 +283,7 @@ jobs:
           api_status=$(curl --silent --show-error --output /dev/null \
             --write-out '%{http_code}' \
             -X PATCH \
-            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/variables/DEV_SECRET_NAMES" \
             -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
@@ -290,12 +291,13 @@ jobs:
             create_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
               -d "$(jq -n --arg n "DEV_SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
             if [ "$create_status" != "201" ]; then
               echo "::error::Failed to publish DEV_SECRET_NAMES (patch=$api_status create=$create_status)." >&2
+              echo "::error::Repository variable sync requires a fine-grained PAT stored as ACTIONS_VARIABLES_TOKEN with repository Variables write permission." >&2
               exit 1
             fi
           fi
@@ -480,7 +482,7 @@ jobs:
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           PREFIX: ${{ steps.env-vars.outputs.PREFIX }}
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN || github.token }}
         run: |
           set -euo pipefail
           working_dir=infra/opentofu/envs/${{ inputs.environment }}
@@ -537,7 +539,7 @@ jobs:
             api_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X PATCH \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables/$github_name" \
               -d "$(jq -n --arg v "$value" '{value: $v}')" || true)
@@ -545,12 +547,13 @@ jobs:
               create_status=$(curl --silent --show-error --output /dev/null \
                 --write-out '%{http_code}' \
                 -X POST \
-                -H "Authorization: token $GITHUB_TOKEN" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
                 -d "$(jq -n --arg n "$github_name" --arg v "$value" '{name: $n, value: $v}')" || true)
               if [ "$create_status" != "201" ]; then
                 echo "::error::Failed to publish $github_name (patch=$api_status create=$create_status)." >&2
+                echo "::error::Repository variable sync requires a fine-grained PAT stored as ACTIONS_VARIABLES_TOKEN with repository Variables write permission." >&2
                 exit 1
               fi
             fi
@@ -560,7 +563,7 @@ jobs:
           api_status=$(curl --silent --show-error --output /dev/null \
             --write-out '%{http_code}' \
             -X PATCH \
-            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/variables/${PREFIX}SECRET_NAMES" \
             -d "$(jq -n --arg v "$container_names_json" '{value: $v}')" || true)
@@ -568,12 +571,13 @@ jobs:
             create_status=$(curl --silent --show-error --output /dev/null \
               --write-out '%{http_code}' \
               -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
               -d "$(jq -n --arg n "${PREFIX}SECRET_NAMES" --arg v "$container_names_json" '{name: $n, value: $v}')" || true)
             if [ "$create_status" != "201" ]; then
               echo "::error::Failed to publish ${PREFIX}SECRET_NAMES (patch=$api_status create=$create_status)." >&2
+              echo "::error::Repository variable sync requires a fine-grained PAT stored as ACTIONS_VARIABLES_TOKEN with repository Variables write permission." >&2
               exit 1
             fi
           fi
