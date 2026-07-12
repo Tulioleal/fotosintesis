@@ -196,7 +196,7 @@ jobs:
       - name: Synchronize non-sensitive dev outputs
         env:
           GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN || github.token }}
+          ACTIONS_VARIABLES_TOKEN: ${{ secrets.ACTIONS_VARIABLES_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${ACTIONS_VARIABLES_TOKEN:-}" ]; then
