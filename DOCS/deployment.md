@@ -42,7 +42,9 @@ as `PROD_IAC_SERVICE_ACCOUNT_EMAIL`. After a successful apply, `iac.yml`
 post-apply sync jobs publish the per-environment outputs to repository
 variables. The sync jobs use a fixed allow-list of non-sensitive outputs,
 reject anything marked sensitive, never echo the output JSON to logs, and
-have `actions: write` permission only for the sync steps.
+write repository variables with the `ACTIONS_VARIABLES_TOKEN` repository
+secret, which must be a fine-grained PAT with repository Variables write
+permission.
 
 Local debugging example for dev:
 
