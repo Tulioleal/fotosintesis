@@ -32,7 +32,7 @@ const identificationPayload = {
 describe("IdentifyFlow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:preview") });
+    URL.createObjectURL = vi.fn(() => "blob:preview");
   });
 
   it("falls back to upload when camera access is unavailable", async () => {
