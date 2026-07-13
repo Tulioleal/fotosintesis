@@ -128,7 +128,7 @@ variable "dev_ci_roles" {
 variable "dev_deploy_roles" {
   type = set(string)
   default = [
-    "roles/container.developer",
+    "roles/container.admin",
     "roles/artifactregistry.reader",
     "roles/secretmanager.secretAccessor",
   ]
@@ -163,7 +163,7 @@ variable "prod_ci_roles" {
 variable "prod_deploy_roles" {
   type = set(string)
   default = [
-    "roles/container.developer",
+    "roles/container.admin",
     "roles/artifactregistry.reader",
     "roles/secretmanager.secretAccessor",
   ]

@@ -62,7 +62,10 @@ required_vars="
   GEMINI_SEARCH_MODEL
   EMBEDDING_DIMENSION
   STATIC_IP_NAME
-"
+  GKE_CLUSTER_PROJECT_ID
+  GKE_CLUSTER_LOCATION
+  GKE_CLUSTER_NAME
+ "
 
 missing=0
 for v in $required_vars; do
@@ -126,6 +129,9 @@ for source_file in "$base_dir"/*.yaml; do
     -e "s#__EXTERNAL_SECRETS_REFRESH_INTERVAL__#${EXTERNAL_SECRETS_REFRESH_INTERVAL}#g" \
     -e "s#__GCP_PROJECT_ID__#${GCP_PROJECT_ID}#g" \
     -e "s#__STATIC_IP_NAME__#${STATIC_IP_NAME}#g" \
+    -e "s#__GKE_CLUSTER_PROJECT_ID__#${GKE_CLUSTER_PROJECT_ID}#g" \
+    -e "s#__GKE_CLUSTER_LOCATION__#${GKE_CLUSTER_LOCATION}#g" \
+    -e "s#__GKE_CLUSTER_NAME__#${GKE_CLUSTER_NAME}#g" \
     -e "s#__FRONTEND_HOSTNAME__#${FRONTEND_HOSTNAME}#g" \
     -e "s#__MANAGED_CERTIFICATE_NAME__#${MANAGED_CERTIFICATE_NAME}#g" \
     "$source_file" > "$target_file"
