@@ -476,6 +476,14 @@ jobs:
             sleep 10
           done
           echo "Runtime secret was not projected in time" >&2
+          echo "--- SecretStore status ---" >&2
+          kubectl describe secretstore fotosintesis-secret-store -n "$TF_OUT_NAMESPACE" >&2 || true
+          echo "--- ExternalSecret status ---" >&2
+          kubectl describe externalsecret "$TF_OUT_RUNTIME_SECRET_NAME" -n "$TF_OUT_NAMESPACE" >&2 || true
+          echo "--- Recent events ---" >&2
+          kubectl get events -n "$TF_OUT_NAMESPACE" --sort-by=.lastTimestamp >&2 || true
+          echo "--- ESO controller logs ---" >&2
+          kubectl logs -n external-secrets deploy/external-secrets --tail=100 >&2 || true
           exit 1
       - id: required-keys
         name: Verify required provider API key secrets are projected

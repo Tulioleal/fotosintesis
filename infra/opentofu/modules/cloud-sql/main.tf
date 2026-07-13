@@ -30,3 +30,15 @@ resource "google_sql_database" "app" {
   instance = google_sql_database_instance.postgres.name
   name     = var.database_name
 }
+
+resource "random_password" "app_user" {
+  length  = 32
+  special = true
+}
+
+resource "google_sql_user" "app" {
+  project  = var.project_id
+  instance = google_sql_database_instance.postgres.name
+  name     = var.database_user
+  password = random_password.app_user.result
+}

@@ -85,6 +85,11 @@ variable "database_disk_size_gb" {
   default = 20
 }
 
+variable "database_user" {
+  type    = string
+  default = "fotosintesis"
+}
+
 variable "object_storage_bucket" {
   type        = string
   default     = "fotosintesis-dev-storage"
