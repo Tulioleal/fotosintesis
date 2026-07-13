@@ -244,9 +244,13 @@ jobs:
               echo "::error::OpenTofu output $key is missing or empty." >&2
               exit 1
             fi
-            echo "TF_OUT_${key}=${value}" >> "$GITHUB_OUTPUT"
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
           done
       - name: Authenticate to GKE
+        env:
+          TF_OUT_PROJECT_ID: ${{ steps.tofu-outputs.outputs.project_id }}
+          TF_OUT_GKE_CLUSTER_NAME: ${{ steps.tofu-outputs.outputs.gke_cluster_name }}
+          TF_OUT_GKE_CLUSTER_LOCATION: ${{ steps.tofu-outputs.outputs.gke_cluster_location }}
         run: |
           gcloud config set project "$TF_OUT_PROJECT_ID"
           gcloud container clusters get-credentials "$TF_OUT_GKE_CLUSTER_NAME" \
