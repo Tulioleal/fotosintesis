@@ -82,6 +82,7 @@ jobs:
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER_ID }}
           service_account: ${{ env.CI_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
       - name: Set image tag
         id: meta
         run: |
