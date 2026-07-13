@@ -538,11 +538,23 @@ jobs:
             if [ -z "$family" ]; then
               return 0
             fi
-            # The provider family is a comma-separated list of provider
-            # names. Each provider must have a corresponding API key in
-            # the runtime Secret.
+
+            if printf '%s' "$family" | grep -q '^\s*\['; then
+              if ! printf '%s' "$family" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+                echo "::error::$role must be a JSON array of strings or a comma-separated provider list." >&2
+                missing=1
+                return 0
+              fi
+
+              while IFS= read -r provider; do
+                check_provider_key "$role" "$provider"
+              done < <(printf '%s' "$family" | jq -r '.[]')
+              return 0
+            fi
+
             IFS=',' read -r -a providers <<< "$family"
             for provider in "${providers[@]}"; do
+              provider="$(printf '%s' "$provider" | xargs)"
               check_provider_key "$role" "$provider"
             done
           }
