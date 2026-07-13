@@ -46,3 +46,8 @@ variable "labels" {
   type    = map(string)
   default = {}
 }
+
+variable "database_user" {
+  type    = string
+  default = "fotosintesis"
+}

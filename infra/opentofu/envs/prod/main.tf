@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -46,6 +50,7 @@ module "cloud_sql" {
   region              = var.region
   instance_name       = var.database_instance_name
   database_name       = var.database_name
+  database_user       = var.database_user
   tier                = var.database_tier
   edition             = var.database_edition
   availability_type   = var.database_availability_type
