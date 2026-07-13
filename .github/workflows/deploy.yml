@@ -126,6 +126,8 @@ jobs:
       backend_image_tag: ${{ steps.render.outputs.backend_image_tag }}
       frontend_image_tag: ${{ steps.render.outputs.frontend_image_tag }}
     steps:
+      - uses: actions/checkout@v5
+
       - name: Resolve env-scoped foundation and sync variables
         id: env-vars
         env:
@@ -208,6 +210,7 @@ jobs:
         with:
           workload_identity_provider: ${{ steps.env-vars.outputs.ENV_WIF_PROVIDER_ID }}
           service_account: ${{ steps.env-vars.outputs.ENV_DEPLOY_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
       - name: Set up OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
@@ -244,10 +247,7 @@ jobs:
             echo "TF_OUT_${key}=${value}" >> "$GITHUB_OUTPUT"
           done
       - name: Authenticate to GKE
-        env:
-          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          echo "$GOOGLE_OAUTH_ACCESS_TOKEN" | gcloud auth login --brief --no-launch-browser
           gcloud config set project "$TF_OUT_PROJECT_ID"
           gcloud container clusters get-credentials "$TF_OUT_GKE_CLUSTER_NAME" \
             --region "$TF_OUT_GKE_CLUSTER_LOCATION"
