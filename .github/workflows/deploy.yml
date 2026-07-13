@@ -217,6 +217,8 @@ jobs:
           tofu_version: ${{ env.TF_VERSION }}
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin
       - name: Initialize OpenTofu with the remote backend
         working-directory: infra/opentofu/envs/${{ inputs.environment }}
         env:
