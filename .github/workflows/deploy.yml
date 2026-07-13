@@ -430,7 +430,15 @@ jobs:
           ESO_VERSION: ${{ vars.EXTERNAL_SECRETS_OPERATOR_VERSION || '0.10.4' }}
         run: |
           kubectl apply --server-side -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/crds/bundle.yaml"
-          kubectl apply -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/standard.yaml"
+
+          helm repo add external-secrets https://charts.external-secrets.io
+          helm repo update
+          helm upgrade --install external-secrets external-secrets/external-secrets \
+            --namespace external-secrets \
+            --create-namespace \
+            --version "$ESO_VERSION" \
+            --set installCRDs=false
+
           kubectl -n external-secrets rollout status deploy/external-secrets --timeout=300s
           kubectl wait --for=condition=Available --timeout=300s \
             -n external-secrets deploy/external-secrets
