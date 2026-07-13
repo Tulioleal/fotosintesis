@@ -434,7 +434,11 @@ jobs:
         env:
           ESO_VERSION: ${{ vars.EXTERNAL_SECRETS_OPERATOR_VERSION || '0.10.4' }}
         run: |
-          kubectl apply --server-side -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/crds/bundle.yaml"
+          kubectl apply \
+            --server-side \
+            --force-conflicts \
+            --field-manager=fotosintesis-deploy \
+            -f "https://raw.githubusercontent.com/external-secrets/external-secrets/v${ESO_VERSION}/deploy/crds/bundle.yaml"
 
           helm repo add external-secrets https://charts.external-secrets.io
           helm repo update
