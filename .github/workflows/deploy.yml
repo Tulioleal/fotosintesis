@@ -538,13 +538,28 @@ jobs:
             exit 1
           fi
 
-          rendered_deployment_json="$(
+          rendered_frontend_resources="$(
             kubectl create \
               --dry-run=client \
               -f ".generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml" \
-              -o json
+              -o json |
+            jq -s '.'
           )"
-          frontend_env_auth_url="$(jq -er '.spec.template.spec.containers[0].env[] | select(.name == "AUTH_URL") | .valueFrom.configMapKeyRef.key' <<< "$rendered_deployment_json")"
+
+          frontend_env_auth_url="$(
+            jq -er '
+              .[]
+              | select(
+                  .kind == "Deployment"
+                  and .metadata.name == "fotosintesis-frontend"
+                )
+              | .spec.template.spec.containers[]
+              | select(.name == "frontend")
+              | .env[]
+              | select(.name == "AUTH_URL")
+              | .valueFrom.configMapKeyRef.key
+            ' <<< "$rendered_frontend_resources"
+          )"
           if [ "$frontend_env_auth_url" != "AUTH_URL" ]; then
             echo "::error::Frontend Deployment AUTH_URL env does not reference ConfigMap key AUTH_URL." >&2
             exit 1
@@ -905,6 +920,7 @@ jobs:
           FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
           FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
           STATIC_IP_ADDRESS: ${{ steps.tofu-outputs.outputs.frontend_static_ip_address }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
 
@@ -917,15 +933,24 @@ jobs:
           root_url="$origin/"
           providers_url="$origin/api/auth/providers"
 
+          root_ready=false
           for _ in $(seq 1 60); do
             if curl --silent --show-error --fail --output /dev/null \
                 --max-time 10 "$root_url"; then
-              echo "Frontend public endpoint OK: $root_url"
+              root_ready=true
               break
             fi
             echo "Waiting for frontend public endpoint: $root_url"
             sleep 10
           done
+
+          if [ "$root_ready" != "true" ]; then
+            echo "::error::Frontend public endpoint did not become ready: $root_url" >&2
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "Frontend public endpoint OK: $root_url"
 
           providers_json="$(curl --silent --show-error --fail --max-time 10 "$providers_url" || true)"
           if [ -z "$providers_json" ]; then
@@ -953,7 +978,6 @@ jobs:
             exit 1
           fi
 
-          echo "Frontend public endpoint OK: $root_url"
           echo "Auth.js provider URLs use origin $origin"
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - name: Record last healthy image pair
