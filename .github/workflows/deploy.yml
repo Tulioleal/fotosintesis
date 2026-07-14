@@ -298,7 +298,7 @@ jobs:
             local deployment="$3"
             local healthy_key="$4"
             if [ -n "$input" ]; then
-              printf '%s' "input"
+              printf '%s:%s' "input" "$input"
               return
             fi
             local healthy
@@ -316,24 +316,19 @@ jobs:
             printf '%s' ""
           }
 
-          resolve_and_extract() {
-            local result
-            result="$(resolve_one "$@")"
-            if [ -z "$result" ]; then
-              printf '%s' ""
-              return
-            fi
-            printf '%s' "${result#*:}"
-          }
+          extract_result() {
+            local label="$1"
+            local result="$2"
 
-          resolve_source() {
-            local result
-            result="$(resolve_one "$@")"
             if [ -z "$result" ]; then
-              printf '%s' ""
-              return
+              echo "::error::$label could not be resolved." >&2
+              exit 1
             fi
-            printf '%s' "${result%:*}"
+
+            if printf '%s' "$result" | grep -v -q ':'; then
+              echo "::error::Internal resolver error for $label: expected source:tag." >&2
+              exit 1
+            fi
           }
 
           reject_tag() {
@@ -369,6 +364,9 @@ jobs:
 
           BACKEND_RESULT="$(resolve_one BACKEND_IMAGE_TAG "$INPUT_BACKEND_TAG" fotosintesis-backend backend-image-tag)"
           FRONTEND_RESULT="$(resolve_one FRONTEND_IMAGE_TAG "$INPUT_FRONTEND_TAG" fotosintesis-frontend frontend-image-tag)"
+
+          extract_result BACKEND_IMAGE_TAG "$BACKEND_RESULT"
+          extract_result FRONTEND_IMAGE_TAG "$FRONTEND_RESULT"
 
           BACKEND_IMAGE_TAG="${BACKEND_RESULT#*:}"
           BACKEND_TAG_SOURCE="${BACKEND_RESULT%:*}"
