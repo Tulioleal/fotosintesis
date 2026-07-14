@@ -360,6 +360,12 @@ jobs:
             esac
           fi
 
+          write_env_value() {
+            local name="$1"
+            local value="$2"
+            printf '%s=%s\n' "$name" "$(printf '%s' "$value" | jq -Rr @sh)"
+          }
+
           {
             echo "NAMESPACE=${TF_OUT_NAMESPACE}"
             echo "APP_ENV=${ENVIRONMENT}"
@@ -402,10 +408,10 @@ jobs:
             echo "JUDGE_PROVIDER=${JUDGE_PROVIDER}"
             echo "SEARCH_PROVIDER=${SEARCH_PROVIDER}"
             echo "EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER}"
-            echo "MODEL_PROVIDERS=${MODEL_PROVIDERS}"
-            echo "VISION_PROVIDERS=${VISION_PROVIDERS}"
-            echo "JUDGE_PROVIDERS=${JUDGE_PROVIDERS}"
-            echo "SEARCH_PROVIDERS=${SEARCH_PROVIDERS}"
+            write_env_value MODEL_PROVIDERS "$MODEL_PROVIDERS"
+            write_env_value VISION_PROVIDERS "$VISION_PROVIDERS"
+            write_env_value JUDGE_PROVIDERS "$JUDGE_PROVIDERS"
+            write_env_value SEARCH_PROVIDERS "$SEARCH_PROVIDERS"
             echo "OPENAI_TEXT_MODEL=${OPENAI_TEXT_MODEL}"
             echo "OPENAI_VISION_MODEL=${OPENAI_VISION_MODEL}"
             echo "OPENAI_JUDGE_MODEL=${OPENAI_JUDGE_MODEL}"
@@ -418,6 +424,17 @@ jobs:
             echo "EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}"
           } > "$values_file"
           sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
+
+          for family in MODEL_PROVIDERS VISION_PROVIDERS JUDGE_PROVIDERS SEARCH_PROVIDERS; do
+            value="$(printf '%s' ".generated/k8s/$ENVIRONMENT/rendered/20-config.yaml" \
+              | xargs grep -A2 "$family" \
+              | grep 'value:' \
+              | sed 's/.*value: //')"
+            if ! printf '%s' "$value" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+              echo "::error::$family in rendered ConfigMap is not a valid JSON array of strings." >&2
+              exit 1
+            fi
+          done
 
           {
             echo "backend_image_tag=${BACKEND_IMAGE_TAG}"
@@ -488,20 +505,17 @@ jobs:
       - id: required-keys
         name: Verify required provider API key secrets are projected
         env:
-          MODEL_PROVIDER: ${{ env.MODEL_PROVIDER }}
-          VISION_PROVIDER: ${{ env.VISION_PROVIDER }}
-          JUDGE_PROVIDER: ${{ env.JUDGE_PROVIDER }}
-          SEARCH_PROVIDER: ${{ env.SEARCH_PROVIDER }}
-          EMBEDDING_PROVIDER: ${{ env.EMBEDDING_PROVIDER }}
-          MODEL_PROVIDERS: ${{ env.MODEL_PROVIDERS }}
-          VISION_PROVIDERS: ${{ env.VISION_PROVIDERS }}
-          JUDGE_PROVIDERS: ${{ env.JUDGE_PROVIDERS }}
-          SEARCH_PROVIDERS: ${{ env.SEARCH_PROVIDERS }}
           TF_OUT_RUNTIME_SECRET_NAME: ${{ steps.tofu-outputs.outputs.runtime_secret_name }}
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
           missing=0
+
+          read_provider_family() {
+            kubectl get configmap fotosintesis-runtime-config \
+              -n "$TF_OUT_NAMESPACE" \
+              -o jsonpath="{.data.$1}" 2>/dev/null || true
+          }
 
           check_provider_key() {
             local role="$1"
@@ -559,10 +573,10 @@ jobs:
             done
           }
 
-          check_provider_family MODEL_PROVIDERS "$MODEL_PROVIDERS"
-          check_provider_family VISION_PROVIDERS "$VISION_PROVIDERS"
-          check_provider_family JUDGE_PROVIDERS "$JUDGE_PROVIDERS"
-          check_provider_family SEARCH_PROVIDERS "$SEARCH_PROVIDERS"
+          check_provider_family MODEL_PROVIDERS "$(read_provider_family MODEL_PROVIDERS)"
+          check_provider_family VISION_PROVIDERS "$(read_provider_family VISION_PROVIDERS)"
+          check_provider_family JUDGE_PROVIDERS "$(read_provider_family JUDGE_PROVIDERS)"
+          check_provider_family SEARCH_PROVIDERS "$(read_provider_family SEARCH_PROVIDERS)"
 
           if [ "$missing" -ne 0 ]; then
             echo "::error::ExternalSecret $TF_OUT_RUNTIME_SECRET_NAME is missing one or more required provider API key entries, or provider configuration is invalid. See docs/deployment/external-secrets.md." >&2
@@ -675,8 +689,35 @@ jobs:
         env:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
-          kubectl rollout status deployment/fotosintesis-backend -n "$TF_OUT_NAMESPACE" --timeout=600s
-          kubectl rollout status deployment/fotosintesis-frontend -n "$TF_OUT_NAMESPACE" --timeout=600s
+          set -euo pipefail
+
+          rollout_deployment() {
+            local deployment="$1"
+            if ! kubectl rollout status "deployment/$deployment" -n "$TF_OUT_NAMESPACE" --timeout=600s; then
+              echo "::error::Rollout failed for $deployment" >&2
+              echo "--- Deployment description ---" >&2
+              kubectl describe "deployment/$deployment" -n "$TF_OUT_NAMESPACE" || true
+              echo "--- ReplicaSets ---" >&2
+              kubectl get replicasets -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
+              echo "--- Pod statuses ---" >&2
+              kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
+              local pod
+              pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              if [ -n "$pod" ]; then
+                echo "--- $deployment logs ---" >&2
+                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$deployment" --tail=200 || true
+                echo "--- Cloud SQL Proxy logs ---" >&2
+                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy --tail=200 || true
+              fi
+              echo "--- Events ---" >&2
+              kubectl get events -n "$TF_OUT_NAMESPACE" --sort-by=.lastTimestamp || true
+              exit 1
+            fi
+          }
+
+          rollout_deployment fotosintesis-backend
+          rollout_deployment fotosintesis-frontend
+
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke
         name: Backend health smoke check (in-cluster curl)

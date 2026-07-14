@@ -104,7 +104,7 @@ no other iac.yml job has that permission.
 | `FRONTEND_API_BASE_URL` | Public URL the browser uses to reach the backend. | optional |
 | `FRONTEND_SERVER_API_BASE_URL` | Internal URL the Next.js server uses to reach the backend. | optional (default `http://fotosintesis-backend:8000`) |
 | `MODEL_PROVIDER`, `VISION_PROVIDER`, `JUDGE_PROVIDER`, `SEARCH_PROVIDER`, `EMBEDDING_PROVIDER` | Per-role default provider. | yes (start with `mock`) |
-| `MODEL_PROVIDERS`, `VISION_PROVIDERS`, `JUDGE_PROVIDERS`, `SEARCH_PROVIDERS` | Comma-separated fallback chain for each role. | optional |
+| `MODEL_PROVIDERS`, `VISION_PROVIDERS`, `JUDGE_PROVIDERS`, `SEARCH_PROVIDERS` | JSON array of provider names for each role. | optional |
 | `OPENAI_TEXT_MODEL` ... `GEMINI_SEARCH_MODEL` | Provider-specific model names. | optional (defaults) |
 | `EMBEDDING_DIMENSION` | Vector dimension for the embeddings table. | yes |
 
