@@ -65,7 +65,7 @@ permissions:
   deployments: write
 
 concurrency:
-  group: deploy-${{ inputs.environment }}-${{ inputs.trigger_source || 'manual' }}
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 env:
@@ -264,30 +264,76 @@ jobs:
           NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
           INPUT_BACKEND_TAG: ${{ inputs.backend_image_tag }}
           INPUT_FRONTEND_TAG: ${{ inputs.frontend_image_tag }}
+          ENV_ARTIFACT_REGISTRY_URL: ${{ steps.tofu-outputs.outputs.artifact_repository_url }}
+          ENV_PROJECT_ID: ${{ steps.tofu-outputs.outputs.project_id }}
         run: |
           set -euo pipefail
           sha40='^[0-9a-f]{40}$'
 
-          # Fetch the currently-deployed image tag for a deployment, or
-          # print "" when the deployment is missing. Path-filter-restricted
-          # auto-dev deploys leave the unchanged service alone and reuse
-          # its current tag so the deploy can complete with one new image.
+          healthy_tag() {
+            local key="$1"
+            kubectl get configmap fotosintesis-release-state \
+              -n "$NAMESPACE" \
+              -o "jsonpath={.data.$key}" \
+              2>/dev/null || true
+          }
+
           current_tag() {
             local deployment="$1"
-            kubectl get "deployment/${deployment}" -n "$NAMESPACE" \
-              -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
-              | awk -F: '{print $2}'
+            local image
+            image="$(
+              kubectl get "deployment/$deployment" \
+                -n "$NAMESPACE" \
+                -o jsonpath='{.spec.template.spec.containers[0].image}' \
+                2>/dev/null || true
+            )"
+            if [ -n "$image" ]; then
+              printf '%s' "${image##*:}"
+            fi
           }
 
           resolve_one() {
             local label="$1"
             local input="$2"
             local deployment="$3"
+            local healthy_key="$4"
             if [ -n "$input" ]; then
-              printf '%s' "$input"
+              printf '%s' "input"
               return
             fi
-            current_tag "$deployment"
+            local healthy
+            healthy="$(healthy_tag "$healthy_key")"
+            if [ -n "$healthy" ]; then
+              printf '%s' "last-healthy:$healthy"
+              return
+            fi
+            local deployed
+            deployed="$(current_tag "$deployment")"
+            if [ -n "$deployed" ]; then
+              printf '%s' "current-deployment:$deployed"
+              return
+            fi
+            printf '%s' ""
+          }
+
+          resolve_and_extract() {
+            local result
+            result="$(resolve_one "$@")"
+            if [ -z "$result" ]; then
+              printf '%s' ""
+              return
+            fi
+            printf '%s' "${result#*:}"
+          }
+
+          resolve_source() {
+            local result
+            result="$(resolve_one "$@")"
+            if [ -z "$result" ]; then
+              printf '%s' ""
+              return
+            fi
+            printf '%s' "${result%:*}"
           }
 
           reject_tag() {
@@ -307,15 +353,39 @@ jobs:
             fi
           }
 
-          BACKEND_IMAGE_TAG=$(resolve_one BACKEND_IMAGE_TAG "$INPUT_BACKEND_TAG" fotosintesis-backend)
-          FRONTEND_IMAGE_TAG=$(resolve_one FRONTEND_IMAGE_TAG "$INPUT_FRONTEND_TAG" fotosintesis-frontend)
+          verify_image_exists() {
+            local label="$1"
+            local tag="$2"
+            local repo="$3"
+            if ! gcloud artifacts docker tags list \
+              "$repo" \
+              --project="$ENV_PROJECT_ID" \
+              --format='value(tag)' \
+              2>/dev/null | grep -Fxq "$tag"; then
+              echo "::error::Resolved $label tag $tag does not exist in $repo" >&2
+              exit 1
+            fi
+          }
+
+          BACKEND_RESULT="$(resolve_one BACKEND_IMAGE_TAG "$INPUT_BACKEND_TAG" fotosintesis-backend backend-image-tag)"
+          FRONTEND_RESULT="$(resolve_one FRONTEND_IMAGE_TAG "$INPUT_FRONTEND_TAG" fotosintesis-frontend frontend-image-tag)"
+
+          BACKEND_IMAGE_TAG="${BACKEND_RESULT#*:}"
+          BACKEND_TAG_SOURCE="${BACKEND_RESULT%:*}"
+          FRONTEND_IMAGE_TAG="${FRONTEND_RESULT#*:}"
+          FRONTEND_TAG_SOURCE="${FRONTEND_RESULT%:*}"
 
           reject_tag BACKEND_IMAGE_TAG "$BACKEND_IMAGE_TAG"
           reject_tag FRONTEND_IMAGE_TAG "$FRONTEND_IMAGE_TAG"
 
+          verify_image_exists "backend" "$BACKEND_IMAGE_TAG" "$ENV_ARTIFACT_REGISTRY_URL/backend"
+          verify_image_exists "frontend" "$FRONTEND_IMAGE_TAG" "$ENV_ARTIFACT_REGISTRY_URL/frontend"
+
           {
             echo "backend_image_tag=${BACKEND_IMAGE_TAG}"
             echo "frontend_image_tag=${FRONTEND_IMAGE_TAG}"
+            echo "backend_image_tag_source=${BACKEND_TAG_SOURCE}"
+            echo "frontend_image_tag_source=${FRONTEND_TAG_SOURCE}"
           } >> "$GITHUB_OUTPUT"
       - name: Render Kubernetes manifests
         id: render
@@ -693,7 +763,9 @@ jobs:
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
+          set -euo pipefail
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml"
           kubectl rollout restart deployment/fotosintesis-frontend \
             -n "$TF_OUT_NAMESPACE"
@@ -795,6 +867,21 @@ jobs:
           echo "::error::Frontend public endpoint did not become ready: $url" >&2
           echo "result=fail" >> "$GITHUB_OUTPUT"
           exit 1
+      - name: Record last healthy image pair
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+          BACKEND_IMAGE_TAG: ${{ steps.render.outputs.backend_image_tag }}
+          FRONTEND_IMAGE_TAG: ${{ steps.render.outputs.frontend_image_tag }}
+        run: |
+          set -euo pipefail
+
+          kubectl create configmap fotosintesis-release-state \
+            -n "$TF_OUT_NAMESPACE" \
+            --from-literal=backend-image-tag="$BACKEND_IMAGE_TAG" \
+            --from-literal=frontend-image-tag="$FRONTEND_IMAGE_TAG" \
+            --dry-run=client \
+            -o yaml |
+          kubectl apply -f -
       - name: Summary
         if: always()
         env:
@@ -802,6 +889,8 @@ jobs:
           TRIGGER_SOURCE: ${{ inputs.trigger_source || 'manual' }}
           BACKEND_IMAGE_TAG: ${{ steps.render.outputs.backend_image_tag }}
           FRONTEND_IMAGE_TAG: ${{ steps.render.outputs.frontend_image_tag }}
+          BACKEND_IMAGE_TAG_SOURCE: ${{ steps.resolve.outputs.backend_image_tag_source }}
+          FRONTEND_IMAGE_TAG_SOURCE: ${{ steps.resolve.outputs.frontend_image_tag_source }}
           MIGRATION: ${{ steps.migration.outputs.result || 'skipped' }}
           ROLLOUT: ${{ steps.rollout.outputs.result || 'skipped' }}
           REQUIRED_KEYS: ${{ steps.required-keys.outputs.result || 'skipped' }}
@@ -815,6 +904,11 @@ jobs:
           FRONTEND_HOSTNAME: ${{ env.FRONTEND_HOSTNAME }}
           STATIC_IP_ADDRESS: ${{ steps.tofu-outputs.outputs.frontend_static_ip_address }}
         run: |
+          RELEASE_STATE="not updated"
+          if [ "${BACKEND_SMOKE}" = "pass" ] && [ "${FRONTEND_SMOKE}" = "pass" ]; then
+            RELEASE_STATE="updated"
+          fi
+
           {
             echo "## Deploy summary"
             echo "| Item | Value |"
@@ -822,7 +916,10 @@ jobs:
             echo "| Environment | \`${ENVIRONMENT}\` |"
             echo "| Trigger source | \`${TRIGGER_SOURCE}\` |"
             echo "| Backend image tag | \`${BACKEND_IMAGE_TAG}\` |"
+            echo "| Backend image source | \`${BACKEND_IMAGE_TAG_SOURCE}\` |"
             echo "| Frontend image tag | \`${FRONTEND_IMAGE_TAG}\` |"
+            echo "| Frontend image source | \`${FRONTEND_IMAGE_TAG_SOURCE}\` |"
+            echo "| Release state | ${RELEASE_STATE} |"
             echo "| GCP project | \`${GCP_PROJECT_ID}\` |"
             echo "| GKE cluster | \`${GKE_CLUSTER_NAME}\` (${GKE_CLUSTER_LOCATION}) |"
             echo "| Namespace | \`${NAMESPACE}\` |"
