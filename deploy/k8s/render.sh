@@ -65,6 +65,7 @@ required_vars="
   GKE_CLUSTER_PROJECT_ID
   GKE_CLUSTER_LOCATION
   GKE_CLUSTER_NAME
+  AUTH_URL
  "
 
 missing=0
@@ -134,6 +135,7 @@ for source_file in "$base_dir"/*.yaml; do
     -e "s#__GKE_CLUSTER_NAME__#${GKE_CLUSTER_NAME}#g" \
     -e "s#__FRONTEND_HOSTNAME__#${FRONTEND_HOSTNAME}#g" \
     -e "s#__MANAGED_CERTIFICATE_NAME__#${MANAGED_CERTIFICATE_NAME}#g" \
+    -e "s#__AUTH_URL__#${AUTH_URL}#g" \
     "$source_file" > "$target_file"
 done
 
