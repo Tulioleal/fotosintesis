@@ -585,9 +585,61 @@ jobs:
         env:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
-          kubectl wait --for=condition=complete --timeout=600s \
-            -n "$TF_OUT_NAMESPACE" job/fotosintesis-migrations
-          echo "result=pass" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          deadline=$((SECONDS + 600))
+          selector="app.kubernetes.io/name=fotosintesis-migrations"
+
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+
+            if [ -z "$pod" ]; then
+              sleep 5
+              continue
+            fi
+
+            phase="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+            reason="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.containerStatuses[?(@.name=="migrations")].state.terminated.reason}' 2>/dev/null || true)"
+            exit_code="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.containerStatuses[?(@.name=="migrations")].state.terminated.exitCode}' 2>/dev/null || true)"
+
+            if [ "$reason" = "Completed" ] && [ "$exit_code" = "0" ]; then
+              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
+              kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found --wait=false
+              echo "result=pass" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ -n "$exit_code" ] && [ "$exit_code" != "0" ]; then
+              echo "::error::Migration container exited with code $exit_code" >&2
+              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
+              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
+              kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
+              echo "result=fail" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            if [ "$phase" = "Failed" ]; then
+              echo "::error::Migration pod failed" >&2
+              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
+              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
+              kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
+              echo "result=fail" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          echo "::error::Timed out waiting for migrations container to complete" >&2
+          kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o wide || true
+          pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          if [ -n "$pod" ]; then
+            kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
+            kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
+            kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
+          fi
+          echo "result=fail" >> "$GITHUB_OUTPUT"
+          exit 1
       - name: Apply frontend, ingress, certificate
         env:
           ENVIRONMENT: ${{ inputs.environment }}

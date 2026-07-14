@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/part-of: fotosintesis-ai
 spec:
   backoffLimit: 2
+  activeDeadlineSeconds: 900
   template:
     metadata:
       labels:
