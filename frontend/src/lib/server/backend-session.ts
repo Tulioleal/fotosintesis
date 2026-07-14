@@ -14,6 +14,14 @@ function authSecret() {
   return process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
 }
 
+function usesSecureCookies(): boolean {
+  const authUrl = process.env.AUTH_URL ?? process.env.NEXTAUTH_URL;
+  if (authUrl) {
+    return new URL(authUrl).protocol === "https:";
+  }
+  return process.env.NODE_ENV === "production";
+}
+
 export async function resolveBackendAuthHeaders(request: Request): Promise<BackendAuthHeaders | null> {
   const cookie = request.headers.get("cookie") ?? "";
   if (cookie.includes(BACKEND_SESSION_COOKIE)) {
@@ -26,7 +34,7 @@ export async function resolveBackendAuthHeaders(request: Request): Promise<Backe
   const token = await getToken({
     req: request,
     secret,
-    secureCookie: process.env.NODE_ENV === "production",
+    secureCookie: usesSecureCookies(),
   });
   const credential = typeof token?.backendCredential === "string" ? token.backendCredential : "";
   if (!credential) return null;
