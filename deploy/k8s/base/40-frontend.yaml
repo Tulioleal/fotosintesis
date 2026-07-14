@@ -44,6 +44,11 @@ spec:
                   key: auth-secret
             - name: AUTH_TRUST_HOST
               value: "true"
+            - name: AUTH_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_URL
 ---
 apiVersion: v1
 kind: Service
