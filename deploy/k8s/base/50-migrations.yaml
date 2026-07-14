@@ -22,7 +22,30 @@ spec:
         - name: migrations
           image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
-          command: ["sh", "-c", "alembic upgrade head"]
+          command:
+            - sh
+            - -c
+            - |
+              python - <<'PY'
+              import socket
+              import time
+
+              deadline = time.monotonic() + 60
+              while True:
+                  try:
+                      with socket.create_connection(
+                          ("127.0.0.1", __CLOUD_SQL_PROXY_PORT__),
+                          timeout=1,
+                      ):
+                          break
+                  except OSError:
+                      if time.monotonic() >= deadline:
+                          raise SystemExit(
+                              "Cloud SQL Proxy did not become ready within 60 seconds"
+                          )
+                      time.sleep(1)
+              PY
+              exec alembic upgrade head
           env:
             - name: DATABASE_URL
               valueFrom:
