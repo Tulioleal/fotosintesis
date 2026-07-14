@@ -816,24 +816,48 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
+
           SMOKE_NAME="fotosintesis-backend-smoke"
-          kubectl delete pod -n "$TF_OUT_NAMESPACE" "$SMOKE_NAME" --ignore-not-found
-          # Use an in-cluster curl pod so the call comes from a place that
-          # can resolve the cluster DNS name. The pod is removed after the
-          # check regardless of the result.
+
+          cleanup() {
+            kubectl delete pod "$SMOKE_NAME" \
+              -n "$TF_OUT_NAMESPACE" \
+              --ignore-not-found \
+              --wait=false || true
+          }
+
+          trap cleanup EXIT
+          cleanup
+
           if ! kubectl run "$SMOKE_NAME" \
               -n "$TF_OUT_NAMESPACE" \
               --image=curlimages/curl:8.10.1 \
               --restart=Never \
-              --rm \
-              --wait \
+              --attach=true \
+              --pod-running-timeout=120s \
               --command -- curl --silent --show-error --fail \
               --max-time 30 \
               "http://fotosintesis-backend.$TF_OUT_NAMESPACE.svc.cluster.local:8000/health"; then
             echo "::error::Backend health check failed" >&2
+            echo "--- Smoke pod logs ---" >&2
+            kubectl logs "$SMOKE_NAME" \
+              -n "$TF_OUT_NAMESPACE" || true
+            echo "--- Smoke pod description ---" >&2
+            kubectl describe pod "$SMOKE_NAME" \
+              -n "$TF_OUT_NAMESPACE" || true
+            echo "--- Backend service ---" >&2
+            kubectl get service fotosintesis-backend \
+              -n "$TF_OUT_NAMESPACE" \
+              -o wide || true
+            echo "--- Backend endpoint slices ---" >&2
+            kubectl get endpointslice \
+              -n "$TF_OUT_NAMESPACE" \
+              -l kubernetes.io/service-name=fotosintesis-backend \
+              -o wide || true
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+
           echo "Backend health check passed"
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: frontend-smoke
