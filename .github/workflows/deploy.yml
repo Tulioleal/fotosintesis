@@ -818,6 +818,7 @@ jobs:
           set -euo pipefail
 
           SMOKE_NAME="fotosintesis-backend-smoke"
+          SMOKE_URL="http://fotosintesis-backend.$TF_OUT_NAMESPACE.svc.cluster.local:8000/health"
 
           cleanup() {
             kubectl delete pod "$SMOKE_NAME" \
@@ -835,24 +836,29 @@ jobs:
               --restart=Never \
               --attach=true \
               --pod-running-timeout=120s \
-              --command -- curl --silent --show-error --fail \
-              --max-time 30 \
-              "http://fotosintesis-backend.$TF_OUT_NAMESPACE.svc.cluster.local:8000/health"; then
+              --command -- curl \
+              --silent \
+              --show-error \
+              --fail \
+              --connect-timeout 5 \
+              --max-time 10 \
+              --retry 30 \
+              --retry-delay 5 \
+              --retry-max-time 180 \
+              --retry-all-errors \
+              "$SMOKE_URL"; then
             echo "::error::Backend health check failed" >&2
-            echo "--- Smoke pod logs ---" >&2
-            kubectl logs "$SMOKE_NAME" \
-              -n "$TF_OUT_NAMESPACE" || true
-            echo "--- Smoke pod description ---" >&2
-            kubectl describe pod "$SMOKE_NAME" \
-              -n "$TF_OUT_NAMESPACE" || true
-            echo "--- Backend service ---" >&2
+            kubectl logs "$SMOKE_NAME" -n "$TF_OUT_NAMESPACE" || true
+            kubectl describe pod "$SMOKE_NAME" -n "$TF_OUT_NAMESPACE" || true
             kubectl get service fotosintesis-backend \
-              -n "$TF_OUT_NAMESPACE" \
-              -o wide || true
-            echo "--- Backend endpoint slices ---" >&2
+              -n "$TF_OUT_NAMESPACE" -o wide || true
             kubectl get endpointslice \
               -n "$TF_OUT_NAMESPACE" \
               -l kubernetes.io/service-name=fotosintesis-backend \
+              -o yaml || true
+            kubectl get pods \
+              -n "$TF_OUT_NAMESPACE" \
+              -l app.kubernetes.io/name=fotosintesis-backend \
               -o wide || true
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit 1
