@@ -606,6 +606,8 @@ jobs:
         run: |
           kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
+          kubectl rollout restart deployment/fotosintesis-backend \
+            -n "$TF_OUT_NAMESPACE"
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/50-migrations.yaml"
       - id: migration
         name: Wait for migrations
@@ -693,6 +695,8 @@ jobs:
           FRONTEND_EXPOSURE_MODE: ${{ env.FRONTEND_EXPOSURE_MODE }}
         run: |
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/40-frontend.yaml"
+          kubectl rollout restart deployment/fotosintesis-frontend \
+            -n "$TF_OUT_NAMESPACE"
           if [ "$FRONTEND_EXPOSURE_MODE" = "hostname-https" ]; then
             kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/60-managed-certificate.yaml"
           fi
@@ -706,6 +710,7 @@ jobs:
 
           rollout_deployment() {
             local deployment="$1"
+            local container="$2"
             if ! kubectl rollout status "deployment/$deployment" -n "$TF_OUT_NAMESPACE" --timeout=600s; then
               echo "::error::Rollout failed for $deployment" >&2
               echo "--- Deployment description ---" >&2
@@ -717,10 +722,15 @@ jobs:
               local pod
               pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
               if [ -n "$pod" ]; then
-                echo "--- $deployment logs ---" >&2
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$deployment" --tail=200 || true
-                echo "--- Cloud SQL Proxy logs ---" >&2
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy --tail=200 || true
+                echo "--- $deployment current logs ---" >&2
+                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --tail=200 || true
+                echo "--- $deployment previous logs ---" >&2
+                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --previous --tail=200 || true
+                if [ "$container" = "backend" ]; then
+                  echo "--- Cloud SQL Proxy logs ---" >&2
+                  kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy --tail=200 || true
+                fi
+                kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
               fi
               echo "--- Events ---" >&2
               kubectl get events -n "$TF_OUT_NAMESPACE" --sort-by=.lastTimestamp || true
@@ -728,8 +738,8 @@ jobs:
             fi
           }
 
-          rollout_deployment fotosintesis-backend
-          rollout_deployment fotosintesis-frontend
+          rollout_deployment fotosintesis-backend backend
+          rollout_deployment fotosintesis-frontend frontend
 
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke
