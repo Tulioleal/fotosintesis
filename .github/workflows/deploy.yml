@@ -789,19 +789,17 @@ jobs:
               kubectl get replicasets -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
               echo "--- Pod statuses ---" >&2
               kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
-              local pod
-              pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-              if [ -n "$pod" ]; then
-                echo "--- $deployment current logs ---" >&2
+              local pods
+              pods="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+              for pod in $pods; do
+                echo "--- Pod: $pod ---" >&2
                 kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --tail=200 || true
-                echo "--- $deployment previous logs ---" >&2
                 kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --previous --tail=200 || true
                 if [ "$container" = "backend" ]; then
-                  echo "--- Cloud SQL Proxy logs ---" >&2
                   kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy --tail=200 || true
                 fi
                 kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
-              fi
+              done
               echo "--- Events ---" >&2
               kubectl get events -n "$TF_OUT_NAMESPACE" --sort-by=.lastTimestamp || true
               exit 1
