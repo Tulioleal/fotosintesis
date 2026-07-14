@@ -425,13 +425,26 @@ jobs:
           } > "$values_file"
           sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
 
+          config_json="$(
+            kubectl create \
+              --dry-run=client \
+              -f ".generated/k8s/$ENVIRONMENT/rendered/20-config.yaml" \
+              -o json
+          )"
+
           for family in MODEL_PROVIDERS VISION_PROVIDERS JUDGE_PROVIDERS SEARCH_PROVIDERS; do
-            value="$(printf '%s' ".generated/k8s/$ENVIRONMENT/rendered/20-config.yaml" \
-              | xargs grep -A2 "$family" \
-              | grep 'value:' \
-              | sed 's/.*value: //')"
-            if ! printf '%s' "$value" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
-              echo "::error::$family in rendered ConfigMap is not a valid JSON array of strings." >&2
+            value="$(jq -er --arg family "$family" '.data[$family]' <<< "$config_json")"
+
+            if ! printf '%s' "$value" |
+                jq -e '
+                  type == "array"
+                  and length > 0
+                  and all(.[];
+                    type == "string"
+                    and (. == "mock" or . == "openai" or . == "gemini")
+                  )
+                ' >/dev/null; then
+              echo "::error::$family in rendered ConfigMap must be a non-empty JSON array containing only mock, openai, or gemini." >&2
               exit 1
             fi
           done
