@@ -965,8 +965,11 @@ jobs:
           fi
 
           if ! printf '%s' "$providers_json" | jq -e --arg origin "$origin" '
-            .credentials.signinUrl | startswith($origin + "/api/auth/")
-            and .credentials.callbackUrl | startswith($origin + "/api/auth/")
+            [
+              .credentials.signinUrl,
+              .credentials.callbackUrl
+            ]
+            | all(.[]; startswith($origin + "/api/auth/"))
           ' >/dev/null; then
             echo "::error::Auth.js provider URLs do not use the public origin $origin" >&2
             echo "--- providers response ---" >&2
