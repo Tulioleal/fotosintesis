@@ -7,6 +7,7 @@ from app.schemas.reminders import ReminderRecurrence
 
 
 AssistantMessageContentFormat = Literal["plain_text", "markdown"]
+SourceProvenance = Literal["trusted", "external_fallback"]
 DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT: AssistantMessageContentFormat = "plain_text"
 
 
@@ -15,6 +16,7 @@ class AssistantSource(ApiSchema):
     url: str
     domain: str | None = None
     confidence: float | None = None
+    source_provenance: SourceProvenance | None = None
 
 
 class AssistantMessage(ApiSchema):

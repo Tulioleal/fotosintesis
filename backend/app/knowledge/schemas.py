@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -12,6 +13,11 @@ class ReviewStatus(str, Enum):
     needs_review = "needs_review"
     reviewed = "reviewed"
     rejected = "rejected"
+
+
+class ValidatedClaimIndexStatus(str, Enum):
+    pending = "pending"
+    complete = "complete"
 
 
 class AcquisitionStatus(str, Enum):
@@ -70,6 +76,8 @@ class KnowledgeRetrievalFilters(BaseModel):
     review_status: ReviewStatus | None = None
     covered_aspect: str | None = None
     evidence_type: str | None = None
+    source_provenance: Literal["trusted", "external_fallback"] | None = None
+    answerability_status: Literal["full", "partial"] | None = None
     retrieved_after: datetime | None = None
     retrieved_before: datetime | None = None
     created_after: datetime | None = None
@@ -79,6 +87,15 @@ class KnowledgeRetrievalFilters(BaseModel):
 class PersistedKnowledgeDocument(BaseModel):
     id: UUID
     chunks: list[KnowledgeChunk]
+
+
+class ValidatedClaimState(BaseModel):
+    document_id: UUID
+    index_status: ValidatedClaimIndexStatus
+    chunks: list[KnowledgeChunk]
+    embeddings: list[list[float]]
+    embedding_provider: str
+    embedding_model: str | None = None
 
 
 class KnowledgeAcquisitionResult(BaseModel):

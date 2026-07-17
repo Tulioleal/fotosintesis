@@ -1,7 +1,7 @@
 from math import sqrt
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import (
@@ -19,6 +19,8 @@ from app.knowledge.schemas import (
     KnowledgeRetrievalFilters,
     PersistedKnowledgeDocument,
     ReviewStatus,
+    ValidatedClaimIndexStatus,
+    ValidatedClaimState,
 )
 
 
@@ -32,19 +34,28 @@ class KnowledgeRepository(RepositoryBase):
         document: KnowledgeDocumentInput,
         *,
         chunks: list[KnowledgeChunk] | None = None,
+        commit: bool = True,
+        ingestion_key: str | None = None,
+        document_id: UUID | None = None,
+        validated_claim_index_status: ValidatedClaimIndexStatus | None = None,
     ) -> PersistedKnowledgeDocument:
-        document_id = uuid4()
+        document_id = document_id or uuid4()
+        insert_values = dict(
+            id=document_id,
+            species_id=document.species_id,
+            scientific_name=document.scientific_name,
+            topic=document.topic,
+            title=document.title,
+            content=document.content,
+            confidence=document.confidence,
+            review_status=document.review_status.value,
+        )
+        if ingestion_key is not None:
+            insert_values["validated_claim_ingestion_key"] = ingestion_key
+        if validated_claim_index_status is not None:
+            insert_values["validated_claim_index_status"] = validated_claim_index_status.value
         await self.session.execute(
-            insert(knowledge_documents).values(
-                id=document_id,
-                species_id=document.species_id,
-                scientific_name=document.scientific_name,
-                topic=document.topic,
-                title=document.title,
-                content=document.content,
-                confidence=document.confidence,
-                review_status=document.review_status.value,
-            )
+            insert(knowledge_documents).values(**insert_values)
         )
 
         source_ids: dict[str, UUID] = {}
@@ -66,7 +77,7 @@ class KnowledgeRepository(RepositoryBase):
 
         saved_chunks: list[KnowledgeChunk] = []
         for chunk in chunks or chunk_document(document):
-            chunk_id = uuid4()
+            chunk_id = chunk.id or uuid4()
             source_id = source_ids.get(chunk.source_url)
             await self.session.execute(
                 insert(knowledge_chunks).values(
@@ -92,7 +103,8 @@ class KnowledgeRepository(RepositoryBase):
                 )
             )
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
         return PersistedKnowledgeDocument(id=document_id, chunks=saved_chunks)
 
     async def add_embeddings(
@@ -102,6 +114,7 @@ class KnowledgeRepository(RepositoryBase):
         embeddings: list[list[float]],
         provider: str,
         model: str | None,
+        commit: bool = True,
     ) -> None:
         if len(chunks) != len(embeddings):
             raise ValueError("Embedding count must match chunk count")
@@ -121,7 +134,8 @@ class KnowledgeRepository(RepositoryBase):
                     embedding_dimension=len(embedding),
                 )
             )
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     def _validate_embedding_dimension(self, embedding: list[float]) -> None:
         expected_dimension = self.settings.embedding_dimension
@@ -168,6 +182,93 @@ class KnowledgeRepository(RepositoryBase):
             )
         return chunks[:limit]
 
+    async def find_document_by_ingestion_key(self, ingestion_key: str) -> UUID | None:
+        row = (
+            await self.session.execute(
+                select(knowledge_documents.c.id).where(
+                    knowledge_documents.c.validated_claim_ingestion_key == ingestion_key
+                )
+            )
+        ).first()
+        return row._mapping["id"] if row else None
+
+    async def get_validated_claim_state(
+        self, ingestion_key: str
+    ) -> ValidatedClaimState | None:
+        document = (
+            await self.session.execute(
+                select(
+                    knowledge_documents.c.id,
+                    knowledge_documents.c.validated_claim_index_status,
+                ).where(
+                    knowledge_documents.c.validated_claim_ingestion_key == ingestion_key
+                )
+            )
+        ).mappings().one_or_none()
+        if document is None:
+            return None
+        if document["validated_claim_index_status"] is None:
+            raise ValueError("validated claim document is missing index status")
+
+        rows = (
+            await self.session.execute(
+                select(
+                    knowledge_chunks,
+                    knowledge_embeddings.c.embedding.label("stored_embedding"),
+                    knowledge_embeddings.c.provider.label("embedding_provider"),
+                    knowledge_embeddings.c.model.label("embedding_model"),
+                )
+                .join(
+                    knowledge_embeddings,
+                    knowledge_embeddings.c.chunk_id == knowledge_chunks.c.id,
+                )
+                .where(knowledge_chunks.c.document_id == document["id"])
+                .order_by(knowledge_chunks.c.chunk_index)
+            )
+        ).mappings().all()
+        if not rows:
+            raise ValueError("validated claim document has no persisted chunks and embeddings")
+
+        return ValidatedClaimState(
+            document_id=document["id"],
+            index_status=ValidatedClaimIndexStatus(
+                document["validated_claim_index_status"]
+            ),
+            chunks=[_row_to_chunk(row) for row in rows],
+            embeddings=[list(row["stored_embedding"]) for row in rows],
+            embedding_provider=rows[0]["embedding_provider"],
+            embedding_model=rows[0]["embedding_model"],
+        )
+
+    async def mark_validated_claim_index_complete(self, document_id: UUID) -> None:
+        result = await self.session.execute(
+            update(knowledge_documents)
+            .where(
+                knowledge_documents.c.id == document_id,
+                knowledge_documents.c.validated_claim_index_status.in_(
+                    [
+                        ValidatedClaimIndexStatus.pending.value,
+                        ValidatedClaimIndexStatus.complete.value,
+                    ]
+                ),
+            )
+            .values(
+                validated_claim_index_status=ValidatedClaimIndexStatus.complete.value,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount != 1:
+            raise ValueError("validated claim document was not available for completion")
+
+    async def set_document_ingestion_key(
+        self, *, document_id: UUID, ingestion_key: str
+    ) -> None:
+        await self.session.execute(
+            update(knowledge_documents)
+            .where(knowledge_documents.c.id == document_id)
+            .values(validated_claim_ingestion_key=ingestion_key)
+        )
+
     async def get_chunks_by_ids(self, chunk_ids: list[UUID]) -> dict[UUID, KnowledgeChunk]:
         if not chunk_ids:
             return {}
@@ -199,6 +300,16 @@ def _build_filter_conditions(filters: KnowledgeRetrievalFilters) -> list:
         conditions.append(knowledge_chunks.c.metadata["covered_aspects"].contains(filters.covered_aspect))
     if filters.evidence_type:
         conditions.append(knowledge_chunks.c.metadata["evidence_type"].as_string() == filters.evidence_type)
+    if filters.source_provenance:
+        conditions.append(
+            knowledge_chunks.c.metadata["source_provenance"].as_string()
+            == filters.source_provenance
+        )
+    if filters.answerability_status:
+        conditions.append(
+            knowledge_chunks.c.metadata["answerability_status"].as_string()
+            == filters.answerability_status
+        )
     if filters.retrieved_after:
         conditions.append(knowledge_chunks.c.retrieved_at >= filters.retrieved_after)
     if filters.retrieved_before:

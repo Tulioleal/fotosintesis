@@ -108,10 +108,13 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
 4. **Provider API key projection** - the `Verify required provider API
    key secrets` step fails the deploy when a configured provider is
    missing its key.
-5. **Migration completion** - `kubectl wait --for=condition=complete`
-   on `job/fotosintesis-migrations` with a 600-second timeout.
-6. **Backend and frontend rollout** - `kubectl rollout status` with a
-   600-second timeout.
+5. **Migration completion** - the workflow applies only the migration Job,
+   verifies its container exits successfully, and does not apply the API,
+   worker, or frontend until that check passes.
+6. **Backend, worker, and frontend rollout** - the shared rollout script waits
+   up to 600 seconds for each Deployment. On failure it prints Deployment,
+   ReplicaSet, Pod, current/previous container, Cloud SQL proxy, and event
+   diagnostics before failing the workflow.
 7. **Backend in-cluster smoke** - a one-off curl pod hits
    `http://fotosintesis-backend.<namespace>.svc.cluster.local:8000/health`.
 8. **Frontend public smoke** - 60 retries against the configured
@@ -121,6 +124,29 @@ The `release.yml` summary step also includes the per-gate results from
 `deploy.yml` (`migration_result`, `rollout_result`,
 `required_keys_result`, `backend_smoke_result`, `frontend_smoke_result`)
 so a single workflow view captures the entire release.
+
+The last-healthy image pair is written to the
+`fotosintesis-release-state` ConfigMap only after migration, all three
+rollouts, and both smoke checks pass. A worker rollout failure therefore fails
+the deployment and cannot replace the last-known-good release record.
+
+## Durable job rollout controls
+
+`JOBS_PRODUCER_ENABLED` and `JOBS_WORKER_ENABLED` are independent repository
+variables. Deployment defaults keep producers off and the worker process on:
+
+- `JOBS_PRODUCER_ENABLED=false` prevents the API from creating new durable
+  ingestion jobs.
+- `JOBS_WORKER_ENABLED=true` allows the worker to consume eligible persisted
+  jobs.
+- `JOBS_WORKER_ENABLED=false` keeps the worker process deployed and ready after
+  a read-only database check, but it does not claim work.
+
+Keep producers disabled for the initial schema and worker rollout. Enable them
+only after the migration, worker readiness, retry/idempotency, telemetry, and
+deployment verification gates pass. API and worker Deployments always use the
+same immutable backend SHA so their payload contracts and registered handlers
+remain compatible.
 
 ## How to find the deployed image tag
 

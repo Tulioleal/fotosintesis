@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "openapi:export": "python3 ../backend/scripts/export_openapi.py src/lib/generated/openapi.json",
     "openapi:generate": "pnpm openapi:export && openapi-typescript src/lib/generated/openapi.json -o src/lib/generated/openapi.d.ts",
-    "openapi:check": "pnpm openapi:generate && git diff --exit-code -- src/lib/generated/openapi.json src/lib/generated/openapi.d.ts",
+    "openapi:check": "node scripts/check-openapi.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test"

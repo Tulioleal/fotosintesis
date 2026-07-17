@@ -1,0 +1,251 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fotosintesis-worker
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-worker
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fotosintesis-worker
+        app.kubernetes.io/part-of: fotosintesis-ai
+        iam.gke.io/workload-identity: fotosintesis-backend
+    spec:
+      serviceAccountName: fotosintesis-backend
+      terminationGracePeriodSeconds: __JOBS_TERMINATION_GRACE_PERIOD_SECONDS__
+      containers:
+        - name: worker
+          image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - app.jobs.worker
+          env:
+            - name: APP_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: APP_ENV
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: __DATABASE_URL_SECRET_KEY__
+            - name: OBJECT_STORAGE_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OBJECT_STORAGE_PROVIDER
+            - name: OBJECT_STORAGE_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OBJECT_STORAGE_BUCKET
+            - name: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+            - name: CLOUD_SQL_DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: CLOUD_SQL_DATABASE_NAME
+            - name: MODEL_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: MODEL_PROVIDER
+            - name: VISION_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: VISION_PROVIDER
+            - name: JUDGE_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: JUDGE_PROVIDER
+            - name: SEARCH_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: SEARCH_PROVIDER
+            - name: EMBEDDING_PROVIDER
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: EMBEDDING_PROVIDER
+            - name: MODEL_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: MODEL_PROVIDERS
+            - name: VISION_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: VISION_PROVIDERS
+            - name: JUDGE_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: JUDGE_PROVIDERS
+            - name: SEARCH_PROVIDERS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: SEARCH_PROVIDERS
+            - name: OPENAI_TEXT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_TEXT_MODEL
+            - name: OPENAI_VISION_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_VISION_MODEL
+            - name: OPENAI_JUDGE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_JUDGE_MODEL
+            - name: OPENAI_SEARCH_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_SEARCH_MODEL
+            - name: OPENAI_EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: OPENAI_EMBEDDING_MODEL
+            - name: GEMINI_TEXT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_TEXT_MODEL
+            - name: GEMINI_VISION_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_VISION_MODEL
+            - name: GEMINI_JUDGE_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_JUDGE_MODEL
+            - name: GEMINI_SEARCH_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: GEMINI_SEARCH_MODEL
+            - name: EMBEDDING_DIMENSION
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: EMBEDDING_DIMENSION
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: openai-api-key
+                  optional: true
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: gemini-api-key
+                  optional: true
+            - name: JOBS_WORKER_ENABLED
+              value: "__JOBS_WORKER_ENABLED__"
+            - name: JOBS_POLL_INTERVAL_SECONDS
+              value: "__JOBS_POLL_INTERVAL_SECONDS__"
+            - name: JOBS_BATCH_SIZE
+              value: "__JOBS_BATCH_SIZE__"
+            - name: JOBS_WORKER_CONCURRENCY
+              value: "__JOBS_WORKER_CONCURRENCY__"
+            - name: JOBS_LEASE_DURATION_SECONDS
+              value: "__JOBS_LEASE_DURATION_SECONDS__"
+            - name: JOBS_LEASE_RENEWAL_INTERVAL_SECONDS
+              value: "__JOBS_LEASE_RENEWAL_INTERVAL_SECONDS__"
+            - name: JOBS_MAX_ATTEMPTS_DEFAULT
+              value: "__JOBS_MAX_ATTEMPTS_DEFAULT__"
+            - name: JOBS_BACKOFF_BASE_SECONDS
+              value: "__JOBS_BACKOFF_BASE_SECONDS__"
+            - name: JOBS_BACKOFF_CAP_SECONDS
+              value: "__JOBS_BACKOFF_CAP_SECONDS__"
+            - name: JOBS_SHUTDOWN_DRAIN_SECONDS
+              value: "__JOBS_SHUTDOWN_DRAIN_SECONDS__"
+            - name: JOBS_METRICS_HOST
+              value: "__JOBS_METRICS_HOST__"
+            - name: JOBS_METRICS_PORT
+              value: "__JOBS_METRICS_PORT__"
+          ports:
+            - name: metrics
+              containerPort: __JOBS_METRICS_PORT__
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        - name: cloud-sql-proxy
+          image: __CLOUD_SQL_PROXY_IMAGE__
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--structured-logs"
+            - "--port=__CLOUD_SQL_PROXY_PORT__"
+            - "__CLOUD_SQL_INSTANCE_CONNECTION_NAME__"
+          ports:
+            - name: cloudsql
+              containerPort: __CLOUD_SQL_PROXY_PORT__
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: fotosintesis-worker
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-worker
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

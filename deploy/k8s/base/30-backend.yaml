@@ -165,6 +165,10 @@ spec:
                   name: __RUNTIME_SECRET_NAME__
                   key: gemini-api-key
                   optional: true
+            - name: JOBS_PRODUCER_ENABLED
+              value: "__JOBS_PRODUCER_ENABLED__"
+            - name: JOBS_MAX_ATTEMPTS_DEFAULT
+              value: "__JOBS_MAX_ATTEMPTS_DEFAULT__"
           readinessProbe:
             httpGet:
               path: /health

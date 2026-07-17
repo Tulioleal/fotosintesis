@@ -227,6 +227,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job Status */
+        get: operations["get_job_status_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/light-measurements": {
         parameters: {
             query?: never;
@@ -490,6 +507,8 @@ export interface components {
             confidence?: number | null;
             /** Domain */
             domain?: string | null;
+            /** Source Provenance */
+            source_provenance?: ("trusted" | "external_fallback") | null;
             /** Title */
             title?: string | null;
             /** Url */
@@ -676,6 +695,54 @@ export interface components {
          */
         IdentificationStatus: "needs_confirmation" | "retry_needed" | "no_reliable_candidate";
         /**
+         * JobFailureCategory
+         * @enum {string}
+         */
+        JobFailureCategory: "invalid_payload" | "unsupported_payload_version" | "unknown_job_type" | "database_transient" | "provider_transient" | "indexing_transient" | "invariant_violation" | "attempts_exhausted" | "unexpected_error" | "lease_expired" | "lease_lost";
+        /**
+         * JobLimitation
+         * @enum {string}
+         */
+        JobLimitation: "some_claims_failed" | "indexing_deferred";
+        /**
+         * JobStatus
+         * @enum {string}
+         */
+        JobStatus: "pending" | "processing" | "complete" | "partial" | "failed";
+        /** JobStatusResponse */
+        JobStatusResponse: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            job_type: components["schemas"]["JobType"];
+            last_error?: components["schemas"]["ReadJobError"] | null;
+            /** Max Attempts */
+            max_attempts: number;
+            result?: components["schemas"]["ReadJobResult"] | null;
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * JobType
+         * @enum {string}
+         */
+        JobType: "ingest_validated_claims";
+        /**
          * LightClassification
          * @enum {string}
          */
@@ -833,6 +900,40 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+        };
+        /** ReadJobError */
+        ReadJobError: {
+            category: components["schemas"]["JobFailureCategory"];
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+        };
+        /** ReadJobResult */
+        ReadJobResult: {
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /** Limitations */
+            limitations?: components["schemas"]["JobLimitation"][];
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Succeeded
+             * @default 0
+             */
+            succeeded: number;
         };
         /** RecoveryConfirmRequest */
         RecoveryConfirmRequest: {
@@ -1516,6 +1617,55 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ConfirmationResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_status_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -4,6 +4,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.assistant import router as assistant_router
+from app.api.jobs import router as jobs_router
 from app.api.auth import router as auth_router
 from app.api.home import router as home_router
 from app.api.identifications import router as identifications_router
@@ -46,6 +47,7 @@ def create_app() -> CorsApplication:
     app.include_router(identifications_router)
     app.include_router(profile_garden_router)
     app.include_router(assistant_router)
+    app.include_router(jobs_router)
     app.include_router(reminders_router)
     app.include_router(light_measurements_router)
 

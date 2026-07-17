@@ -180,6 +180,7 @@ def _sources_from_web_results(
                 "evidence_source": evidence.evidence_source,
                 "fetch_status": evidence.fetch_status,
                 "snippet_only": not evidence.has_fetched_content,
+                "source_provenance": evidence.validation_status,
             }
         )
     return sources

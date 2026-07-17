@@ -6,13 +6,13 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
-      - "deploy/k8s/base/**"
+      - "deploy/k8s/**"
       - "infra/opentofu/**"
   pull_request:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
-      - "deploy/k8s/base/**"
+      - "deploy/k8s/**"
   workflow_call:
     inputs:
       environment:
@@ -65,11 +65,53 @@ jobs:
           EMBEDDING_PROVIDER: mock
           OBJECT_STORAGE_PROVIDER: local
           OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
-        run: pytest
+        run: pytest --ignore=tests/integration
+
+  pg-test:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: fotosintesis
+          POSTGRES_USER: fotosintesis
+          POSTGRES_PASSWORD: fotosintesis
+        options: >-
+          --health-cmd pg_isready -U fotosintesis -d fotosintesis
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
+      - name: Run PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis
+          MODEL_PROVIDER: mock
+          VISION_PROVIDER: mock
+          JUDGE_PROVIDER: mock
+          SEARCH_PROVIDER: mock
+          EMBEDDING_PROVIDER: mock
+          OBJECT_STORAGE_PROVIDER: local
+          OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
+        run: pytest tests/integration -v
 
   build:
     name: Build and push backend image
-    needs: validate
+    needs: [validate, pg-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: dev

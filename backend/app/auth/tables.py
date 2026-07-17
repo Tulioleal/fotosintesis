@@ -105,8 +105,22 @@ knowledge_documents = sa.Table(
     sa.Column("content", sa.Text(), nullable=False),
     sa.Column("confidence", sa.Float(), nullable=False),
     sa.Column("review_status", sa.String(length=40), nullable=False, index=True),
+    sa.Column("validated_claim_ingestion_key", sa.String(length=255), nullable=True),
+    sa.Column("validated_claim_index_status", sa.String(length=20), nullable=True),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.CheckConstraint(
+        "validated_claim_index_status IS NULL OR "
+        "validated_claim_index_status IN ('pending', 'complete')",
+        name="ck_knowledge_documents_validated_claim_index_status",
+    ),
+)
+sa.Index(
+    "uq_knowledge_documents_validated_claim_ingestion_key",
+    knowledge_documents.c.validated_claim_ingestion_key,
+    unique=True,
+    postgresql_where=knowledge_documents.c.validated_claim_ingestion_key.is_not(None),
+    sqlite_where=knowledge_documents.c.validated_claim_ingestion_key.is_not(None),
 )
 
 knowledge_sources = sa.Table(
@@ -278,6 +292,54 @@ reminders = sa.Table(
     sa.Column("status", sa.String(length=40), nullable=False, server_default="pending"),
     sa.Column("suggestion_justification", sa.Text(), nullable=True),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)
+
+application_jobs = sa.Table(
+    "application_jobs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True),
+    sa.Column("conversation_id", sa.Uuid(), nullable=True),
+    sa.Column("job_type", sa.String(length=80), nullable=False),
+    sa.Column("payload_version", sa.Integer(), nullable=False),
+    sa.Column("payload", sa.JSON(), nullable=False),
+    sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
+    sa.Column("idempotency_key", sa.String(length=255), nullable=False),
+    sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
+    sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="1"),
+    sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("lease_owner", sa.String(length=255), nullable=True),
+    sa.Column("lease_token", sa.String(length=255), nullable=True),
+    sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("last_error", sa.JSON(), nullable=True),
+    sa.Column("result", sa.JSON(), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+    sa.UniqueConstraint("job_type", "idempotency_key", name="uq_application_jobs_job_type_idempotency_key"),
+    sa.CheckConstraint("status IN ('pending', 'processing', 'complete', 'partial', 'failed')", name="ck_application_jobs_status"),
+    sa.CheckConstraint("job_type IN ('ingest_validated_claims')", name="ck_application_jobs_type"),
+    sa.CheckConstraint("payload_version >= 1", name="ck_application_jobs_payload_version"),
+    sa.CheckConstraint("attempt_count >= 0", name="ck_application_jobs_attempt_count"),
+    sa.CheckConstraint("max_attempts >= 1", name="ck_application_jobs_max_attempts"),
+    sa.CheckConstraint(
+        "(lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+        "(lease_owner IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL)",
+        name="ck_application_jobs_lease_consistency",
+    ),
+)
+
+sa.Index(
+    "ix_application_jobs_status_available_at",
+    application_jobs.c.status,
+    application_jobs.c.available_at,
+    postgresql_where=application_jobs.c.status.in_(["pending", "processing"]),
+)
+sa.Index(
+    "ix_application_jobs_processing_lease_expires",
+    application_jobs.c.status,
+    application_jobs.c.lease_expires_at,
+    postgresql_where=application_jobs.c.status == "processing",
 )
 
 light_measurements = sa.Table(

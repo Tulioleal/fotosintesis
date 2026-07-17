@@ -38,7 +38,6 @@ class AssistantRepository(RepositoryBase):
         await self.session.execute(
             insert(conversations).values(id=new_id, user_id=user_id, title=title[:240])
         )
-        await self.session.commit()
         return new_id
 
     async def add_message(
@@ -58,7 +57,6 @@ class AssistantRepository(RepositoryBase):
             .where(conversations.c.id == conversation_id)
             .values(updated_at=datetime.now(timezone.utc))
         )
-        await self.session.commit()
 
     async def list_garden(self, *, user_id: UUID) -> list[dict]:
         rows = (

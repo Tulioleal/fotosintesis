@@ -122,8 +122,8 @@ cat > values.env <<EOF
 NAMESPACE=fotosintesis
 APP_ENV=dev
 IMAGE_REGISTRY=$(tofu output -raw artifact_repository_url)
-BACKEND_IMAGE_TAG=latest
-FRONTEND_IMAGE_TAG=latest
+BACKEND_IMAGE_TAG=<40-character-git-sha>
+FRONTEND_IMAGE_TAG=<40-character-git-sha>
 BACKEND_REPLICAS=1
 FRONTEND_REPLICAS=1
 FRONTEND_SERVICE_TYPE=ClusterIP
@@ -149,6 +149,20 @@ GEMINI_JUDGE_MODEL=gemini-2.5-flash
 GEMINI_SEARCH_MODEL=gemini-2.5-flash
 EMBEDDING_DIMENSION=8
 RUNTIME_SECRET_NAME=fotosintesis-runtime
+JOBS_PRODUCER_ENABLED=false
+JOBS_WORKER_ENABLED=true
+JOBS_POLL_INTERVAL_SECONDS=5
+JOBS_BATCH_SIZE=10
+JOBS_WORKER_CONCURRENCY=5
+JOBS_LEASE_DURATION_SECONDS=300
+JOBS_LEASE_RENEWAL_INTERVAL_SECONDS=60
+JOBS_MAX_ATTEMPTS_DEFAULT=3
+JOBS_BACKOFF_BASE_SECONDS=10
+JOBS_BACKOFF_CAP_SECONDS=3600
+JOBS_SHUTDOWN_DRAIN_SECONDS=30
+JOBS_METRICS_HOST=0.0.0.0
+JOBS_METRICS_PORT=9100
+JOBS_TERMINATION_GRACE_PERIOD_SECONDS=90
 EOF
 ```
 
@@ -185,21 +199,43 @@ These values map to OpenTofu outputs:
 - `CLOUD_SQL_INSTANCE_CONNECTION_NAME`: `cloud_sql_instance_connection_name`
 - `CLOUD_SQL_DATABASE_NAME`: `cloud_sql_database_name`
 
-Render manifests into an ignored directory and deploy:
+Render manifests into an ignored directory. Apply prerequisites first, then the
+migration Job by itself. Do not apply the whole rendered directory: doing so can
+start a new API or worker before its schema exists.
 
 ```bash
 sh ../../../deploy/k8s/render.sh values.env ../../../.generated/k8s/dev
-kubectl apply -f ../../../.generated/k8s/dev
-kubectl -n fotosintesis wait --for=condition=complete job/fotosintesis-migrations --timeout=300s
-kubectl -n fotosintesis rollout status deployment/fotosintesis-backend
-kubectl -n fotosintesis rollout status deployment/fotosintesis-frontend
-```
+RENDERED=../../../.generated/k8s/dev
 
-If the migration Job already exists from a previous run, delete it before applying the rendered manifests again:
+kubectl apply -f "$RENDERED/00-namespace.yaml"
+kubectl apply -f "$RENDERED/10-service-accounts.yaml"
+kubectl apply -f "$RENDERED/20-config.yaml"
+kubectl apply -f "$RENDERED/80-external-secrets.yaml"
 
-```bash
 kubectl -n fotosintesis delete job/fotosintesis-migrations --ignore-not-found
+kubectl apply -f "$RENDERED/50-migrations.yaml"
+kubectl -n fotosintesis wait --for=condition=complete \
+  job/fotosintesis-migrations --timeout=600s
+
+kubectl apply -f "$RENDERED/30-backend.yaml"
+kubectl apply -f "$RENDERED/55-worker.yaml"
+kubectl apply -f "$RENDERED/40-frontend.yaml"
+kubectl apply -f "$RENDERED/70-ingress.yaml"
+# Apply 60-managed-certificate.yaml only in hostname-https mode.
+
+sh ../../../deploy/scripts/rollout-deployment.sh \
+  fotosintesis fotosintesis-backend backend 600s
+sh ../../../deploy/scripts/rollout-deployment.sh \
+  fotosintesis fotosintesis-worker worker 600s
+sh ../../../deploy/scripts/rollout-deployment.sh \
+  fotosintesis fotosintesis-frontend frontend 600s
 ```
+
+Wait for the ExternalSecret to project the runtime Secret before applying the
+migration. The GitHub deploy workflow performs that wait and the provider-key
+gate automatically. It records the last-healthy image pair only after migration,
+all three rollouts, and smoke checks pass; a worker rollout failure therefore
+cannot be recorded as healthy.
 
 ## Rollback
 
@@ -215,6 +251,11 @@ kubectl -n fotosintesis rollout status deployment/fotosintesis-backend
 ```
 
 Migration jobs are not automatically reversible. If a migration must be rolled back, restore from an approved database backup or apply a reviewed forward-fix migration, then redeploy the backend image that matches the database state.
+
+The backend API and worker use the same immutable backend SHA and must remain
+compatible with the schema and all persisted payload versions still in flight.
+Disable `JOBS_PRODUCER_ENABLED` to stop new jobs independently from
+`JOBS_WORKER_ENABLED`; do not restore the former in-memory ingestion path.
 
 If an infrastructure change must be rolled back, revert the OpenTofu change and run a new `tofu plan` before applying.
 

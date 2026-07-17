@@ -8,6 +8,14 @@ from uuid import UUID
 from app.knowledge.schemas import KnowledgeChunk
 
 
+class VectorIndexError(RuntimeError):
+    pass
+
+
+class VectorIndexIncomplete(VectorIndexError):
+    pass
+
+
 @dataclass(frozen=True)
 class LlamaIndexPgVectorConfig:
     database: str
@@ -45,4 +53,6 @@ __all__ = [
     "MetadataFilterSpec",
     "OrchestratedKnowledgeIngestion",
     "RetrievedNode",
+    "VectorIndexError",
+    "VectorIndexIncomplete",
 ]

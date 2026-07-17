@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -604,107 +604,140 @@ async def test_assistant_service_does_not_mark_display_name_as_operational(
 
     assert messages[0].metadata["display_plant_name"] == "Tomato"
     assert "operational_plant_name" not in messages[0].metadata
-
-async def test_background_ingestion_failure_logs_plant_and_source_context(
+async def test_assistant_chat_enqueues_job_when_claims_present(
+    session_factory,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeSession:
-        async def __aenter__(self):
-            return self
+    from app.jobs.repository import JobRepository
+    from app.auth.tables import application_jobs
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    class FakeGraphWithClaims:
+        async def run(self, **kwargs):
+            return {
+                "answer": "Some answer.",
+                "sources": [],
+                "tool_failures": [],
+                "ingestion_claims": [
+                    {
+                        "scientific_name": "Cotyledon tomentosa",
+                        "source_url": "https://example.org/watering",
+                        "source_domain": "example.org",
+                        "topic": "care",
+                        "claim": "Water weekly",
+                        "evidence_quote": "Water once a week in summer",
+                        "source_provenance": "trusted",
+                        "confidence": 0.8,
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "answerability_status": "partial",
+                    }
+                ],
+                "answerability_status": "partial",
+            }
 
-        async def rollback(self) -> None:
-            pass
-
-        async def commit(self) -> None:
-            pass
-
-    class FailingTools:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def ingest_validated_claims(self, claims):
-            return ToolResult(ok=False, error="embedding unavailable")
-
-    claims = [
-        {
-            "scientific_name": "Cotyledon tomentosa",
-            "source_url": "https://example.org/watering",
-            "source_domain": "example.org",
-        }
-    ]
-    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(assistant_service, "AssistantTools", FailingTools)
-    caplog.set_level("WARNING", logger="app.assistant.service")
-
-    await _ingest_validated_claims_background(
-        claims=claims,
-        conversation_id=uuid4(),
-        answerability_status="partial",
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    # Clear the settings cache so the env var is picked up
+    from app.core.settings import get_settings
+    get_settings.cache_clear()
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraphWithClaims()
+        _ = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+        )
 
-    record = next(
-        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_failed"
-    )
-    assert record.answerability_status == "partial"
-    assert record.claim_count == 1
-    assert record.scientific_names == ["Cotyledon tomentosa"]
-    assert record.source_urls == ["https://example.org/watering"]
-    assert record.source_domains == ["example.org"]
-    assert record.error == "embedding unavailable"
+        rows = (await session.execute(select(application_jobs))).all()
+        await session.commit()
 
-async def test_background_ingestion_exception_logs_plant_and_source_context(
+    assert len(rows) >= 1
+    assert rows[0]._mapping["job_type"] == "ingest_validated_claims"
+    assert rows[0]._mapping["payload"]["claims"][0]["source_provenance"] == "trusted"
+    get_settings.cache_clear()
+
+
+async def test_assistant_chat_rejects_claim_without_provenance_before_enqueue(
+    session_factory,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeSession:
-        async def __aenter__(self):
-            return self
+    from pydantic import ValidationError
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    from app.auth.tables import application_jobs, conversation_messages
+    from app.core.settings import get_settings
 
-        async def rollback(self) -> None:
-            pass
+    class FakeGraphWithInvalidClaim:
+        async def run(self, **kwargs):
+            return {
+                "answer": "Some answer.",
+                "sources": [],
+                "tool_failures": [],
+                "ingestion_claims": [
+                    {
+                        "scientific_name": "Cotyledon tomentosa",
+                        "source_url": "https://example.org/watering",
+                        "source_domain": "example.org",
+                        "topic": "care",
+                        "claim": "Water weekly",
+                        "evidence_quote": "Water once a week in summer",
+                        "confidence": 0.8,
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "answerability_status": "partial",
+                    }
+                ],
+                "answerability_status": "partial",
+            }
 
-        async def commit(self) -> None:
-            pass
-
-    class RaisingTools:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def ingest_validated_claims(self, claims):
-            raise RuntimeError("index unavailable")
-
-    claims = [
-        {
-            "scientific_name": "Cotyledon tomentosa",
-            "source_url": "https://example.org/watering",
-            "source_domain": "example.org",
-        }
-    ]
-    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(assistant_service, "AssistantTools", RaisingTools)
-    caplog.set_level("ERROR", logger="app.assistant.service")
-
-    await _ingest_validated_claims_background(
-        claims=claims,
-        conversation_id=uuid4(),
-        answerability_status="partial",
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    get_settings.cache_clear()
 
-    record = next(
-        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_exception"
+    with pytest.raises(ValidationError):
+        async with session_factory() as session:
+            service = AssistantService(session)
+            service.graph = FakeGraphWithInvalidClaim()
+            await service.chat(
+                user_id=uuid4(),
+                payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+            )
+
+    async with session_factory() as verification:
+        assert not (await verification.execute(select(application_jobs))).all()
+        assert not (await verification.execute(select(conversation_messages))).all()
+    get_settings.cache_clear()
+
+
+async def test_assistant_chat_empty_claims_skips_enqueue(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.auth.tables import application_jobs
+
+    class FakeGraphNoClaims:
+        async def run(self, **kwargs):
+            return {"answer": "No claims.", "sources": [], "tool_failures": [], "ingestion_claims": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
-    assert record.answerability_status == "partial"
-    assert record.claim_count == 1
-    assert record.scientific_names == ["Cotyledon tomentosa"]
-    assert record.source_urls == ["https://example.org/watering"]
-    assert record.source_domains == ["example.org"]
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraphNoClaims()
+        _ = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+        )
+
+        rows = (await session.execute(select(application_jobs))).all()
+        await session.commit()
+
+    assert len(rows) == 0
 
 async def test_assistant_service_total_generation_failure_returns_retryable_error(
     session_factory,
@@ -759,4 +792,3 @@ async def test_assistant_service_total_generation_failure_returns_retryable_erro
     assert response.provider_failures[0].provider == "gemini"
     assert response.conversation_id is not None
     assert [message.role for message in messages] == ["user"]
-

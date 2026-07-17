@@ -320,6 +320,9 @@ def _validated_claim_payloads(
             if not isinstance(url, str) or not url.strip():
                 continue
             source = sources_by_url.get(url, {})
+            source_provenance = source.get("source_provenance")
+            if source_provenance not in {"trusted", "external_fallback"}:
+                continue
             payloads.append(
                 {
                     "scientific_name": scientific_name,
@@ -333,6 +336,7 @@ def _validated_claim_payloads(
                     "source_url": url,
                     "source_title": source.get("title"),
                     "source_domain": source.get("domain"),
+                    "source_provenance": source_provenance,
                     "confidence": float(support.get("confidence", state.get("web_validation_confidence", 0.0)) or 0.0),
                     "language": state.get("answer_language") or "es",
                 }

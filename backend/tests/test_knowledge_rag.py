@@ -15,6 +15,8 @@ from app.auth.tables import (
     knowledge_embeddings,
     knowledge_sources,
 )
+from app.assistant.tools.ingestion import build_validated_claim_document
+from app.assistant.tools.types import EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
 from app.knowledge.acquisition import KnowledgeAcquisitionService, TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
 from app.knowledge.rag import (
@@ -26,6 +28,7 @@ from app.knowledge.rag import (
     build_llamaindex_metadata_filters,
     build_metadata_filter_specs,
 )
+from app.knowledge.rag.runtime import _llamaindex_chunk_metadata
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import (
     AcquisitionStatus,
@@ -122,9 +125,20 @@ class FakeLlamaRuntime:
             model="fake-llamaindex-embedding",
         )
 
-    def index_chunks(self, *, chunks, embeddings, provider, model) -> None:
+    async def index_chunks(self, *, chunks, embeddings, provider, model) -> None:
         self.index_calls += 1
         self.indexed_chunks = list(chunks)
+
+    async def ensure_nodes(self, *, chunks, embeddings, provider, model) -> None:
+        await self.index_chunks(
+            chunks=chunks,
+            embeddings=embeddings,
+            provider=provider,
+            model=model,
+        )
+
+    async def has_all_nodes(self, node_ids) -> bool:
+        return set(node_ids) == {chunk.id for chunk in self.indexed_chunks}
 
     def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
         self.retrieve_calls += 1
@@ -145,6 +159,85 @@ class FakeRetrievedNode:
     def __init__(self, chunk_id: UUID, score: float) -> None:
         self.chunk_id = chunk_id
         self.score = score
+
+
+def _validated_claim(*, source_provenance: str, confidence: float = 0.9) -> dict[str, object]:
+    return {
+        "scientific_name": "Cotyledon tomentosa",
+        "topic": "watering",
+        "source_url": "https://example.org/watering",
+        "source_domain": "example.org",
+        "source_title": "Watering guide",
+        "source_provenance": source_provenance,
+        "claim": "Water when the substrate dries.",
+        "evidence_quote": "Allow the substrate to dry before watering.",
+        "confidence": confidence,
+        "covered_aspects": ["watering_frequency_or_trigger"],
+        "required_aspects": ["watering_frequency_or_trigger"],
+        "missing_aspects": [],
+        "answerability_status": "full",
+        "language": "en",
+    }
+
+
+def test_validated_claim_document_caps_external_fallback_confidence() -> None:
+    trusted = build_validated_claim_document(
+        claim=_validated_claim(source_provenance="trusted")
+    )
+    external = build_validated_claim_document(
+        claim=_validated_claim(source_provenance="external_fallback")
+    )
+
+    assert trusted is not None
+    assert external is not None
+    assert trusted.confidence == 0.9
+    assert external.confidence == EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
+    assert external.confidence < trusted.confidence
+    assert trusted.sources[0].validation_status == "trusted"
+    assert external.sources[0].validation_status == "external_fallback"
+
+
+def test_llamaindex_chunk_metadata_preserves_validated_claim_fields() -> None:
+    now = datetime.now(timezone.utc)
+    chunk = KnowledgeChunk(
+        id=UUID("0d10f30c-7859-4f3c-b7d3-1c5999f640c8"),
+        chunk_index=0,
+        content="Water when the substrate dries.",
+        metadata={
+            "covered_aspects": ["watering_frequency_or_trigger"],
+            "required_aspects": ["watering_frequency_or_trigger"],
+            "evidence_type": "validated_web_claim",
+            "answerability_status": "full",
+            "source_provenance": "external_fallback",
+            "scientific_name": "must not override canonical fields",
+        },
+        scientific_name="Cotyledon tomentosa",
+        topic="watering",
+        source_domain="example.org",
+        source_url="https://example.org/watering",
+        confidence=EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE,
+        review_status=ReviewStatus.auto_ingested,
+        retrieved_at=now,
+        created_at=now,
+    )
+
+    metadata = _llamaindex_chunk_metadata(
+        chunk,
+        provider="test-provider",
+        model="test-model",
+        embedding_dimension=8,
+    )
+
+    assert metadata["scientific_name"] == "Cotyledon tomentosa"
+    assert metadata["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert metadata["required_aspects"] == ["watering_frequency_or_trigger"]
+    assert metadata["evidence_type"] == "validated_web_claim"
+    assert metadata["answerability_status"] == "full"
+    assert metadata["source_domain"] == "example.org"
+    assert metadata["source_provenance"] == "external_fallback"
+    assert metadata["embedding_provider"] == "test-provider"
+    assert metadata["embedding_model"] == "test-model"
+    assert metadata["embedding_dimension"] == 8
 
 
 class RecordingEmbeddingProvider:
@@ -307,6 +400,60 @@ async def test_retrieval_filters_by_metadata_and_orders_by_embedding_score(
     assert len(matched) == 1
     assert matched[0].score == 1.0
     assert missed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filter_name", "filter_value", "expected_provenance"),
+    [
+        ("source_provenance", "trusted", "trusted"),
+        ("source_provenance", "external_fallback", "external_fallback"),
+        ("answerability_status", "full", "trusted"),
+        ("answerability_status", "partial", "external_fallback"),
+    ],
+)
+async def test_relational_retrieval_filters_validated_claim_metadata(
+    session_factory: async_sessionmaker[AsyncSession],
+    filter_name: str,
+    filter_value: str,
+    expected_provenance: str,
+) -> None:
+    async with session_factory() as session:
+        repository = KnowledgeRepository(session)
+        for provenance, answerability in (
+            ("trusted", "full"),
+            ("external_fallback", "partial"),
+        ):
+            document = _document(topic="watering").model_copy(
+                update={
+                    "title": f"{provenance} guidance",
+                    "metadata": {
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "evidence_type": "validated_web_claim",
+                        "source_provenance": provenance,
+                        "answerability_status": answerability,
+                    },
+                }
+            )
+            await repository.save_document(document)
+
+        filters = KnowledgeRetrievalFilters.model_validate(
+            {
+                "topic": "watering",
+                "covered_aspect": "watering_frequency_or_trigger",
+                filter_name: filter_value,
+            }
+        )
+        matched = await repository.retrieve_chunks(filters, limit=20)
+
+    assert matched
+    assert {chunk.metadata["source_provenance"] for chunk in matched} == {
+        expected_provenance
+    }
+    expected_answerability = "full" if expected_provenance == "trusted" else "partial"
+    assert {chunk.metadata["answerability_status"] for chunk in matched} == {
+        expected_answerability
+    }
 
 
 @pytest.mark.asyncio
@@ -485,6 +632,10 @@ def test_llamaindex_metadata_filter_mapping_supports_all_retrieval_fields() -> N
         source_url="https://example.org/cotyledon-tomentosa",
         min_confidence=0.8,
         review_status=ReviewStatus.auto_ingested,
+        covered_aspect="watering_frequency_or_trigger",
+        evidence_type="validated_web_claim",
+        source_provenance="trusted",
+        answerability_status="full",
         retrieved_after=retrieved_at,
         created_before=created_at,
     )
@@ -499,6 +650,10 @@ def test_llamaindex_metadata_filter_mapping_supports_all_retrieval_fields() -> N
     assert mapped[("source_url", None)] == "https://example.org/cotyledon-tomentosa"
     assert mapped[("confidence", ">=")] == 0.8
     assert mapped[("review_status", None)] == "auto_ingested"
+    assert mapped[("covered_aspects", None)] == "watering_frequency_or_trigger"
+    assert mapped[("evidence_type", None)] == "validated_web_claim"
+    assert mapped[("source_provenance", None)] == "trusted"
+    assert mapped[("answerability_status", None)] == "full"
     assert mapped[("retrieved_at", ">=")] == retrieved_at.isoformat()
     assert mapped[("created_at", "<=")] == created_at.isoformat()
 
@@ -547,6 +702,35 @@ def test_llamaindex_metadata_filters_can_be_built_with_injected_classes() -> Non
 
     assert result.condition == "and"
     assert result.filters[0].kwargs == {"key": "topic", "value": "watering"}
+
+
+@pytest.mark.parametrize(
+    ("filter_name", "value", "metadata_key"),
+    [
+        ("source_provenance", "trusted", "source_provenance"),
+        ("source_provenance", "external_fallback", "source_provenance"),
+        ("answerability_status", "full", "answerability_status"),
+        ("answerability_status", "partial", "answerability_status"),
+    ],
+)
+def test_llamaindex_metadata_filters_preserve_closed_claim_filters(
+    filter_name: str,
+    value: str,
+    metadata_key: str,
+) -> None:
+    filters = KnowledgeRetrievalFilters.model_validate(
+        {
+            "topic": "watering",
+            "covered_aspect": "watering_frequency_or_trigger",
+            filter_name: value,
+        }
+    )
+
+    mapped = {(spec.key, spec.operator): spec.value for spec in build_metadata_filter_specs(filters)}
+
+    assert mapped[("topic", None)] == "watering"
+    assert mapped[("covered_aspects", None)] == "watering_frequency_or_trigger"
+    assert mapped[(metadata_key, None)] == value
 
 
 def test_llamaindex_retrieval_uses_app_configured_embed_model(

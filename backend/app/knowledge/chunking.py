@@ -4,6 +4,23 @@ from uuid import UUID
 from app.knowledge.schemas import KnowledgeChunk, KnowledgeDocumentInput
 
 
+CHUNK_EXTRA_METADATA_KEYS = {
+    "required_aspects",
+    "covered_aspects",
+    "missing_aspects",
+    "language",
+    "evidence_type",
+    "answerability_status",
+    "source_provenance",
+    "validation_confidence",
+    "source_support_claim",
+    "source_support_quote",
+    "persisted_from",
+    "claim_ingestion_key",
+    "ingestion_policy_version",
+}
+
+
 def chunk_document(
     document: KnowledgeDocumentInput,
     *,
@@ -63,7 +80,13 @@ def build_chunk_metadata(
         "retrieved_at": retrieved_at.isoformat(),
         "created_at": created_at.isoformat() if created_at else None,
     }
-    metadata.update(extra_metadata or {})
+    metadata.update(
+        {
+            key: value
+            for key, value in (extra_metadata or {}).items()
+            if key in CHUNK_EXTRA_METADATA_KEYS
+        }
+    )
     return metadata
 
 

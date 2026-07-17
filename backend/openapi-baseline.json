@@ -383,6 +383,21 @@
             ],
             "title": "Domain"
           },
+          "source_provenance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "trusted",
+                  "external_fallback"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provenance"
+          },
           "title": {
             "anyOf": [
               {
@@ -854,6 +869,127 @@
         "title": "IdentificationStatus",
         "type": "string"
       },
+      "JobFailureCategory": {
+        "enum": [
+          "invalid_payload",
+          "unsupported_payload_version",
+          "unknown_job_type",
+          "database_transient",
+          "provider_transient",
+          "indexing_transient",
+          "invariant_violation",
+          "attempts_exhausted",
+          "unexpected_error",
+          "lease_expired",
+          "lease_lost"
+        ],
+        "title": "JobFailureCategory",
+        "type": "string"
+      },
+      "JobLimitation": {
+        "enum": [
+          "some_claims_failed",
+          "indexing_deferred"
+        ],
+        "title": "JobLimitation",
+        "type": "string"
+      },
+      "JobStatus": {
+        "enum": [
+          "pending",
+          "processing",
+          "complete",
+          "partial",
+          "failed"
+        ],
+        "title": "JobStatus",
+        "type": "string"
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "attempt_count": {
+            "minimum": 0.0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_type": {
+            "$ref": "#/components/schemas/JobType"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_type",
+          "status",
+          "attempt_count",
+          "max_attempts",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "JobStatusResponse",
+        "type": "object"
+      },
+      "JobType": {
+        "enum": [
+          "ingest_validated_claims"
+        ],
+        "title": "JobType",
+        "type": "string"
+      },
       "LightClassification": {
         "enum": [
           "baja",
@@ -1252,6 +1388,63 @@
           "email_verified"
         ],
         "title": "PublicAuthUser",
+        "type": "object"
+      },
+      "ReadJobError": {
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/JobFailureCategory"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "category"
+        ],
+        "title": "ReadJobError",
+        "type": "object"
+      },
+      "ReadJobResult": {
+        "properties": {
+          "failed": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/JobLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "partial": {
+            "default": false,
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "skipped": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "succeeded": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Succeeded",
+            "type": "integer"
+          }
+        },
+        "title": "ReadJobResult",
         "type": "object"
       },
       "RecoveryConfirmRequest": {
@@ -2726,6 +2919,87 @@
         "summary": "Confirm Candidate",
         "tags": [
           "identifications"
+        ]
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_status_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job Status",
+        "tags": [
+          "jobs"
         ]
       }
     },

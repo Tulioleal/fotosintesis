@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -136,6 +136,48 @@ async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     assert result["ingestion_claims"][0]["scientific_name"] == "Cotyledon tomentosa"
     assert result["ingestion_claims"][0]["topic"] == "watering"
     assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["sources"][0]["source_provenance"] == "trusted"
+    assert result["ingestion_claims"][0]["source_provenance"] == "trusted"
+
+    from app.jobs.schemas import IngestValidatedClaimsPayload
+
+    payload = IngestValidatedClaimsPayload.model_validate(
+        {
+            "payload_version": 1,
+            "claims": result["ingestion_claims"],
+            "conversation_id": str(uuid4()),
+            "answerability_status": result["answerability_status"],
+        }
+    )
+    assert payload.claims[0].source_provenance.value == "trusted"
+
+
+async def test_assistant_preserves_selected_external_fallback_provenance() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        web_results=[
+            TrustedPageEvidence(
+                result=SearchResult(
+                    title="External watering guide",
+                    url="https://external.example/watering",
+                    snippet="Water when the substrate dries and avoid standing water.",
+                    source_domain="external.example",
+                ),
+                validation_status="external_fallback",
+                fetch_status="skipped",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I water my Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sources"][0]["source_provenance"] == "external_fallback"
+    assert result["ingestion_claims"][0]["source_provenance"] == "external_fallback"
 
 async def test_validated_web_metadata_uses_validation_confidence(
     monkeypatch: pytest.MonkeyPatch,

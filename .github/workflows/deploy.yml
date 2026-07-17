@@ -29,7 +29,7 @@ on:
         description: "Result of the migration Job wait."
         value: ${{ jobs.deploy.outputs.migration_result }}
       rollout_result:
-        description: "Result of the backend and frontend rollout waits."
+        description: "Result of the backend, worker, and frontend rollout waits."
         value: ${{ jobs.deploy.outputs.rollout_result }}
       required_keys_result:
         description: "Result of the provider API key secret projection check."
@@ -106,6 +106,20 @@ env:
   AUTH_SECRET_SECRET_KEY: ${{ vars.AUTH_SECRET_SECRET_KEY || 'auth-secret' }}
   DEFAULT_REPLICAS_DEV: ${{ vars.DEFAULT_REPLICAS_DEV || '1' }}
   DEFAULT_REPLICAS_PROD: ${{ vars.DEFAULT_REPLICAS_PROD || '2' }}
+  JOBS_PRODUCER_ENABLED: ${{ vars.JOBS_PRODUCER_ENABLED || 'false' }}
+  JOBS_WORKER_ENABLED: ${{ vars.JOBS_WORKER_ENABLED || 'true' }}
+  JOBS_POLL_INTERVAL_SECONDS: ${{ vars.JOBS_POLL_INTERVAL_SECONDS || '5' }}
+  JOBS_BATCH_SIZE: ${{ vars.JOBS_BATCH_SIZE || '10' }}
+  JOBS_WORKER_CONCURRENCY: ${{ vars.JOBS_WORKER_CONCURRENCY || '5' }}
+  JOBS_LEASE_DURATION_SECONDS: ${{ vars.JOBS_LEASE_DURATION_SECONDS || '300' }}
+  JOBS_LEASE_RENEWAL_INTERVAL_SECONDS: ${{ vars.JOBS_LEASE_RENEWAL_INTERVAL_SECONDS || '60' }}
+  JOBS_MAX_ATTEMPTS_DEFAULT: ${{ vars.JOBS_MAX_ATTEMPTS_DEFAULT || '3' }}
+  JOBS_BACKOFF_BASE_SECONDS: ${{ vars.JOBS_BACKOFF_BASE_SECONDS || '10' }}
+  JOBS_BACKOFF_CAP_SECONDS: ${{ vars.JOBS_BACKOFF_CAP_SECONDS || '3600' }}
+  JOBS_SHUTDOWN_DRAIN_SECONDS: ${{ vars.JOBS_SHUTDOWN_DRAIN_SECONDS || '30' }}
+  JOBS_METRICS_HOST: ${{ vars.JOBS_METRICS_HOST || '0.0.0.0' }}
+  JOBS_METRICS_PORT: ${{ vars.JOBS_METRICS_PORT || '9100' }}
+  JOBS_TERMINATION_GRACE_PERIOD_SECONDS: ${{ vars.JOBS_TERMINATION_GRACE_PERIOD_SECONDS || '90' }}
   # Service-account -> namespace service-account allow-list for one-off
   # kubectl runs (e.g. backend smoke check pods). The cluster's IAM
   # configuration still governs what the SA can do in GCP.
@@ -505,6 +519,20 @@ jobs:
             echo "GEMINI_JUDGE_MODEL=${GEMINI_JUDGE_MODEL}"
             echo "GEMINI_SEARCH_MODEL=${GEMINI_SEARCH_MODEL}"
             echo "EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}"
+            echo "JOBS_PRODUCER_ENABLED=${JOBS_PRODUCER_ENABLED}"
+            echo "JOBS_WORKER_ENABLED=${JOBS_WORKER_ENABLED}"
+            echo "JOBS_POLL_INTERVAL_SECONDS=${JOBS_POLL_INTERVAL_SECONDS}"
+            echo "JOBS_BATCH_SIZE=${JOBS_BATCH_SIZE}"
+            echo "JOBS_WORKER_CONCURRENCY=${JOBS_WORKER_CONCURRENCY}"
+            echo "JOBS_LEASE_DURATION_SECONDS=${JOBS_LEASE_DURATION_SECONDS}"
+            echo "JOBS_LEASE_RENEWAL_INTERVAL_SECONDS=${JOBS_LEASE_RENEWAL_INTERVAL_SECONDS}"
+            echo "JOBS_MAX_ATTEMPTS_DEFAULT=${JOBS_MAX_ATTEMPTS_DEFAULT}"
+            echo "JOBS_BACKOFF_BASE_SECONDS=${JOBS_BACKOFF_BASE_SECONDS}"
+            echo "JOBS_BACKOFF_CAP_SECONDS=${JOBS_BACKOFF_CAP_SECONDS}"
+            echo "JOBS_SHUTDOWN_DRAIN_SECONDS=${JOBS_SHUTDOWN_DRAIN_SECONDS}"
+            echo "JOBS_METRICS_HOST=${JOBS_METRICS_HOST}"
+            echo "JOBS_METRICS_PORT=${JOBS_METRICS_PORT}"
+            echo "JOBS_TERMINATION_GRACE_PERIOD_SECONDS=${JOBS_TERMINATION_GRACE_PERIOD_SECONDS}"
           } > "$values_file"
           sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
 
@@ -715,15 +743,15 @@ jobs:
 
           echo "Required provider API keys are present"
           echo "result=pass" >> "$GITHUB_OUTPUT"
-      - name: Apply backend and migrations
+      - name: Apply migrations before backend/worker rollout
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
+          set -euo pipefail
           kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found
-          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
-          kubectl rollout restart deployment/fotosintesis-backend \
-            -n "$TF_OUT_NAMESPACE"
+          # Render and apply migrations only. Backend and worker are
+          # rolled out by the next step, after the migration wait below.
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/50-migrations.yaml"
       - id: migration
         name: Wait for migrations
@@ -805,6 +833,21 @@ jobs:
           fi
           echo "result=fail" >> "$GITHUB_OUTPUT"
           exit 1
+      - name: Apply backend
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
+          kubectl rollout restart deployment/fotosintesis-backend \
+            -n "$TF_OUT_NAMESPACE"
+      - name: Apply worker
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/55-worker.yaml"
       - name: Apply frontend, ingress, certificate
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -825,37 +868,12 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
-
-          rollout_deployment() {
-            local deployment="$1"
-            local container="$2"
-            if ! kubectl rollout status "deployment/$deployment" -n "$TF_OUT_NAMESPACE" --timeout=600s; then
-              echo "::error::Rollout failed for $deployment" >&2
-              echo "--- Deployment description ---" >&2
-              kubectl describe "deployment/$deployment" -n "$TF_OUT_NAMESPACE" || true
-              echo "--- ReplicaSets ---" >&2
-              kubectl get replicasets -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
-              echo "--- Pod statuses ---" >&2
-              kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o wide || true
-              local pods
-              pods="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "app.kubernetes.io/name=$deployment" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
-              for pod in $pods; do
-                echo "--- Pod: $pod ---" >&2
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --tail=200 || true
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c "$container" --previous --tail=200 || true
-                if [ "$container" = "backend" ]; then
-                  kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy --tail=200 || true
-                fi
-                kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
-              done
-              echo "--- Events ---" >&2
-              kubectl get events -n "$TF_OUT_NAMESPACE" --sort-by=.lastTimestamp || true
-              exit 1
-            fi
-          }
-
-          rollout_deployment fotosintesis-backend backend
-          rollout_deployment fotosintesis-frontend frontend
+          sh deploy/scripts/rollout-deployment.sh \
+            "$TF_OUT_NAMESPACE" fotosintesis-backend backend 600s
+          sh deploy/scripts/rollout-deployment.sh \
+            "$TF_OUT_NAMESPACE" fotosintesis-worker worker 600s
+          sh deploy/scripts/rollout-deployment.sh \
+            "$TF_OUT_NAMESPACE" fotosintesis-frontend frontend 600s
 
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke
@@ -1043,7 +1061,7 @@ jobs:
             echo "| Frontend hostname | \`${FRONTEND_HOSTNAME}\` |"
             echo "| Frontend static IP | \`${STATIC_IP_ADDRESS}\` |"
             echo "| Migration Job | ${MIGRATION} |"
-            echo "| Backend/frontend rollouts | ${ROLLOUT} |"
+            echo "| Backend/worker/frontend rollouts | ${ROLLOUT} |"
             echo "| Required provider API keys | ${REQUIRED_KEYS} |"
             echo "| Backend in-cluster smoke | ${BACKEND_SMOKE} |"
             echo "| Frontend public smoke | ${FRONTEND_SMOKE} |"

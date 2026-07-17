@@ -79,6 +79,11 @@ def get_provider_registry() -> ProviderRegistry:
     )
 
 
+def get_embedding_provider() -> EmbeddingProvider:
+    settings = get_settings()
+    return _build_embedding_provider(settings.embedding_provider, settings)
+
+
 def _resolve_provider_chain(
     chain: list[str] | None, single: str, role: str
 ) -> list[str]:

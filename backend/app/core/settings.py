@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -72,6 +72,28 @@ class Settings(BaseSettings):
     judge_circuit_breaker_duration_seconds: float = 60.0
     search_circuit_breaker_duration_seconds: float = 60.0
     vision_circuit_breaker_duration_seconds: float = 60.0
+    jobs_producer_enabled: bool = Field(default=False, validation_alias="JOBS_PRODUCER_ENABLED")
+    jobs_worker_enabled: bool = Field(default=False, validation_alias="JOBS_WORKER_ENABLED")
+    jobs_poll_interval_seconds: float = Field(default=5.0, gt=0, validation_alias="JOBS_POLL_INTERVAL_SECONDS")
+    jobs_batch_size: int = Field(default=10, gt=0, validation_alias="JOBS_BATCH_SIZE")
+    jobs_worker_concurrency: int = Field(default=5, gt=0, validation_alias="JOBS_WORKER_CONCURRENCY")
+    jobs_lease_duration_seconds: float = Field(default=300.0, gt=0, validation_alias="JOBS_LEASE_DURATION_SECONDS")
+    jobs_lease_renewal_interval_seconds: float = Field(default=60.0, gt=0, validation_alias="JOBS_LEASE_RENEWAL_INTERVAL_SECONDS")
+    jobs_max_attempts_default: int = Field(default=3, ge=1, validation_alias="JOBS_MAX_ATTEMPTS_DEFAULT")
+    jobs_backoff_base_seconds: float = Field(default=10.0, gt=0, validation_alias="JOBS_BACKOFF_BASE_SECONDS")
+    jobs_backoff_cap_seconds: float = Field(default=3600.0, gt=0, validation_alias="JOBS_BACKOFF_CAP_SECONDS")
+    jobs_shutdown_drain_seconds: float = Field(default=30.0, gt=0, validation_alias="JOBS_SHUTDOWN_DRAIN_SECONDS")
+    jobs_metrics_host: str = Field(default="0.0.0.0", validation_alias="JOBS_METRICS_HOST")
+    jobs_metrics_port: int = Field(default=9100, ge=0, lt=65536, validation_alias="JOBS_METRICS_PORT")
+
+    @model_validator(mode="after")
+    def _validate_job_settings(self) -> "Settings":
+        if self.jobs_lease_renewal_interval_seconds >= self.jobs_lease_duration_seconds:
+            raise ValueError(
+                "jobs_lease_renewal_interval_seconds must be less than jobs_lease_duration_seconds"
+            )
+        return self
+
     trusted_source_domains: list[str] = [
         "rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",

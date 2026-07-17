@@ -21,6 +21,8 @@ from app.knowledge.rag.types import (
     MetadataFilterSpec,
     OrchestratedKnowledgeIngestion,
     RetrievedNode,
+    VectorIndexError,
+    VectorIndexIncomplete,
 )
 
 __all__ = [
@@ -32,6 +34,8 @@ __all__ = [
     "OrchestratedKnowledgeIngestion",
     "PrecomputedEmbeddingOnly",
     "RetrievedNode",
+    "VectorIndexError",
+    "VectorIndexIncomplete",
     "build_llamaindex_metadata_filters",
     "build_metadata_filter_specs",
     "build_pgvector_config",
