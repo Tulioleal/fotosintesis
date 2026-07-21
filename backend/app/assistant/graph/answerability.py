@@ -226,9 +226,12 @@ def _validated_answerability(
 def _valid_source_support(item: dict[str, object], requested_aspects: list[str]) -> bool:
     urls = item.get("source_urls")
     aspects = item.get("covered_aspects")
+    quote = item.get("evidence_quote")
     return (
         isinstance(item.get("claim"), str)
         and bool(str(item.get("claim")).strip())
+        and isinstance(quote, str)
+        and bool(quote.strip())
         and isinstance(urls, list)
         and any(isinstance(url, str) and url.strip() for url in urls)
         and isinstance(aspects, list)

@@ -212,3 +212,20 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: fotosintesis-backend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-backend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

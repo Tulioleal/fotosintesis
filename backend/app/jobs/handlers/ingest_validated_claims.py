@@ -19,7 +19,6 @@ from app.jobs.handler import (
     RetryableJobError,
 )
 from app.jobs.schemas import (
-    INGESTION_POLICY_VERSION,
     IngestValidatedClaimsPayload,
     JobFailureCategory,
     JobError,
@@ -37,10 +36,21 @@ from app.knowledge.rag import (
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import ValidatedClaimIndexStatus
 from app.providers.errors import ProviderError
-from app.providers.factory import get_embedding_provider, get_provider_registry
+from app.providers.factory import get_provider_registry
 from app.providers.wrappers import AllProvidersFailedError
 
 logger = logging.getLogger(__name__)
+
+
+def validate_pgvector_runtime(config: object) -> None:
+    if not config.database:
+        raise ValueError("PGVector database is not configured")
+    if not getattr(config, "embed_dim", 0) > 0:
+        raise ValueError("PGVector embedding dimension must be positive")
+    try:
+        from llama_index.vector_stores.postgres import PGVectorStore  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError("llama-index-vector-stores-postgres is not installed") from exc
 
 
 def stable_document_id(ingestion_key: str) -> UUID:
@@ -59,7 +69,11 @@ def _normalize_url(value: str) -> str:
     return value.strip().rstrip("/")
 
 
-def compute_claim_ingestion_key(claim: dict[str, Any]) -> str:
+def compute_claim_ingestion_key(
+    claim: dict[str, Any],
+    *,
+    ingestion_policy_version: int,
+) -> str:
     source_provenance = SourceProvenance(str(claim["source_provenance"])).value
     normalized = {
         "scientific_name": _normalize_scientific_name(str(claim.get("scientific_name") or "")),
@@ -68,14 +82,14 @@ def compute_claim_ingestion_key(claim: dict[str, Any]) -> str:
         "source_domain": (str(claim.get("source_domain") or "")).strip().lower(),
         "source_provenance": source_provenance,
         "covered_aspects": sorted(
-            str(a).strip().lower() for a in (claim.get("covered_aspects") or [])
+            {str(a).strip().lower() for a in (claim.get("covered_aspects") or [])}
         ),
         "claim": (str(claim.get("claim") or "")).strip(),
         "evidence_quote": (str(claim.get("evidence_quote") or "")).strip(),
-        "ingestion_policy_version": INGESTION_POLICY_VERSION,
+        "ingestion_policy_version": ingestion_policy_version,
     }
     raw = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
-    return f"v{INGESTION_POLICY_VERSION}:" + hashlib.sha256(raw.encode()).hexdigest()
+    return f"v{ingestion_policy_version}:" + hashlib.sha256(raw.encode()).hexdigest()
 
 
 class IngestValidatedClaimsHandler(JobHandler):
@@ -84,30 +98,24 @@ class IngestValidatedClaimsHandler(JobHandler):
         *,
         session_factory=AsyncSessionLocal,
         provider_registry_factory=get_provider_registry,
-        embedding_provider_factory=get_embedding_provider,
         vector_index_factory=KnowledgeVectorIndex,
         settings: Settings | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._provider_registry_factory = provider_registry_factory
-        self._embedding_provider_factory = embedding_provider_factory
+        self._providers = None
         self._vector_index_factory = vector_index_factory
         self._settings = settings or get_settings()
 
-    def supported_payload_versions(self) -> list[int]:
-        return [1]
-
-    def payload_model(self, payload_version: int) -> type[BaseModel] | None:
-        if payload_version == 1:
-            return IngestValidatedClaimsPayload
-        return None
-
     def validate_dependencies(self) -> None:
-        if self._embedding_provider_factory() is None:
+        providers = self._provider_registry_factory()
+        if providers.embeddings is None:
             raise ValueError("embedding provider was not configured")
         config = build_pgvector_config(self._settings)
         if not config.database or config.embed_dim <= 0:
             raise ValueError("PGVector configuration is incomplete")
+        validate_pgvector_runtime(config)
+        self._providers = providers
 
     async def handle(
         self, *, payload: BaseModel, attempt_count: int, max_attempts: int
@@ -115,14 +123,22 @@ class IngestValidatedClaimsHandler(JobHandler):
         parsed = payload
         assert isinstance(parsed, IngestValidatedClaimsPayload)
 
+        policy_version = parsed.ingestion_policy_version
+
         claims = [c.model_dump(mode="json") for c in parsed.claims]
-        providers = self._provider_registry_factory()
+        providers = self._providers
+        if providers is None:
+            providers = self._provider_registry_factory()
+            self._providers = providers
         succeeded = 0
         skipped = 0
         failed = 0
         last_failure_category = JobFailureCategory.invariant_violation
         for claim in claims:
-            ingestion_key = compute_claim_ingestion_key(claim)
+            ingestion_key = compute_claim_ingestion_key(
+                    claim,
+                    ingestion_policy_version=policy_version,
+                )
             async with self._session_factory() as session:
                 try:
                     repo = KnowledgeRepository(session)
@@ -151,7 +167,7 @@ class IngestValidatedClaimsHandler(JobHandler):
                         raise PermanentJobError(JobFailureCategory.invariant_violation)
 
                     document.metadata["claim_ingestion_key"] = ingestion_key
-                    document.metadata["ingestion_policy_version"] = INGESTION_POLICY_VERSION
+                    document.metadata["ingestion_policy_version"] = policy_version
                     document.metadata["source_provenance"] = claim.get(
                         "source_provenance"
                     )
@@ -277,7 +293,11 @@ def _is_expected_ingestion_key_conflict(exc: IntegrityError) -> bool:
     constraint_name = getattr(original, "constraint_name", None)
     if constraint_name is None:
         constraint_name = getattr(getattr(original, "diag", None), "constraint_name", None)
-    return constraint_name in {
+    if constraint_name in {
         "knowledge_documents_pkey",
         "uq_knowledge_documents_validated_claim_ingestion_key",
-    }
+    }:
+        return True
+    # asyncpg's SQLAlchemy adapter does not always retain the constraint name,
+    # but PostgreSQL's 23505 SQLSTATE is the typed unique-violation signal.
+    return getattr(original, "sqlstate", None) == "23505"

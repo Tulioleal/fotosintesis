@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
+import socket
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
@@ -23,13 +26,15 @@ from app.jobs.handler import (
     HandlerRegistry,
     JobHandler,
     JobHandlerResult,
+    PermanentJobError,
+    RetryableJobError,
     get_handler_registry,
 )
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import (
-    INGESTION_POLICY_VERSION,
     IngestValidatedClaimsPayload,
     JobFailureCategory,
+    JobLimitation,
     JobStatus,
     JobType,
     ReadJobResult,
@@ -72,9 +77,6 @@ class _FakeHandler(JobHandler):
     def __init__(self) -> None:
         self.calls: list[tuple[UUID, int, int]] = []
 
-    def supported_payload_versions(self) -> list[int]:
-        return [1]
-
     def payload_model(self, payload_version: int):
         return IngestValidatedClaimsPayload
 
@@ -91,19 +93,19 @@ def _valid_payload() -> dict[str, Any]:
     return {
         "claims": [
             {
-                "scientific_name": "Cotyledon tomentosa",
+                "scientific_name": "Secretus plantus",
                 "topic": "watering",
-                "source_url": "https://example.org/watering",
-                "source_domain": "example.org",
+                "source_url": "https://secret.example/private-path",
+                "source_domain": "secret.example",
                 "source_provenance": "trusted",
-                "claim": "Water when the substrate dries.",
-                "evidence_quote": "Allow the substrate to dry before watering.",
+                "claim": "SECRET_CLAIM_TEXT",
+                "evidence_quote": "SECRET_EVIDENCE_QUOTE",
                 "confidence": 0.9,
                 "covered_aspects": ["watering_frequency_or_trigger"],
                 "answerability_status": "full",
             }
         ],
-        "conversation_id": str(uuid4()),
+        "conversation_id": "22222222-2222-2222-2222-222222222222",
         "answerability_status": "full",
     }
 
@@ -169,7 +171,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -197,6 +199,7 @@ class TestWorkerPolling:
                 status=JobStatus.partial,
                 result=ReadJobResult(
                     succeeded=1, failed=1, partial=True,
+                    limitations=[JobLimitation.some_claims_failed],
                 ),
             )
         ]
@@ -205,7 +208,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -225,6 +228,45 @@ class TestWorkerPolling:
         row = await _job_status(pg_session_factory, job_id)
         assert row["status"] == JobStatus.partial.value
 
+    @pytest.mark.parametrize("invalid_result", [
+        JobHandlerResult(status=JobStatus.partial),
+        JobHandlerResult(
+            status=JobStatus.partial,
+            result=ReadJobResult(succeeded=1, partial=False),
+        ),
+        JobHandlerResult(
+            status=JobStatus.partial,
+            result=ReadJobResult(succeeded=1, partial=True),
+        ),
+    ])
+    async def test_invalid_partial_result_contract_fails_terminally(
+        self, pg_session_factory, invalid_result
+    ):
+        _FakeHandler._SCRIPT = [lambda _h: invalid_result]
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _FakeHandler(),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        job_id = await _enqueue_async(pg_session_factory)
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        task = asyncio.create_task(worker.start())
+        for _ in range(60):
+            row = await _job_status(pg_session_factory, job_id)
+            if row.get("status") == JobStatus.failed.value:
+                break
+            await asyncio.sleep(0.05)
+        worker.stop()
+        await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.failed.value
+        assert row["last_error"] == {
+            "category": JobFailureCategory.invariant_violation.value,
+            "retryable": False,
+        }
+
     async def test_retryable_failure_returns_to_pending(self, pg_session_factory):
         from app.jobs.worker import JobFailureCategory
 
@@ -239,7 +281,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -274,7 +316,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         async with pg_session_factory() as session:
             job_id = await JobRepository(session).enqueue(
@@ -319,7 +361,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -340,6 +382,93 @@ class TestWorkerPolling:
         assert row["status"] == JobStatus.failed.value
         assert row["last_error"]["category"] == "invalid_payload"
 
+    @pytest.mark.parametrize(
+        ("raised", "max_attempts", "expected_status", "category", "retryable"),
+        [
+            (
+                RuntimeError("SECRET_RAW_EXCEPTION"),
+                3,
+                JobStatus.pending.value,
+                JobFailureCategory.unexpected_error.value,
+                True,
+            ),
+            (
+                RuntimeError("SECRET_RAW_EXCEPTION"),
+                1,
+                JobStatus.failed.value,
+                JobFailureCategory.unexpected_error.value,
+                False,
+            ),
+            (
+                RetryableJobError(JobFailureCategory.provider_transient),
+                3,
+                JobStatus.pending.value,
+                JobFailureCategory.provider_transient.value,
+                True,
+            ),
+            (
+                PermanentJobError(JobFailureCategory.invariant_violation),
+                3,
+                JobStatus.failed.value,
+                JobFailureCategory.invariant_violation.value,
+                False,
+            ),
+        ],
+    )
+    async def test_raised_handler_errors_are_sanitized_and_finalized(
+        self,
+        pg_session_factory,
+        caplog,
+        raised,
+        max_attempts,
+        expected_status,
+        category,
+        retryable,
+    ):
+        class _RaisingHandler(JobHandler):
+            def payload_model(self, payload_version: int):
+                return IngestValidatedClaimsPayload
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                raise raised
+
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _RaisingHandler(),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(),
+                idempotency_key=f"raised-{uuid4()}",
+                max_attempts=max_attempts,
+            )
+            await session.commit()
+
+        import logging
+
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        task = asyncio.create_task(worker.start())
+        for _ in range(60):
+            row = await _job_status(pg_session_factory, job_id)
+            if row.get("status") == expected_status and row.get("attempt_count") == 1:
+                break
+            await asyncio.sleep(0.05)
+        worker.stop()
+        await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == expected_status
+        assert row["last_error"] == {"category": category, "retryable": retryable}
+        assert "SECRET_RAW_EXCEPTION" not in str(row["last_error"])
+        assert "SECRET_RAW_EXCEPTION" not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+
     async def test_unsupported_version_fails_without_task_exception(
         self, pg_session_factory, caplog
     ):
@@ -354,9 +483,9 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
-        # Enqueue with payload_version=99 which is not in supported_payload_versions.
+        # Enqueue with payload_version=99 which is not in payload_models.
         job_id = uuid4()
         payload = _valid_payload()
         payload["claims"][0]["claim"] = "SENSITIVE_UNSUPPORTED_PAYLOAD"
@@ -411,7 +540,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         async with pg_session_factory() as session:
             job_id = await JobRepository(session).enqueue(
@@ -460,9 +589,6 @@ class TestWorkerPolling:
         release = asyncio.Event()
 
         class _CapacityHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -481,7 +607,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             _CapacityHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         job_ids = [
             await _enqueue_async(pg_session_factory, idempotency_key=f"capacity-{index}")
@@ -503,12 +629,15 @@ class TestWorkerPolling:
 
         assert started_count == 5
 
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_empty_poll_waits_for_configured_interval(self, monkeypatch):
         monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.2")
         from app.core.settings import get_settings
 
         get_settings.cache_clear()
-        worker = Worker(settings=get_settings())
+        worker = Worker(settings=get_settings(), handler_registry=HandlerRegistry())
+        assert worker.settings.jobs_poll_interval_seconds == 0.2
+        assert not worker._shutdown_event.is_set()
         poll_times: list[float] = []
 
         async def reconcile() -> None:
@@ -537,9 +666,6 @@ class TestWorkerPolling:
         release = asyncio.Event()
 
         class _LongHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -555,7 +681,7 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             _LongHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
         job_id = await _enqueue_async(pg_session_factory)
@@ -584,6 +710,15 @@ class TestWorkerPolling:
         assert renewed_record.__dict__["ctx_job_type"] == JobType.ingest_validated_claims.value
         assert renewed_record.__dict__["ctx_attempt"] == 1
         assert renewed_record.__dict__["ctx_worker_identity"] == worker.owner
+        rendered_logs = " ".join(str(record.__dict__) for record in caplog.records)
+        for sentinel in (
+            "https://secret.example/private-path",
+            "Secretus plantus",
+            "SECRET_CLAIM_TEXT",
+            "SECRET_EVIDENCE_QUOTE",
+            "22222222-2222-2222-2222-222222222222",
+        ):
+            assert sentinel not in rendered_logs
 
     async def test_lease_loss_suppresses_stale_finalization(
         self, pg_session_factory, monkeypatch, caplog
@@ -597,9 +732,6 @@ class TestWorkerPolling:
         release = asyncio.Event()
 
         class _LongHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -615,9 +747,16 @@ class TestWorkerPolling:
         registry.register(
             JobType.ingest_validated_claims.value,
             _LongHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
-        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        from app.observability.metrics import MetricsRegistry
+
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            metrics=metrics,
+        )
         job_id = await _enqueue_async(pg_session_factory)
 
         import logging
@@ -625,7 +764,7 @@ class TestWorkerPolling:
         caplog.set_level(logging.INFO, logger="app.jobs.worker")
         task = asyncio.create_task(worker.start())
         await asyncio.wait_for(started.wait(), timeout=3.0)
-        replacement_token = str(uuid4())
+        replacement_token = "SECRET_LEASE_TOKEN"
         async with pg_session_factory() as session:
             await session.execute(
                 application_jobs.update()
@@ -659,15 +798,349 @@ class TestWorkerPolling:
         assert row["lease_owner"] == "replacement-worker"
         assert row["lease_token"] == replacement_token
         lost_record = next(
-            record for record in caplog.records if record.message == "job_lease_lost"
+            record
+            for record in caplog.records
+            if record.message in {"job_lease_lost", "worker_lease_lost"}
         )
         assert lost_record.__dict__["ctx_job_type"] == JobType.ingest_validated_claims.value
         assert lost_record.__dict__["ctx_attempt"] == 1
         assert lost_record.__dict__["ctx_worker_identity"] == worker.owner
-        assert lost_record.__dict__["ctx_operation"] == "renewal"
+        assert lost_record.__dict__["ctx_operation"] in {"renewal", "execution"}
+        assert "SECRET_LEASE_TOKEN" not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+        assert metrics.job_outcomes[
+            (JobType.ingest_validated_claims.value, "lease_lost")
+        ] == 1
+        histogram = metrics.job_duration_histograms[
+            (JobType.ingest_validated_claims.value, "lease_lost")
+        ]
+        assert histogram.total_count == 1
+        assert histogram.total_sum >= 0
+
+    async def test_finalization_lease_loss_records_one_bounded_outcome(
+        self, pg_session_factory, caplog
+    ):
+        import logging
+
+        from app.observability.metrics import MetricsRegistry
+
+        job_id = await _enqueue_async(
+            pg_session_factory, idempotency_key="finalization-lease-loss"
+        )
+        replacement_token = "SECRET_LEASE_TOKEN"
+
+        class _ReplaceLeaseHandler(JobHandler):
+            def payload_model(self, payload_version: int):
+                return IngestValidatedClaimsPayload
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                async with pg_session_factory() as session:
+                    await session.execute(
+                        application_jobs.update()
+                        .where(application_jobs.c.id == job_id)
+                        .values(
+                            lease_owner="replacement-worker",
+                            lease_token=replacement_token,
+                            lease_expires_at=datetime.now(timezone.utc)
+                            + timedelta(seconds=30),
+                        )
+                    )
+                    await session.commit()
+                return JobHandlerResult(
+                    status=JobStatus.complete,
+                    result=ReadJobResult(succeeded=1),
+                )
+
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _ReplaceLeaseHandler(),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            metrics=metrics,
+        )
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+
+        task = asyncio.create_task(worker.start())
+        async with asyncio.timeout(3.0):
+            while metrics.job_outcomes.get(
+                (JobType.ingest_validated_claims.value, "lease_lost")
+            ) != 1:
+                await asyncio.sleep(0.02)
+        worker.stop()
+        await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.processing.value
+        assert row["lease_owner"] == "replacement-worker"
+        assert row["lease_token"] == replacement_token
+        lost_record = next(
+            record for record in caplog.records if record.message == "worker_lease_lost"
+        )
+        assert lost_record.__dict__["ctx_operation"] == "complete"
+        assert replacement_token not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+        assert metrics.job_outcomes[
+            (JobType.ingest_validated_claims.value, "lease_lost")
+        ] == 1
+        histogram = metrics.job_duration_histograms[
+            (JobType.ingest_validated_claims.value, "lease_lost")
+        ]
+        assert histogram.total_count == 1
+        assert histogram.total_sum >= 0
+
+
+class TestShutdownDuringClaim:
+    async def test_shutdown_before_commit_rolls_back(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        import logging
+        from unittest.mock import patch
+
+        monkeypatch.setenv("JOBS_BATCH_SIZE", "10")
+        monkeypatch.setenv("JOBS_WORKER_CONCURRENCY", "5")
+        from app.core.settings import get_settings
+        get_settings.cache_clear()
+        handler = _FakeHandler()
+        _FakeHandler._SCRIPT = [
+            lambda _h: JobHandlerResult(
+                status=JobStatus.complete,
+                result=ReadJobResult(succeeded=1),
+            )
+        ]
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        job_id = await _enqueue_async(pg_session_factory, idempotency_key="shutdown-bc")
+
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+        )
+        claim_finished = asyncio.Event()
+        allow_return = asyncio.Event()
+        claimed_ids = []
+        original_claim_jobs = JobRepository.claim_jobs
+
+        async def blocked_claim_jobs(
+            repository,
+            *,
+            owner,
+            batch_size,
+            lease_duration_seconds,
+        ):
+            result = await original_claim_jobs(
+                repository,
+                owner=owner,
+                batch_size=batch_size,
+                lease_duration_seconds=lease_duration_seconds,
+            )
+            claimed_ids.extend(job.id for job in result)
+            claim_finished.set()
+            await allow_return.wait()
+            return result
+
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        with patch.object(JobRepository, "claim_jobs", blocked_claim_jobs):
+            task = asyncio.create_task(worker.start())
+            await asyncio.wait_for(claim_finished.wait(), timeout=5)
+            worker.stop()
+            allow_return.set()
+            await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert claimed_ids == [job_id]
+        assert row["status"] == JobStatus.pending.value
+        assert row["attempt_count"] == 0
+        assert row["lease_owner"] is None
+        assert row["lease_token"] is None
+        assert row["lease_expires_at"] is None
+        assert handler.calls == []
+        assert worker.active_executions() == []
+        assert worker._handler_tasks == {}
+        assert worker._renewal_tasks == {}
+        assert not any(
+            record.message == "worker_poll_failed" for record in caplog.records
+        )
+
+    async def test_shutdown_after_commit_releases_lease(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        import logging
+        from unittest.mock import patch
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        monkeypatch.setenv("JOBS_BATCH_SIZE", "10")
+        monkeypatch.setenv("JOBS_WORKER_CONCURRENCY", "5")
+        from app.core.settings import get_settings
+        get_settings.cache_clear()
+        handler = _FakeHandler()
+        _FakeHandler._SCRIPT = [
+            lambda _h: JobHandlerResult(
+                status=JobStatus.complete,
+                result=ReadJobResult(succeeded=1),
+            )
+        ]
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        job_id = await _enqueue_async(pg_session_factory, idempotency_key="shutdown-ac")
+
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+        )
+
+        claim_finished = asyncio.Event()
+        claimed_ids = []
+        release_calls = []
+        post_claim_commits = 0
+        original_claim_jobs = JobRepository.claim_jobs
+        original_release = JobRepository.release_unstarted_job
+
+        async def track_real_claim(
+            repository,
+            *,
+            owner,
+            batch_size,
+            lease_duration_seconds,
+        ):
+            result = await original_claim_jobs(
+                repository,
+                owner=owner,
+                batch_size=batch_size,
+                lease_duration_seconds=lease_duration_seconds,
+            )
+            claimed_ids.extend(job.id for job in result)
+            claim_finished.set()
+            return result
+
+        async def track_release(repository, *, job_id, owner, lease_token):
+            released = await original_release(
+                repository,
+                job_id=job_id,
+                owner=owner,
+                lease_token=lease_token,
+            )
+            release_calls.append((job_id, released))
+            return released
+
+        original_commit = AsyncSession.commit
+
+        async def commit_then_stop(session):
+            nonlocal post_claim_commits
+            await original_commit(session)
+            if claim_finished.is_set():
+                post_claim_commits += 1
+                if post_claim_commits == 1:
+                    worker.stop()
+
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        with (
+            patch.object(JobRepository, "claim_jobs", track_real_claim),
+            patch.object(JobRepository, "release_unstarted_job", track_release),
+            patch.object(AsyncSession, "commit", commit_then_stop),
+        ):
+            task = asyncio.create_task(worker.start())
+            await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert claimed_ids == [job_id]
+        assert release_calls == [(job_id, True)]
+        assert post_claim_commits == 2
+        assert row["status"] == JobStatus.pending.value
+        assert row["attempt_count"] == 0
+        assert row["lease_owner"] is None
+        assert row["lease_token"] is None
+        assert row["lease_expires_at"] is None
+        assert handler.calls == []
+        assert worker.active_executions() == []
+        assert worker._handler_tasks == {}
+        assert worker._renewal_tasks == {}
+        assert not any(
+            record.message == "worker_poll_failed" for record in caplog.records
+        )
 
 
 class TestWorkerShutdown:
+    async def test_module_entrypoint_handles_sigterm_cleanly(self):
+        backend_root = __import__("pathlib").Path(__file__).resolve().parents[2]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            metrics_port = listener.getsockname()[1]
+        worker_env = {
+            **os.environ,
+            "DATABASE_URL": os.environ.get(
+                "TEST_DATABASE_URL",
+                "postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis",
+            ),
+            "JOBS_WORKER_ENABLED": "false",
+            "JOBS_POLL_INTERVAL_SECONDS": "0.05",
+            "JOBS_SHUTDOWN_DRAIN_SECONDS": "1",
+            "JOBS_METRICS_HOST": "127.0.0.1",
+            "JOBS_METRICS_PORT": str(metrics_port),
+        }
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "app.jobs.worker",
+            cwd=backend_root,
+            env=worker_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        assert process.stdout is not None
+        output = ""
+        try:
+            async with asyncio.timeout(10):
+                while "worker_signal_handlers_registered" not in output:
+                    output += (await process.stdout.readline()).decode()
+            process.send_signal(signal.SIGTERM)
+            return_code = await asyncio.wait_for(process.wait(), timeout=5)
+            output += (await process.stdout.read()).decode()
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
+        assert return_code == 0
+        assert "worker_signal_handlers_registered" in output
+        assert "worker_draining" in output
+        assert "worker_stopped" in output
+        assert "Traceback" not in output
+
+    async def test_external_cancellation_propagates_after_cleanup(
+        self, pg_session_factory
+    ):
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+        )
+        task = asyncio.create_task(worker.start())
+        async with asyncio.timeout(3.0):
+            await worker._ready_event.wait()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert worker._metrics_server is None
+        assert worker.active_executions() == []
+        assert worker._handler_tasks == {}
+        assert worker._renewal_tasks == {}
+
     async def test_handler_completes_during_short_drain_without_new_claims(
         self, pg_session_factory, monkeypatch
     ):
@@ -682,9 +1155,6 @@ class TestWorkerShutdown:
         release = asyncio.Event()
 
         class _DrainHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -700,7 +1170,7 @@ class TestWorkerShutdown:
         registry.register(
             JobType.ingest_validated_claims.value,
             _DrainHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         first_job = await _enqueue_async(pg_session_factory, idempotency_key="short-drain-1")
         worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
@@ -725,8 +1195,12 @@ class TestWorkerShutdown:
         assert worker._renewal_tasks == {}
 
     async def test_drain_timeout_leaves_recoverable_state(
-        self, pg_session_factory, monkeypatch
+        self, pg_session_factory, monkeypatch, caplog
     ):
+        import logging
+
+        from app.observability.metrics import MetricsRegistry
+
         monkeypatch.setenv("JOBS_LEASE_DURATION_SECONDS", "0.6")
         monkeypatch.setenv("JOBS_LEASE_RENEWAL_INTERVAL_SECONDS", "0.1")
         monkeypatch.setenv("JOBS_SHUTDOWN_DRAIN_SECONDS", "0.25")
@@ -740,9 +1214,6 @@ class TestWorkerShutdown:
         # Handler blocks indefinitely; drain timeout must release the
         # claim without writing `failed` so a future worker can recover.
         class _BlockingHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -761,14 +1232,17 @@ class TestWorkerShutdown:
         registry.register(
             JobType.ingest_validated_claims.value,
             _BlockingHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
+        metrics = MetricsRegistry()
         worker = Worker(
             session_factory=pg_session_factory,
             handler_registry=registry,
+            metrics=metrics,
         )
         job_id = await _enqueue_async(pg_session_factory, idempotency_key="drain-test")
 
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
         task = asyncio.create_task(worker.start())
         # Wait for the worker to claim the job.
         for _ in range(60):
@@ -795,6 +1269,27 @@ class TestWorkerShutdown:
         assert worker.active_executions() == []
         assert worker._handler_tasks == {}
         assert worker._renewal_tasks == {}
+        assert metrics.job_outcomes[
+            (JobType.ingest_validated_claims.value, "cancelled")
+        ] == 1
+        histogram = metrics.job_duration_histograms[
+            (JobType.ingest_validated_claims.value, "cancelled")
+        ]
+        assert histogram.total_count == 1
+        assert histogram.total_sum >= 0
+        messages = {record.message for record in caplog.records}
+        assert "worker_handler_cancelled" in messages
+        assert "worker_drain_timeout" in messages
+        rendered_logs = " ".join(str(record.__dict__) for record in caplog.records)
+        for sentinel in (
+            "https://secret.example/private-path",
+            "Secretus plantus",
+            "SECRET_CLAIM_TEXT",
+            "SECRET_EVIDENCE_QUOTE",
+            "22222222-2222-2222-2222-222222222222",
+            "SECRET_LEASE_TOKEN",
+        ):
+            assert sentinel not in rendered_logs
 
         lease_wait = max(
             0.0,
@@ -812,7 +1307,7 @@ class TestWorkerShutdown:
         completing_registry.register(
             JobType.ingest_validated_claims.value,
             completing_handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         recovery_worker = Worker(
             session_factory=pg_session_factory,

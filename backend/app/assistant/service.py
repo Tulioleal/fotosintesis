@@ -18,13 +18,16 @@ from app.assistant.schemas import (
 )
 from app.assistant.tools import AssistantTools
 from app.jobs.repository import JobRepository, canonical_idempotency_key, compute_claims_hash
-from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
+from app.jobs.schemas import (
+    CURRENT_INGESTION_POLICY_VERSION,
+    IngestValidatedClaimsPayload,
+    JobPayloadVersion,
+    JobType,
+)
 from app.knowledge.repository import KnowledgeRepository
+from app.observability.metrics import metrics_registry
 
 logger = logging.getLogger(__name__)
-
-
-INGESTION_POLICY_VERSION = 1
 
 
 class AssistantService:
@@ -133,7 +136,10 @@ class AssistantService:
         if claims and self._should_enqueue_ingestion_jobs():
             job_payload = IngestValidatedClaimsPayload.model_validate(
                 {
-                    "payload_version": 1,
+                    "payload_version":
+                        JobPayloadVersion.INGEST_VALIDATED_CLAIMS_V1,
+                    "ingestion_policy_version":
+                        CURRENT_INGESTION_POLICY_VERSION,
                     "claims": claims,
                     "conversation_id": str(conversation_id),
                     "answerability_status": state.get("answerability_status"),
@@ -145,8 +151,8 @@ class AssistantService:
                 job_type=JobType.ingest_validated_claims.value,
                 conversation_id=conversation_id,
                 claims_hash=claims_hash,
-                payload_version=1,
-                ingestion_policy_version=INGESTION_POLICY_VERSION,
+                payload_version=job_payload.payload_version,
+                ingestion_policy_version=job_payload.ingestion_policy_version,
             )
             enqueue_result = await self.job_repo.enqueue_result(
                 job_type=JobType.ingest_validated_claims.value,
@@ -159,14 +165,20 @@ class AssistantService:
 
         await self.repository.commit()
         if enqueue_result is not None:
+            schedule_outcome = "created" if enqueue_result.created else "reused"
+            metrics_registry.record_job_schedule(
+                job_type=JobType.ingest_validated_claims.value,
+                outcome=schedule_outcome,
+            )
             logger.info(
                 "job_scheduled",
                 extra={
                     "ctx_job_id": str(enqueue_result.job_id),
                     "ctx_job_type": JobType.ingest_validated_claims.value,
-                    "ctx_payload_version": 1,
+                    "ctx_payload_version": job_payload.payload_version,
                     "ctx_ownership_category": "user_owned",
-                    "ctx_schedule_outcome": "created" if enqueue_result.created else "reused",
+                    "ctx_schedule_outcome": schedule_outcome,
+                    "ctx_conversation_id": str(conversation_id),
                 },
             )
         return AssistantChatResponse(

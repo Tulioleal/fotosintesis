@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -47,13 +48,6 @@ class JobHandler(ABC):
     ) -> JobHandlerResult:
         ...
 
-    @abstractmethod
-    def supported_payload_versions(self) -> list[int]:
-        ...
-
-    def payload_model(self, payload_version: int) -> type[BaseModel] | None:
-        return None
-
     def validate_dependencies(self) -> None:
         return None
 
@@ -61,7 +55,7 @@ class JobHandler(ABC):
 @dataclass
 class HandlerRegistryEntry:
     handler: JobHandler
-    payload_model: type[BaseModel] | None = None
+    payload_models: dict[int, type[BaseModel]] = field(default_factory=dict)
 
 
 @dataclass
@@ -73,16 +67,37 @@ class HandlerRegistry:
         job_type: str,
         handler: JobHandler,
         *,
-        payload_model: type[BaseModel] | None = None,
+        payload_models: Mapping[int, type[BaseModel]],
     ) -> None:
+        normalized_models = dict(payload_models)
+
+        if not normalized_models:
+            raise ValueError(
+                "at least one payload version must be registered"
+            )
+
+        for version, model in normalized_models.items():
+            if not isinstance(version, int) or version < 1:
+                raise ValueError(
+                    "payload versions must be positive integers"
+                )
+            if not isinstance(model, type) or not issubclass(
+                model,
+                BaseModel,
+            ):
+                raise TypeError(
+                    "payload models must be Pydantic BaseModel classes"
+                )
+
         self._entries[job_type] = HandlerRegistryEntry(
-            handler=handler, payload_model=payload_model
+            handler=handler,
+            payload_models=normalized_models,
         )
         logger.info(
             "job_handler_registered",
             extra={
                 "ctx_job_type": job_type,
-                "ctx_payload_versions": handler.supported_payload_versions(),
+                "ctx_payload_versions": sorted(normalized_models),
             },
         )
 
@@ -90,9 +105,15 @@ class HandlerRegistry:
         entry = self._entries.get(job_type)
         return entry.handler if entry else None
 
-    def get_payload_model(self, job_type: str) -> type[BaseModel] | None:
+    def get_payload_model(
+        self,
+        job_type: str,
+        payload_version: int,
+    ) -> type[BaseModel] | None:
         entry = self._entries.get(job_type)
-        return entry.payload_model if entry else None
+        if entry is None:
+            return None
+        return entry.payload_models.get(payload_version)
 
     def has_handler(self, job_type: str) -> bool:
         return job_type in self._entries

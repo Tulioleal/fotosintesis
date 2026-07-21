@@ -41,6 +41,16 @@ class RepositoryInvariantError(RuntimeError):
     pass
 
 
+def recovery_backoff_seconds(
+    *,
+    attempt_count: int,
+    base: float,
+    cap: float,
+) -> float:
+    exponent = max(attempt_count - 1, 0)
+    return min(base * (2**exponent), cap)
+
+
 def canonical_idempotency_key(
     *,
     job_type: str,
@@ -115,6 +125,13 @@ class JobRepository(RepositoryBase):
     ) -> EnqueueResult:
         validated_job_type = JobType(job_type)
         now = datetime.now(timezone.utc)
+        resolved_max_attempts = (
+            self.settings.jobs_max_attempts_default
+            if max_attempts is None
+            else max_attempts
+        )
+        if resolved_max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
 
         job_id = uuid4()
         insert_values = {
@@ -126,7 +143,7 @@ class JobRepository(RepositoryBase):
             "payload": payload,
             "status": JobStatus.pending.value,
             "idempotency_key": idempotency_key,
-            "max_attempts": max_attempts or self.settings.jobs_max_attempts_default,
+            "max_attempts": resolved_max_attempts,
             "available_at": available_at or now,
             "created_at": now,
             "updated_at": now,
@@ -174,8 +191,17 @@ class JobRepository(RepositoryBase):
                 ) OR (
                     status = 'processing'
                     AND lease_expires_at IS NOT NULL
-                    AND lease_expires_at <= CURRENT_TIMESTAMP
                     AND attempt_count < max_attempts
+                    AND lease_expires_at
+                        + (
+                            LEAST(
+                                :backoff_base * POWER(
+                                    2,
+                                    GREATEST(attempt_count - 1, 0)
+                                ),
+                                :backoff_cap
+                            ) * INTERVAL '1 second'
+                        ) <= CURRENT_TIMESTAMP
                 )
                 ORDER BY available_at ASC
                 LIMIT :batch_size
@@ -208,10 +234,42 @@ class JobRepository(RepositoryBase):
                 "owner": owner,
                 "lease_token": str(uuid4()),
                 "lease_seconds": lease_duration_seconds,
+                "backoff_base": self.settings.jobs_backoff_base_seconds,
+                "backoff_cap": self.settings.jobs_backoff_cap_seconds,
             },
         )
         rows = result.fetchall()
         return [ClaimedJob.model_validate(row._mapping) for row in rows]
+
+    async def release_unstarted_job(
+        self,
+        *,
+        job_id: UUID,
+        owner: str,
+        lease_token: str,
+    ) -> bool:
+        transition = await self.session.execute(
+            update(application_jobs)
+            .where(
+                application_jobs.c.id == job_id,
+                application_jobs.c.status == JobStatus.processing.value,
+                application_jobs.c.lease_owner == owner,
+                application_jobs.c.lease_token == lease_token,
+            )
+            .values(
+                status=JobStatus.pending.value,
+                attempt_count=func.greatest(
+                    application_jobs.c.attempt_count - 1,
+                    0,
+                ),
+                available_at=func.now(),
+                lease_owner=None,
+                lease_token=None,
+                lease_expires_at=None,
+                updated_at=func.now(),
+            )
+        )
+        return transition.rowcount > 0
 
     async def renew_lease(
         self, *, job_id: UUID, owner: str, lease_token: str, lease_duration_seconds: float
@@ -363,6 +421,7 @@ class JobRepository(RepositoryBase):
                     application_jobs.c.job_type,
                     application_jobs.c.attempt_count,
                     application_jobs.c.max_attempts,
+                    application_jobs.c.lease_expires_at,
                 )
                 .where(
                     application_jobs.c.status == JobStatus.processing.value,
@@ -401,11 +460,11 @@ class JobRepository(RepositoryBase):
                 )
             else:
                 recovered[job_type] = recovered.get(job_type, 0) + 1
-                # Per-row exponential backoff based on the actual attempt count.
-                base = self.settings.jobs_backoff_base_seconds
-                cap = self.settings.jobs_backoff_cap_seconds
-                exponent = max(attempt_count - 1, 0)
-                delay = min(base * (2 ** exponent), cap)
+                delay = recovery_backoff_seconds(
+                    attempt_count=attempt_count,
+                    base=self.settings.jobs_backoff_base_seconds,
+                    cap=self.settings.jobs_backoff_cap_seconds,
+                )
                 await self.session.execute(
                     update(application_jobs)
                     .where(application_jobs.c.id == row["id"])
@@ -415,7 +474,7 @@ class JobRepository(RepositoryBase):
                             category=JobFailureCategory.lease_expired,
                             retryable=True,
                         ).model_dump(mode="json"),
-                        available_at=now + timedelta(seconds=delay),
+                        available_at=row["lease_expires_at"] + timedelta(seconds=delay),
                         completed_at=None,
                         updated_at=now,
                         lease_owner=None,
@@ -461,6 +520,23 @@ class JobRepository(RepositoryBase):
             )
         return counts
 
+    async def get_status_counts(self) -> dict[tuple[str, str], int]:
+        rows = (
+            await self.session.execute(
+                select(
+                    application_jobs.c.status,
+                    application_jobs.c.job_type,
+                    func.count().label("count"),
+                ).group_by(application_jobs.c.status, application_jobs.c.job_type)
+            )
+        ).all()
+        return {
+            (row._mapping["job_type"], row._mapping["status"]): row._mapping[
+                "count"
+            ]
+            for row in rows
+        }
+
     async def oldest_eligible_age_seconds(self) -> float | None:
         row = (
             await self.session.execute(
@@ -480,11 +556,11 @@ class JobRepository(RepositoryBase):
         return float(row._mapping["age"])
 
     def compute_backoff(self, *, attempt_count: int) -> datetime:
-        if attempt_count <= 1:
-            delay = self.settings.jobs_backoff_base_seconds
-        else:
-            delay = self.settings.jobs_backoff_base_seconds * (2 ** (attempt_count - 1))
-        delay = min(delay, self.settings.jobs_backoff_cap_seconds)
+        delay = recovery_backoff_seconds(
+            attempt_count=attempt_count,
+            base=self.settings.jobs_backoff_base_seconds,
+            cap=self.settings.jobs_backoff_cap_seconds,
+        )
         return datetime.now(timezone.utc) + timedelta(seconds=delay)
 
     def _row_to_status_response(self, row: dict) -> JobStatusResponse:

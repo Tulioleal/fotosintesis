@@ -15,12 +15,12 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
 
-from app.auth.tables import application_jobs
+from app.auth.tables import application_jobs, users
 
 pytestmark = [
     pytest.mark.skipif(
@@ -47,19 +47,19 @@ def _valid_payload(*, topic: str = "watering") -> dict:
     return {
         "claims": [
             {
-                "scientific_name": "Cotyledon tomentosa",
+                "scientific_name": "Secretus plantus",
                 "topic": topic,
-                "source_url": "https://sensitive.invalid/watering",
-                "source_domain": "sensitive.invalid",
+                "source_url": "https://secret.example/private-path",
+                "source_domain": "secret.example",
                 "source_provenance": "trusted",
-                "claim": "SENSITIVE_CLAIM",
-                "evidence_quote": "SENSITIVE_QUOTE",
+                "claim": "SECRET_CLAIM_TEXT",
+                "evidence_quote": "SECRET_EVIDENCE_QUOTE",
                 "confidence": 0.9,
                 "covered_aspects": ["watering_frequency_or_trigger"],
                 "answerability_status": "full",
             }
         ],
-        "conversation_id": str(uuid4()),
+        "conversation_id": "22222222-2222-2222-2222-222222222222",
         "answerability_status": "full",
     }
 
@@ -125,6 +125,16 @@ def test_metrics_registry_renders_required_families() -> None:
         status="failed",
         duration_seconds=1.5,
     )
+    registry.record_job_outcome(
+        job_type="ingest_validated_claims",
+        status="lease_lost",
+        duration_seconds=0.2,
+    )
+    registry.record_job_outcome(
+        job_type="ingest_validated_claims",
+        status="cancelled",
+        duration_seconds=0.3,
+    )
     registry.record_job_retry(
         job_type="ingest_validated_claims", category="provider_transient",
     )
@@ -147,6 +157,8 @@ def test_metrics_registry_renders_required_families() -> None:
     assert "fotosintesis_job_oldest_eligible_age_seconds" in text
     assert "fotosintesis_worker_last_successful_poll_timestamp_seconds 123.500000" in text
     assert "fotosintesis_job_attempt_duration_seconds" in text
+    assert 'status="lease_lost"' in text
+    assert 'status="cancelled"' in text
     assert text.count("# HELP fotosintesis_job_attempt_duration_seconds ") == 1
     assert text.count("# TYPE fotosintesis_job_attempt_duration_seconds histogram") == 1
     assert (
@@ -233,7 +245,7 @@ async def _setup_processing_job(pg_session_factory, *, lease_seconds: float = 30
                 """
             ),
             {
-                "token": str(uuid4()),
+                "token": "SECRET_LEASE_TOKEN",
                 "expires": datetime.now(timezone.utc) + timedelta(seconds=lease_seconds),
                 "id": job_id,
             },
@@ -270,6 +282,7 @@ class TestEventInventory:
             record.message == "job_stale_recovered"
             for record in caplog.records
         ), caplog.records
+        assert_sensitive_values_absent(caplog.records)
 
     async def test_direct_expired_claim_emits_recovery_event_and_metric(
         self, pg_session_factory, caplog
@@ -285,9 +298,6 @@ class TestEventInventory:
         from app.observability.metrics import MetricsRegistry
 
         class _CompletingHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -297,12 +307,12 @@ class TestEventInventory:
                     result=ReadJobResult(succeeded=1),
                 )
 
-        job_id = await _setup_processing_job(pg_session_factory, lease_seconds=-1)
+        job_id = await _setup_processing_job(pg_session_factory, lease_seconds=-30)
         registry = HandlerRegistry()
         registry.register(
             JobType.ingest_validated_claims.value,
             _CompletingHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         metrics = MetricsRegistry()
         worker = Worker(
@@ -323,8 +333,10 @@ class TestEventInventory:
         recovery = next(
             record for record in caplog.records if record.message == "job_stale_recovered"
         )
+        assert recovery.message == "job_stale_recovered"
         assert recovery.__dict__["ctx_recovery_outcome"] == "lease_expired"
         assert recovery.__dict__["ctx_recovery_count"] == 1
+        assert_sensitive_values_absent(caplog.records)
         async with pg_session_factory() as session:
             status = await session.scalar(
                 select(application_jobs.c.status).where(application_jobs.c.id == job_id)
@@ -347,9 +359,6 @@ class TestEventInventory:
         from app.jobs.worker import Worker
 
         class _OutcomeHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -383,7 +392,7 @@ class TestEventInventory:
         registry.register(
             JobType.ingest_validated_claims.value,
             _OutcomeHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         job_ids = {}
         async with pg_session_factory() as session:
@@ -428,6 +437,7 @@ class TestEventInventory:
             ("job_retry_scheduled", "retry_scheduled"),
             ("job_failed", "failed"),
         ):
+            assert event in records
             record = records[event]
             assert record.__dict__["ctx_job_type"] == "ingest_validated_claims"
             assert record.__dict__["ctx_attempt"] == 1
@@ -454,12 +464,13 @@ class TestEventInventory:
         )
         messages = {record.message for record in caplog.records}
         assert {"job_claimed", "worker_draining", "worker_stopped"} <= messages
+        assert_sensitive_values_absent(caplog.records)
         rendered_logs = " ".join(str(record.__dict__) for record in caplog.records)
         for sentinel in (
-            "SENSITIVE_CLAIM",
-            "SENSITIVE_QUOTE",
-            "https://sensitive.invalid",
-            "sensitive.invalid",
+            "SECRET_CLAIM_TEXT",
+            "SECRET_EVIDENCE_QUOTE",
+            "https://secret.example/private-path",
+            "Secretus plantus",
         ):
             assert sentinel not in rendered_logs
         metrics_text = worker._metrics.to_prometheus()
@@ -468,33 +479,6 @@ class TestEventInventory:
 
 
 class TestTelemetrySafety:
-    async def test_logs_do_not_contain_sensitive_payload(
-        self, pg_session_factory, caplog
-    ):
-        caplog.set_level(logging.INFO, logger="app.jobs.worker")
-        job_id = await _setup_processing_job(pg_session_factory)
-        # Trigger a renewal that fails (stale token) to exercise warning paths.
-        async with pg_session_factory() as s:
-            repo = __import__("app.jobs.repository", fromlist=["JobRepository"]).JobRepository(s)
-            renewed = await repo.renew_lease(
-                job_id=job_id, owner="other-worker", lease_token="bogus",
-                lease_duration_seconds=300,
-            )
-            await s.commit()
-        assert renewed is False
-        for record in caplog.records:
-            payload = str(record.__dict__)
-            for forbidden in (
-                "https://",
-                "scientific_name",
-                "claim",
-                "quote",
-                "user_id",
-                "conversation_id",
-                "Traceback",
-            ):
-                assert forbidden not in payload, f"forbidden token {forbidden!r} in log record"
-
     async def test_prometheus_labels_are_closed(self, pg_session_factory, test_user):
         from app.observability.metrics import metrics_registry
 
@@ -526,15 +510,350 @@ class TestTelemetrySafety:
         ):
             assert forbidden not in text
         # Label values are drawn from closed enums plus numeric bucket boundaries.
+        from app.jobs.schemas import JobFailureCategory
+
         closed_label_values = {
             "ingest_validated_claims",
             "pending", "processing", "complete", "partial", "failed", "retry_scheduled",
-            "lease_expired", "attempts_exhausted", "provider_transient",
+            "lease_lost", "cancelled",
+            "lease_expired", "attempts_exhausted", "provider_transient", "created", "reused",
             "0", "1", "0.1", "0.5", "1.0", "2.5", "5.0", "10.0", "30.0", "60.0", "300.0", "+Inf",
         }
+        closed_label_values.update(item.value for item in JobFailureCategory)
         import re
         for value in re.findall(r'"([^"]*)"', text):
             assert value in closed_label_values, value
+
+    def test_lease_loss_and_cancellation_are_closed_outcomes(self):
+        from app.observability.metrics import MetricsRegistry
+
+        registry = MetricsRegistry()
+        registry.record_job_outcome(
+            job_type="ingest_validated_claims",
+            status="lease_lost",
+            duration_seconds=1.0,
+        )
+        registry.record_job_outcome(
+            job_type="ingest_validated_claims",
+            status="cancelled",
+            duration_seconds=2.0,
+        )
+        rendered = registry.to_prometheus()
+        assert 'status="lease_lost"' in rendered
+        assert 'status="cancelled"' in rendered
+        with pytest.raises(ValueError):
+            registry.record_job_outcome(
+                job_type="ingest_validated_claims",
+                status="arbitrary",
+                duration_seconds=1.0,
+            )
+
+
+class TestBacklogCollection:
+    async def test_worker_status_metrics_include_every_lifecycle_state(
+        self, pg_session_factory
+    ):
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import JobStatus, JobType
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            ids = {
+                status: await repo.enqueue(
+                    job_type=JobType.ingest_validated_claims.value,
+                    payload_version=1,
+                    payload=_valid_payload(topic=f"status-{status}"),
+                    idempotency_key=f"status-count-{status}",
+                )
+                for status in JobStatus
+            }
+            await session.commit()
+            await session.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id == ids[JobStatus.processing])
+                .values(
+                    status=JobStatus.processing.value,
+                    lease_owner="metrics-worker",
+                    lease_token="metrics-token",
+                    lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                )
+            )
+            for status in (JobStatus.complete, JobStatus.partial, JobStatus.failed):
+                await session.execute(
+                    application_jobs.update()
+                    .where(application_jobs.c.id == ids[status])
+                    .values(status=status.value, completed_at=datetime.now(timezone.utc))
+                )
+            await session.commit()
+
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            metrics=metrics,
+        )
+        await worker._refresh_backlog_metrics()
+        output = metrics.to_prometheus()
+        for status in JobStatus:
+            assert (
+                "fotosintesis_job_status_count{"
+                f'job_type="ingest_validated_claims",status="{status.value}"}} 1'
+            ) in output
+        assert 'fotosintesis_job_backlog_count{job_type="ingest_validated_claims",status="complete"}' not in output
+
+        async with pg_session_factory() as session:
+            await session.execute(
+                application_jobs.delete().where(
+                    application_jobs.c.id.in_([
+                        ids[JobStatus.complete],
+                        ids[JobStatus.partial],
+                        ids[JobStatus.failed],
+                    ])
+                )
+            )
+            await session.commit()
+        await worker._refresh_backlog_metrics()
+        refreshed = metrics.to_prometheus()
+        for status in (JobStatus.complete, JobStatus.partial, JobStatus.failed):
+            assert f'status="{status.value}"' not in refreshed
+
+    async def test_worker_backlog_metrics_through_collector(
+        self, pg_session_factory
+    ):
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import JobStatus, JobType
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        metrics = MetricsRegistry()
+
+        # Create two eligible pending, one processing, one complete, and one
+        # future pending job. Future work belongs in the pending count but not
+        # in the oldest eligible age.
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            pending_ids = []
+            for i in range(2):
+                jid = await repo.enqueue(
+                    job_type=JobType.ingest_validated_claims.value,
+                    payload_version=1,
+                    payload=_valid_payload(topic="backlog"),
+                    idempotency_key=f"bl-collect-{i}",
+                )
+                pending_ids.append(jid)
+            future_id = await repo.enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(topic="backlog-future"),
+                idempotency_key="bl-collect-future",
+                available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+            await session.commit()
+
+        processing_id = await _setup_processing_job(
+            pg_session_factory, lease_seconds=300
+        )
+
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            jid = await repo.enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(topic="backlog-complete"),
+                idempotency_key="bl-collect-complete",
+            )
+            await session.commit()
+            import sqlalchemy as sa
+            await session.execute(
+                sa.text("""
+                    UPDATE application_jobs
+                    SET status = 'complete', lease_owner = NULL,
+                        lease_token = NULL, lease_expires_at = NULL,
+                        completed_at = NOW()
+                    WHERE id = :id
+                """),
+                {"id": jid},
+            )
+            await session.commit()
+
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            metrics=metrics,
+        )
+        await worker._refresh_backlog_metrics()
+
+        output = worker._metrics.to_prometheus()
+        assert (
+            'fotosintesis_job_backlog_count{'
+            'job_type="ingest_validated_claims",status="pending"} 3'
+        ) in output, output
+        assert worker._metrics.job_oldest_eligible_age_seconds is not None
+        assert worker._metrics.job_oldest_eligible_age_seconds > 0
+        assert (
+            'fotosintesis_job_backlog_count{'
+            'job_type="ingest_validated_claims",status="processing"} 1'
+        ) in output, output
+        assert 'fotosintesis_job_backlog_count{job_type="ingest_validated_claims",status="complete"}' not in output, output
+
+        # Leave only future work active. It belongs in the pending count but
+        # cannot contribute to the currently eligible age.
+        async with pg_session_factory() as session:
+            import sqlalchemy as sa
+            for jid in [*pending_ids, processing_id]:
+                await session.execute(
+                    sa.text(
+                        """
+                        UPDATE application_jobs
+                        SET status = 'failed', lease_owner = NULL,
+                            lease_token = NULL, lease_expires_at = NULL
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": jid},
+                )
+            await session.commit()
+
+        await worker._refresh_backlog_metrics()
+        output = worker._metrics.to_prometheus()
+        assert (
+            'fotosintesis_job_backlog_count{'
+            'job_type="ingest_validated_claims",status="pending"} 1'
+        ) in output, output
+        assert worker._metrics.job_oldest_eligible_age_seconds in (None, 0)
+
+        # After marking the future job terminal, stale active series disappear.
+        async with pg_session_factory() as session:
+            await session.execute(
+                sa.text(
+                    """
+                    UPDATE application_jobs
+                    SET status = 'failed', lease_owner = NULL,
+                        lease_token = NULL, lease_expires_at = NULL
+                    WHERE id = :id
+                    """
+                ),
+                {"id": future_id},
+            )
+            await session.commit()
+
+        await worker._refresh_backlog_metrics()
+        output = worker._metrics.to_prometheus()
+        assert "fotosintesis_job_backlog_count{" not in output
+        assert worker._metrics.job_oldest_eligible_age_seconds in (None, 0)
+
+
+SENSITIVE_VALUES = {
+    "url": "https://secret.example/private-path",
+    "scientific_name": "Secretus plantus",
+    "claim": "SECRET_CLAIM_TEXT",
+    "quote": "SECRET_EVIDENCE_QUOTE",
+    "user_id": "11111111-1111-1111-1111-111111111111",
+    "conversation_id": "22222222-2222-2222-2222-222222222222",
+    "lease_token": "SECRET_LEASE_TOKEN",
+    "credential": "sk-secret-provider-token",
+    "exception": "SECRET_RAW_EXCEPTION",
+}
+
+
+def assert_sensitive_values_absent(records) -> None:
+    assert records, "expected worker logs but captured none"
+    rendered = "\n".join(
+        f"{record.message} {record.__dict__}"
+        for record in records
+    )
+    for value in SENSITIVE_VALUES.values():
+        assert value not in rendered
+
+
+class TestComprehensiveSensitiveLog:
+    async def test_complete_path_emits_logs_without_sensitive_values(
+        self, pg_session_factory, caplog, monkeypatch
+    ):
+        import logging
+        from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import (
+            IngestValidatedClaimsPayload,
+            JobFailureCategory,
+            JobStatus,
+            JobType,
+            ReadJobResult,
+        )
+        from app.jobs.worker import Worker
+
+        class _SensitiveHandler(JobHandler):
+            def payload_model(self, payload_version: int):
+                return IngestValidatedClaimsPayload
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                return JobHandlerResult(
+                    status=JobStatus.complete,
+                    result=ReadJobResult(succeeded=1),
+                )
+
+        handler = _SensitiveHandler()
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+        )
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+
+        sensitive_payload = _valid_payload(topic="sensitive")
+        sensitive_payload["claims"][0]["scientific_name"] = "Secretus plantus"
+        sensitive_payload["claims"][0]["claim"] = "SECRET_CLAIM_TEXT"
+        sensitive_payload["claims"][0]["evidence_quote"] = "SECRET_EVIDENCE_QUOTE"
+        sensitive_payload["claims"][0]["source_url"] = "https://secret.example/private-path"
+        sensitive_payload["conversation_id"] = "22222222-2222-2222-2222-222222222222"
+
+        task = asyncio.create_task(worker.start())
+        await asyncio.sleep(0.2)
+
+        async with pg_session_factory() as session:
+            sensitive_user_id = UUID("11111111-1111-1111-1111-111111111111")
+            await session.execute(
+                users.insert().values(
+                    id=sensitive_user_id,
+                    name="Sensitive Test User",
+                    email="11111111-1111-1111-1111-111111111111@test.invalid",
+                    email_verified=True,
+                )
+            )
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=sensitive_payload,
+                idempotency_key=f"sensitive-{uuid4()}",
+                user_id=sensitive_user_id,
+            )
+            await session.commit()
+
+        for _ in range(60):
+            async with pg_session_factory() as ns:
+                row = (await ns.execute(
+                    select(application_jobs.c.status).where(
+                        application_jobs.c.id == job_id
+                    )
+                )).first()
+            if row and row._mapping["status"] == "complete":
+                break
+            await asyncio.sleep(0.05)
+
+        worker.stop()
+        await asyncio.wait_for(task, timeout=3)
+
+        assert any(record.message == "job_completed" for record in caplog.records)
+        assert_sensitive_values_absent(caplog.records)
 
 
 class TestWorkerMetricsEndpoint:
@@ -609,20 +928,20 @@ class TestWorkerReadiness:
         from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
         from app.jobs.worker import Worker
 
-        sentinel = "SENSITIVE_PROVIDER_SECRET"
+        sentinel = "sk-secret-provider-token"
 
-        def invalid_provider():
+        def invalid_registry():
             raise ValueError(sentinel)
 
         handler = IngestValidatedClaimsHandler(
             session_factory=pg_session_factory,
-            embedding_provider_factory=invalid_provider,
+            provider_registry_factory=invalid_registry,
         )
         registry = HandlerRegistry()
         registry.register(
             JobType.ingest_validated_claims.value,
             handler,
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
         caplog.set_level(logging.INFO, logger="app.jobs.worker")
@@ -641,6 +960,81 @@ class TestWorkerReadiness:
             and record.__dict__.get("ctx_failure_category") == "invariant_violation"
             for record in caplog.records
         )
+        assert_sensitive_values_absent(caplog.records)
+        assert sentinel not in " ".join(str(record.__dict__) for record in caplog.records)
+
+    async def test_dependency_failure_prevents_claims_and_preserves_pending_job(
+        self, pg_session_factory, caplog
+    ):
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.handlers.ingest_validated_claims import (
+            IngestValidatedClaimsHandler,
+        )
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import IngestValidatedClaimsPayload, JobStatus, JobType
+        from app.jobs.worker import Worker
+
+        sentinel = "SECRET_PROVIDER_REGISTRY_FAILURE"
+
+        def invalid_registry():
+            raise ValueError(sentinel)
+
+        class TrackingHandler(IngestValidatedClaimsHandler):
+            def __init__(self):
+                super().__init__(
+                    session_factory=pg_session_factory,
+                    provider_registry_factory=invalid_registry,
+                )
+                self.calls = []
+
+            async def handle(self, **kwargs):
+                self.calls.append(kwargs)
+                return await super().handle(**kwargs)
+
+        handler = TrackingHandler()
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(),
+                idempotency_key=f"dependency-failure-{uuid4()}",
+            )
+            await session.commit()
+
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        task = asyncio.create_task(worker.start())
+        await asyncio.sleep(0.25)
+        assert not worker._ready_event.is_set()
+        assert (await _request_worker(worker)).startswith(
+            "HTTP/1.1 503 Service Unavailable"
+        )
+        worker.stop()
+        await task
+
+        async with pg_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(
+                        application_jobs.c.status,
+                        application_jobs.c.attempt_count,
+                    ).where(application_jobs.c.id == job_id)
+                )
+            ).mappings().one()
+        assert row["status"] == JobStatus.pending.value
+        assert row["attempt_count"] == 0
+        assert handler.calls == []
+        assert any(
+            record.message == "worker_dependency_validation_failed"
+            for record in caplog.records
+        )
+        assert_sensitive_values_absent(caplog.records)
         assert sentinel not in " ".join(str(record.__dict__) for record in caplog.records)
 
     async def test_missing_embedding_credential_keeps_worker_unready(
@@ -664,7 +1058,7 @@ class TestWorkerReadiness:
                 session_factory=pg_session_factory,
                 settings=get_settings(),
             ),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -691,14 +1085,19 @@ class TestWorkerReadiness:
         from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
         from app.jobs.worker import Worker
 
+        import types
+
+        def valid_registry():
+            return types.SimpleNamespace(embeddings=object())
+
         registry = HandlerRegistry()
         registry.register(
             JobType.ingest_validated_claims.value,
             IngestValidatedClaimsHandler(
                 session_factory=pg_session_factory,
-                embedding_provider_factory=object,
+                provider_registry_factory=valid_registry,
             ),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
 
@@ -722,9 +1121,6 @@ class TestWorkerReadiness:
         from app.jobs.worker import Worker
 
         class _CompletingHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -738,7 +1134,7 @@ class TestWorkerReadiness:
         registry.register(
             JobType.ingest_validated_claims.value,
             _CompletingHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         async with pg_session_factory() as session:
             job_id = await JobRepository(session).enqueue(
@@ -756,7 +1152,7 @@ class TestWorkerReadiness:
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise RuntimeError("SENSITIVE_DATABASE_EXCEPTION")
+                raise RuntimeError("SECRET_RAW_EXCEPTION")
             await reconcile()
 
         worker._reconcile = flaky_reconcile
@@ -790,7 +1186,8 @@ class TestWorkerReadiness:
         ]
         assert poll_failures
         assert poll_failures[0].__dict__["ctx_failure_category"] == "database_transient"
-        assert "SENSITIVE_DATABASE_EXCEPTION" not in " ".join(
+        assert_sensitive_values_absent(caplog.records)
+        assert "SECRET_RAW_EXCEPTION" not in " ".join(
             str(record.__dict__) for record in caplog.records
         )
 

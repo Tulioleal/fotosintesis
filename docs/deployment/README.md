@@ -15,6 +15,7 @@ change artifacts in `openspec/changes/gcp-deployment-platform/`.
 | `dns.md` | DNS records that point at the reserved static IPs, plus the `hostname-https` vs `ip-http` exposure modes. |
 | `deploy-and-release.md` | Dev auto-deploy, manual dev redeploy, and prod release flows. Includes the immutable 40-character Git commit SHA image tag contract. |
 | `rollback.md` | Image-tag rollback, `kubectl rollout undo`, and database migration forward-fix / restore limitations. |
+| `../../backend/docs/worker-operations.md` | Durable worker startup, inspection, retry exhaustion, backlog diagnosis, payload compatibility, and forward-fix recovery. |
 | `cleanup.md` | Non-production cleanup and production deletion-protection safeguards. |
 | `validation-runbook.md` | Operator procedure for collecting dev end-to-end and prod release evidence. |
 | `validation-evidence.md` | Evidence template used by the validation runbook. |

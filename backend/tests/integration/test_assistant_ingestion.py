@@ -68,6 +68,7 @@ class TestAssistantDurableIngestion:
         from app.auth.tables import application_jobs
         from app.core.settings import get_settings
         from app.knowledge.page_evidence import TrustedPageEvidence
+        from app.observability.metrics import metrics_registry
         from app.providers.types import SearchResult
         from sqlalchemy import select
 
@@ -158,6 +159,7 @@ class TestAssistantDurableIngestion:
         from unittest.mock import patch
 
         caplog.set_level(logging.INFO, logger="app.assistant.service")
+        metrics_registry.job_schedules_by_type_outcome.clear()
         async with pg_session_factory() as session:
             service = AssistantService(session)
             service.graph = FakeGraph()
@@ -170,7 +172,6 @@ class TestAssistantDurableIngestion:
                     user_id=test_user,
                     payload=AssistantChatRequest(message="Cuidados", plant="Pata"),
                 )
-                await session.commit()
             jobs = (await session.execute(select(application_jobs))).all()
 
         assert len(jobs) == 1
@@ -189,11 +190,56 @@ class TestAssistantDurableIngestion:
         assert scheduled.__dict__["ctx_ownership_category"] == "user_owned"
         assert scheduled.__dict__["ctx_schedule_outcome"] == "created"
         assert scheduled.__dict__["ctx_job_id"] == str(jobs[0]._mapping["id"])
+        assert scheduled.__dict__["ctx_conversation_id"] == str(
+            jobs[0]._mapping["conversation_id"]
+        )
+        assert metrics_registry.job_schedules_by_type_outcome == {
+            ("ingest_validated_claims", "created"): 1
+        }
         service_logs = " ".join(str(record.__dict__) for record in caplog.records)
         assert claim not in service_logs
         assert quote not in service_logs
         assert source_url not in service_logs
         assert jobs[0]._mapping["idempotency_key"] not in service_logs
+
+    async def test_idempotent_enqueue_records_reused_schedule_metric(
+        self, pg_session_factory, test_user
+    ):
+        from app.assistant.schemas import AssistantChatRequest
+        from app.assistant.service import AssistantService
+        from app.observability.metrics import metrics_registry
+
+        class FakeGraph:
+            async def run(self, **kwargs):
+                return {
+                    "answer": "Durable answer.",
+                    "sources": [],
+                    "tool_failures": [],
+                    "ingestion_claims": [_VALID_CLAIM_PAYLOAD],
+                    "answerability_status": "full",
+                }
+
+        metrics_registry.job_schedules_by_type_outcome.clear()
+        async with pg_session_factory() as session:
+            service = AssistantService(session)
+            service.graph = FakeGraph()
+            first = await service.chat(
+                user_id=test_user,
+                payload=AssistantChatRequest(message="Schedule this", plant="Pata"),
+            )
+            await service.chat(
+                user_id=test_user,
+                payload=AssistantChatRequest(
+                    message="Schedule this",
+                    plant="Pata",
+                    conversation_id=first.conversation_id,
+                ),
+            )
+
+        assert metrics_registry.job_schedules_by_type_outcome == {
+            ("ingest_validated_claims", "created"): 1,
+            ("ingest_validated_claims", "reused"): 1,
+        }
 
     async def test_response_persistence_and_enqueue_commit_together(
         self, pg_session_factory, test_user
@@ -225,10 +271,14 @@ class TestAssistantDurableIngestion:
                     user_id=test_user,
                     payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
                 )
-                await s.commit()
 
-                msg_count = (await s.execute(select(conversation_messages))).all()
-                job_count = (await s.execute(select(application_jobs))).all()
+        async with pg_session_factory() as verification:
+            msg_count = (
+                await verification.execute(select(conversation_messages))
+            ).all()
+            job_count = (
+                await verification.execute(select(application_jobs))
+            ).all()
 
         assert len(msg_count) >= 1
         assert len(job_count) >= 1
@@ -253,30 +303,47 @@ class TestAssistantDurableIngestion:
         from app.assistant.service import AssistantService
         from app.assistant.schemas import AssistantChatRequest
         from app.assistant.tools import facade as tools_facade
+        from app.db.repository import RepositoryBase
+        from app.observability.metrics import metrics_registry
         from unittest.mock import patch
-        from uuid import uuid4
-
-        from app.jobs.repository import JobRepository
-
-        async def failing_enqueue(*_args, **_kwargs):
-            raise RuntimeError("forced enqueue failure")
 
         async with pg_session_factory() as s:
             service = AssistantService(s)
             service.graph = FakeGraph()
+            commit_hook_called = False
+            metrics_registry.job_schedules_by_type_outcome.clear()
+
+            async def rollback_after_writes(*_args, **_kwargs):
+                nonlocal commit_hook_called
+                commit_hook_called = True
+                messages = await s.execute(select(conversation_messages))
+                jobs = await s.execute(select(application_jobs))
+                assert messages.first() is not None
+                assert jobs.first() is not None
+                await s.rollback()
+                raise RuntimeError("forced transaction failure")
+
             with patch.object(
                 tools_facade,
                 "get_provider_registry",
                 lambda: types.SimpleNamespace(embeddings=object()),
             ):
-                with patch.object(JobRepository, "enqueue_result", new=failing_enqueue):
-                    with pytest.raises(RuntimeError):
+                with patch.object(
+                    RepositoryBase,
+                    "commit",
+                    rollback_after_writes,
+                ):
+                    with pytest.raises(
+                        RuntimeError, match="^forced transaction failure$"
+                    ):
                         await service.chat(
                             user_id=test_user,
                             payload=AssistantChatRequest(
                                 message="Rollback me", plant="Pata"
                             ),
                         )
+            assert commit_hook_called is True
+            assert metrics_registry.job_schedules_by_type_outcome == {}
 
         async with pg_session_factory() as verification:
             msg_count = (
@@ -316,7 +383,6 @@ class TestAssistantDurableIngestion:
                     user_id=test_user,
                     payload=AssistantChatRequest(message="Empty claims", plant="Pata"),
                 )
-                await s.commit()
 
                 rows = (await s.execute(select(application_jobs))).all()
         assert len(rows) == 0
@@ -358,7 +424,6 @@ class TestAssistantDurableIngestion:
                     user_id=test_user,
                     payload=AssistantChatRequest(message="Worker absent?", plant="Pata"),
                 )
-                await s.commit()
 
         async with pg_session_factory() as verification:
             messages = (
@@ -427,9 +492,6 @@ class TestAssistantDurableIngestion:
                 }
 
         class _FailingHandler(JobHandler):
-            def supported_payload_versions(self) -> list[int]:
-                return [1]
-
             def payload_model(self, payload_version: int):
                 return IngestValidatedClaimsPayload
 
@@ -446,7 +508,6 @@ class TestAssistantDurableIngestion:
                 user_id=test_user,
                 payload=AssistantChatRequest(message="Persist then fail", plant="Pata"),
             )
-            await session.commit()
             job_id = await session.scalar(
                 select(application_jobs.c.id).where(
                     application_jobs.c.conversation_id == response.conversation_id
@@ -466,7 +527,7 @@ class TestAssistantDurableIngestion:
         registry.register(
             JobType.ingest_validated_claims.value,
             _FailingHandler(),
-            payload_model=IngestValidatedClaimsPayload,
+            payload_models={1: IngestValidatedClaimsPayload},
         )
         worker = Worker(
             session_factory=pg_session_factory,
@@ -507,69 +568,3 @@ class TestAssistantDurableIngestion:
         assert "SENSITIVE_EXHAUSTED_CLAIM" not in " ".join(
             str(record.__dict__) for record in caplog.records
         )
-
-    async def test_retry_does_not_duplicate_documents(
-        self, pg_session_factory
-    ):
-        from datetime import datetime, timezone
-        from app.jobs.handlers.ingest_validated_claims import (
-            compute_claim_ingestion_key,
-        )
-        from app.knowledge.repository import KnowledgeRepository
-        from app.knowledge.schemas import KnowledgeDocumentInput, KnowledgeSourceInput
-        from app.knowledge.chunking import chunk_document
-
-        claim = {
-            "scientific_name": "Test plant",
-            "topic": "care",
-            "source_url": "https://example.org/retry-idempotent",
-            "source_domain": "example.org",
-            "source_provenance": "trusted",
-            "claim": "Idempotent retry test",
-            "evidence_quote": "Test evidence",
-            "confidence": 0.9,
-            "covered_aspects": ["watering"],
-            "answerability_status": "full",
-            "language": "en",
-        }
-
-        ingestion_key = compute_claim_ingestion_key(claim)
-
-        async with pg_session_factory() as s:
-            repo = KnowledgeRepository(s)
-            existing = await repo.find_document_by_ingestion_key(ingestion_key)
-            assert existing is None
-
-            doc = KnowledgeDocumentInput(
-                species_id=None,
-                scientific_name=claim["scientific_name"],
-                topic=claim["topic"],
-                title="Test",
-                content=claim["claim"],
-                confidence=claim["confidence"],
-                review_status="auto_ingested",
-                sources=[
-                    KnowledgeSourceInput(
-                        title="Test source",
-                        url=claim["source_url"],
-                        source_domain=claim["source_domain"],
-                        retrieved_at=datetime.now(timezone.utc),
-                        validation_status="trusted",
-                    ),
-                ],
-            )
-            doc.metadata["claim_ingestion_key"] = ingestion_key
-            chunks = chunk_document(doc)
-
-            persisted = await repo.save_document(
-                doc, chunks=chunks, ingestion_key=ingestion_key,
-            )
-            await s.commit()
-
-            existing_id = await repo.find_document_by_ingestion_key(ingestion_key)
-            assert existing_id == persisted.id
-
-        async with pg_session_factory() as s:
-            repo = KnowledgeRepository(s)
-            same_id = await repo.find_document_by_ingestion_key(ingestion_key)
-            assert same_id == persisted.id

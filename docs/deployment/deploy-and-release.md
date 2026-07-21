@@ -108,9 +108,13 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
 4. **Provider API key projection** - the `Verify required provider API
    key secrets` step fails the deploy when a configured provider is
    missing its key.
-5. **Migration completion** - the workflow applies only the migration Job,
-   verifies its container exits successfully, and does not apply the API,
-   worker, or frontend until that check passes.
+5. **Migration completion** - the workflow applies the one-shot migration Job
+     and waits for its native Kubernetes `Complete` condition. The restartable
+     Cloud SQL proxy init sidecar exits with the Pod, so Alembic success can
+     complete the Job without workflow-managed deletion. Native sidecars
+     require Kubernetes 1.29 or newer; the workflow checks the GKE server
+     version before applying the Job. The API, worker, and frontend are not
+     applied until that wait passes.
 6. **Backend, worker, and frontend rollout** - the shared rollout script waits
    up to 600 seconds for each Deployment. On failure it prints Deployment,
    ReplicaSet, Pod, current/previous container, Cloud SQL proxy, and event

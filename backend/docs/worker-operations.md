@@ -60,11 +60,12 @@ The worker emits JSON structured logs with these event names:
 
 The API emits `job_scheduled` after the request transaction commits. It includes
 the job UUID, closed job type, payload version, ownership category, and a
-`created` or `reused` scheduling outcome. Attempt-result events include the job
-type, attempt number, duration, outcome, and worker identity. Failure events add
-only a closed failure category. Events never include the payload, idempotency
-key material, claims, evidence text, prompts, notes, source bodies, credentials,
-or tokens.
+`created` or `reused` scheduling outcome. When available, it also includes the
+conversation UUID for request-to-job correlation. Attempt-result events include
+the job type, attempt number, duration, outcome, and worker identity. Failure
+events add only a closed failure category. Events never include the payload,
+idempotency key material, claims, evidence text, prompts, notes, source bodies,
+credentials, or tokens.
 
 ### Metrics
 
@@ -81,7 +82,9 @@ Prometheus PodMonitoring).
 | `fotosintesis_job_attempt_duration_seconds` | `job_type`, `status` | Handler duration by outcome |
 | `fotosintesis_job_retries_total` | `job_type`, `category` | Retry events by job type and failure category |
 | `fotosintesis_job_stale_recoveries_total` | `job_type`, `outcome` | Stale lease recoveries, including `lease_expired` and `attempts_exhausted` |
-| `fotosintesis_job_backlog_count` | `job_type`, `status` | Backlog size by lifecycle status |
+| `fotosintesis_job_schedules_total` | `job_type`, `outcome` | Committed scheduling outcomes: `created` or `reused` |
+| `fotosintesis_job_backlog_count` | `job_type`, `status` | Active backlog only: `pending` and `processing` rows |
+| `fotosintesis_job_status_count` | `job_type`, `status` | Durable row count across every lifecycle status |
 | `fotosintesis_job_oldest_eligible_age_seconds` | (none) | Age of the oldest eligible pending job |
 | `fotosintesis_worker_last_successful_poll_timestamp_seconds` | (none) | Unix timestamp of the last successful reconciliation or disabled-mode database check |
 
@@ -92,6 +95,13 @@ worker startup logs for the metrics endpoint address.
 Labels are restricted to closed values (job type, lifecycle status, failure category).
 No job IDs, user IDs, conversation IDs, URLs, scientific names, raw errors, or
 payload values are used as labels.
+
+`fotosintesis_job_outcomes_total` uses `lease_lost` when the worker loses lease
+ownership during execution and intentionally does not finalize the job.
+`cancelled` means a handler was cancelled during worker shutdown; it is likewise
+not finalized by that worker and is recoverable after lease expiry. Scheduling
+logs may include job and conversation UUIDs for correlation, but metrics never
+use either identifier as a label.
 
 The Kubernetes worker exposes `/ready` on its private metrics port. An enabled
 worker reports ready only after registered handler dependencies validate and a
@@ -131,8 +141,23 @@ WHERE id = '<job-uuid>';
 
 ## Retry exhaustion
 
-When a job exhausts its maximum attempts, it transitions to `failed` status
-with `last_error.category: "attempts_exhausted"`. To diagnose:
+Unexpected handler exceptions are sanitized as `unexpected_error` and treated as
+retryable until `max_attempts` is reached. Raw exception messages are never
+persisted, logged, used as metric labels, or exposed through the status API.
+
+A job reaches terminal failure through one of two paths:
+
+1. **Live final handler attempt** — the handler's last attempt runs and
+   reaches its retry limit. The `last_error.category` retains its sanitized
+   category (e.g. `provider_transient`) with `retryable=false`. The
+   `attempt_count` reflects the actual number of handler invocations.
+
+2. **Expired processing lease reconciled after exhaustion** — a crashed
+   worker's lease expires and reconciliation finds the attempt count at the
+   maximum. The `last_error.category` is set to `attempts_exhausted` with
+   `retryable=false`. The `attempt_count` equals `max_attempts`.
+
+To diagnose:
 
 1. Query the job to inspect `last_error` and `result`
 2. If the issue is transient and you want to retry, update the job:

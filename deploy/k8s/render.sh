@@ -95,6 +95,49 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
+case "$JOBS_SHUTDOWN_DRAIN_SECONDS" in
+  ''|*[!0-9]*)
+    printf 'render: JOBS_SHUTDOWN_DRAIN_SECONDS must be an integer\n' >&2
+    exit 1
+    ;;
+esac
+
+case "$JOBS_TERMINATION_GRACE_PERIOD_SECONDS" in
+  ''|*[!0-9]*)
+    printf 'render: JOBS_TERMINATION_GRACE_PERIOD_SECONDS must be an integer\n' >&2
+    exit 1
+    ;;
+esac
+
+if [ "$JOBS_TERMINATION_GRACE_PERIOD_SECONDS" -le "$JOBS_SHUTDOWN_DRAIN_SECONDS" ]; then
+  printf '%s\n' 'render: termination grace must exceed worker shutdown drain timeout' >&2
+  exit 1
+fi
+
+validate_sha40() {
+  label="$1"
+  value="$2"
+
+  if [ "${#value}" -ne 40 ]; then
+    printf \
+      'render: %s must be a 40-character lowercase hexadecimal Git SHA\n' \
+      "$label" >&2
+    exit 1
+  fi
+
+  case "$value" in
+    *[!0-9a-f]*)
+      printf \
+        'render: %s must be a 40-character lowercase hexadecimal Git SHA\n' \
+        "$label" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_sha40 BACKEND_IMAGE_TAG "$BACKEND_IMAGE_TAG"
+validate_sha40 FRONTEND_IMAGE_TAG "$FRONTEND_IMAGE_TAG"
+
 mkdir -p "$output_dir"
 
 for source_file in "$base_dir"/*.yaml; do

@@ -56,11 +56,12 @@ by Kubernetes and require a fresh image tag.
 
 ## Migration limitations
 
-Migrations are forward-only. The deploy workflow runs migrations
-**before** the backend rollout and waits for the migration Job to
-complete. The backend rollout only proceeds once the migration Job has
-reported `Complete`. This guarantees the new backend never runs against
-an out-of-date schema.
+Migrations are forward-only. The deploy workflow runs a one-shot migration Job
+**before** the backend rollout and waits for its native Kubernetes `Complete`
+condition. The restartable Cloud SQL proxy init sidecar exits with the Pod, so
+Alembic success completes the Job without workflow-managed deletion. The backend
+rollout only proceeds after that completion. This guarantees the new backend
+never runs against an out-of-date schema.
 
 Incompatible migration failures (a migration that adds a column the new
 backend does not expect, or removes data the new backend relies on) are

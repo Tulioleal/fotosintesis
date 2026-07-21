@@ -35,8 +35,8 @@ class TestIngestionKeyLanguageIndependence:
             "evidence_quote": "La mejor época para podar rosales es finales del invierno",
         }
 
-        en_key = compute_claim_ingestion_key(en_claim)
-        es_key = compute_claim_ingestion_key(es_claim)
+        en_key = compute_claim_ingestion_key(en_claim, ingestion_policy_version=1)
+        es_key = compute_claim_ingestion_key(es_claim, ingestion_policy_version=1)
 
         assert en_key != es_key, "Different languages must produce different keys"
 
@@ -64,8 +64,8 @@ class TestIngestionKeyLanguageIndependence:
             "evidence_quote": "Deep watering weekly promotes root growth",
         }
 
-        key1 = compute_claim_ingestion_key(claim1)
-        key2 = compute_claim_ingestion_key(claim2)
+        key1 = compute_claim_ingestion_key(claim1, ingestion_policy_version=1)
+        key2 = compute_claim_ingestion_key(claim2, ingestion_policy_version=1)
 
         assert key1 == key2, "Case and trailing-slash normalization must produce identical keys"
 
@@ -93,8 +93,8 @@ class TestIngestionKeyLanguageIndependence:
             "evidence_quote": "Rubber trees thrive in bright filtered light",
         }
 
-        base_key = compute_claim_ingestion_key(base)
-        para_key = compute_claim_ingestion_key(paraphrased)
+        base_key = compute_claim_ingestion_key(base, ingestion_policy_version=1)
+        para_key = compute_claim_ingestion_key(paraphrased, ingestion_policy_version=1)
 
         assert base_key != para_key, "Different evidence must produce different keys"
 
@@ -111,7 +111,7 @@ class TestIngestionKeyLanguageIndependence:
             "claim": "Orchids need special care",
             "evidence_quote": "Orchids require well-draining medium",
         }
-        key = compute_claim_ingestion_key(claim)
+        key = compute_claim_ingestion_key(claim, ingestion_policy_version=1)
         assert key.startswith("v1:")
         assert len(key) > 10
 
@@ -128,7 +128,7 @@ class TestIngestionKeyLanguageIndependence:
             "claim": "Regar solo cuando el suelo esté seco",
             "evidence_quote": "La lavanda necesita poco riego",
         }
-        key = compute_claim_ingestion_key(claim)
+        key = compute_claim_ingestion_key(claim, ingestion_policy_version=1)
         assert key.startswith("v1:")
 
     def test_unsupported_multilingual_claims(self):

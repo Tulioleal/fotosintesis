@@ -316,6 +316,14 @@ def _validated_claim_payloads(
         claim = str(support.get("claim") or "").strip()
         if not claim or not isinstance(urls, list) or not isinstance(aspects, list):
             continue
+
+        raw_quote = support.get("evidence_quote")
+        if not isinstance(raw_quote, str):
+            continue
+        evidence_quote = raw_quote.strip()
+        if not evidence_quote:
+            continue
+
         for url in urls:
             if not isinstance(url, str) or not url.strip():
                 continue
@@ -332,7 +340,7 @@ def _validated_claim_payloads(
                     "missing_aspects": list(state.get("missing_aspects", [])),
                     "answerability_status": status,
                     "claim": claim,
-                    "evidence_quote": str(support.get("evidence_quote") or claim),
+                    "evidence_quote": evidence_quote,
                     "source_url": url,
                     "source_title": source.get("title"),
                     "source_domain": source.get("domain"),

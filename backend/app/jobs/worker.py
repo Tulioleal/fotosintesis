@@ -45,6 +45,21 @@ def _is_retryable(failure_category: JobFailureCategory) -> bool:
     return failure_category not in TERMINAL_FAILURE_CATEGORIES
 
 
+def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
+    if result.status is not JobStatus.partial:
+        return result
+    if (
+        result.result is None
+        or not result.result.partial
+        or not result.result.limitations
+    ):
+        return JobHandlerResult.failed(
+            category=JobFailureCategory.invariant_violation,
+            retryable=False,
+        )
+    return result
+
+
 @dataclass
 class _ExecutionState:
     job_id: str
@@ -117,8 +132,6 @@ class Worker:
             else:
                 logger.info("worker_disabled_by_configuration")
                 await self._disabled_loop()
-        except asyncio.CancelledError:
-            pass
         finally:
             await self._drain()
             await stop_metrics_server(self._metrics_server)
@@ -136,6 +149,7 @@ class Worker:
                         "ctx_failure_category": JobFailureCategory.invariant_violation.value
                     },
                 )
+                await self._refresh_backlog_metrics()
                 if await self._wait_for_shutdown():
                     break
                 continue
@@ -163,6 +177,7 @@ class Worker:
         while not self._shutdown_event.is_set():
             try:
                 await self._check_database_connectivity()
+                await self._refresh_backlog_metrics()
                 self._metrics.record_worker_successful_poll()
                 self._ready_event.set()
             except asyncio.CancelledError:
@@ -243,6 +258,7 @@ class Worker:
             async with self._session_factory() as session:
                 repo = JobRepository(session, self.settings)
                 counts = await repo.get_backlog_counts()
+                status_counts = await repo.get_status_counts()
                 age = await repo.oldest_eligible_age_seconds()
             await session.commit()
         except Exception:
@@ -253,8 +269,13 @@ class Worker:
             return
         # Counts is the authoritative snapshot, including absent series.
         self._metrics.reset_job_backlog()
+        self._metrics.reset_job_status_counts()
         for (job_type, status), count in counts.items():
             self._metrics.record_job_backlog(
+                job_type=job_type, status=status, count=count,
+            )
+        for (job_type, status), count in status_counts.items():
+            self._metrics.record_job_status_count(
                 job_type=job_type, status=status, count=count,
             )
         self._metrics.record_oldest_eligible_age(age_seconds=age)
@@ -279,55 +300,70 @@ class Worker:
                 batch_size=batch_size,
                 lease_duration_seconds=self.settings.jobs_lease_duration_seconds,
             )
+
+            if self._shutdown_event.is_set():
+                await session.rollback()
+                return 0
+
             if claimed:
                 await session.commit()
 
-        for job_row in claimed:
-            job_id = str(job_row.id)
-            token = job_row.lease_token
-            state = _ExecutionState(
-                job_id=job_id,
-                lease_token=token,
-                job_type=job_row.job_type.value,
-                attempt_count=job_row.attempt_count,
-            )
-            self._executions[job_id] = state
-            self._metrics.record_job_claim(job_type=job_row.job_type.value)
-            if job_row.recovered:
-                self._metrics.record_job_stale_recovery(
-                    job_type=job_row.job_type.value,
-                    outcome="lease_expired",
-                )
-                logger.info(
-                    "job_stale_recovered",
-                    extra={
-                        "ctx_job_type": job_row.job_type.value,
-                        "ctx_recovery_outcome": "lease_expired",
-                        "ctx_recovery_count": 1,
-                    },
-                )
-            logger.info(
-                "job_claimed",
-                extra={
-                    "ctx_job_id": job_id,
-                    "ctx_job_type": job_row.job_type.value,
-                    "ctx_attempt": job_row.attempt_count,
-                    "ctx_worker_identity": self.owner,
-                    "ctx_recovered": job_row.recovered,
-                },
-            )
+            if self._shutdown_event.is_set():
+                for job in claimed:
+                    await repo.release_unstarted_job(
+                        job_id=job.id,
+                        owner=owner,
+                        lease_token=job.lease_token,
+                    )
+                await session.commit()
+                return 0
 
-            task = asyncio.create_task(
-                self._execute_handler(
-                    state=state,
-                    job_row=job_row,
-                ),
-                name=f"job:{job_id}",
-            )
-            self._handler_tasks[job_id] = task
-            task.add_done_callback(self._make_done_callback(job_id))
+            # Register before leaving this context. Session exit awaits, so
+            # registration after it would reopen a shutdown race.
+            for job_row in claimed:
+                self._register_execution(job_row)
 
         return len(claimed)
+
+    def _register_execution(self, job_row: ClaimedJob) -> None:
+        job_id = str(job_row.id)
+        state = _ExecutionState(
+            job_id=job_id,
+            lease_token=job_row.lease_token,
+            job_type=job_row.job_type.value,
+            attempt_count=job_row.attempt_count,
+        )
+        self._executions[job_id] = state
+        self._metrics.record_job_claim(job_type=job_row.job_type.value)
+        if job_row.recovered:
+            self._metrics.record_job_stale_recovery(
+                job_type=job_row.job_type.value,
+                outcome="lease_expired",
+            )
+            logger.info(
+                "job_stale_recovered",
+                extra={
+                    "ctx_job_type": job_row.job_type.value,
+                    "ctx_recovery_outcome": "lease_expired",
+                    "ctx_recovery_count": 1,
+                },
+            )
+        logger.info(
+            "job_claimed",
+            extra={
+                "ctx_job_id": job_id,
+                "ctx_job_type": job_row.job_type.value,
+                "ctx_attempt": job_row.attempt_count,
+                "ctx_worker_identity": self.owner,
+                "ctx_recovered": job_row.recovered,
+            },
+        )
+        task = asyncio.create_task(
+            self._execute_handler(state=state, job_row=job_row),
+            name=f"job:{job_id}",
+        )
+        self._handler_tasks[job_id] = task
+        task.add_done_callback(self._make_done_callback(job_id))
 
     def _make_done_callback(self, job_id: str):
         def _done(task: asyncio.Task) -> None:
@@ -374,9 +410,16 @@ class Worker:
                 attempt_count=attempt_count,
                 max_attempts=max_attempts,
             )
+            result = _validate_result_contract(result)
         except asyncio.CancelledError:
             state.cancelled = True
             state.completed.set()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            self._metrics.record_job_outcome(
+                job_type=job_type,
+                status="cancelled",
+                duration_seconds=duration,
+            )
             logger.info(
                 "worker_handler_cancelled",
                 extra={
@@ -418,6 +461,13 @@ class Worker:
                     duration=duration,
                 )
             elif state.lease_lost:
+                duration = (datetime.now(timezone.utc) - start).total_seconds()
+                self._metrics.record_job_outcome(
+                    job_type=job_type,
+                    status="lease_lost",
+                    duration_seconds=duration,
+                )
+                self._log_lease_lost(state, operation="execution")
                 logger.warning(
                     "worker_lease_lost_during_execution",
                     extra={
@@ -446,12 +496,11 @@ class Worker:
                 category=JobFailureCategory.unknown_job_type,
                 retryable=False,
             )
-        if payload_version not in handler.supported_payload_versions():
-            return JobHandlerResult.failed(
-                category=JobFailureCategory.unsupported_payload_version,
-                retryable=False,
-            )
-        model_cls = handler.payload_model(payload_version)
+
+        model_cls = self._handler_registry.get_payload_model(
+            job_type,
+            payload_version,
+        )
         if model_cls is None:
             return JobHandlerResult.failed(
                 category=JobFailureCategory.unsupported_payload_version,
@@ -494,7 +543,9 @@ class Worker:
                 )
                 if not success:
                     await session.rollback()
-                    self._log_lease_lost(state, operation="complete")
+                    self._record_finalization_lease_loss(
+                        state, operation="complete", duration=duration
+                    )
                     return
                 await session.commit()
                 self._metrics.record_job_outcome(
@@ -520,7 +571,9 @@ class Worker:
                 )
                 if not success:
                     await session.rollback()
-                    self._log_lease_lost(state, operation="partial")
+                    self._record_finalization_lease_loss(
+                        state, operation="partial", duration=duration
+                    )
                     return
                 await session.commit()
                 self._metrics.record_job_outcome(
@@ -563,7 +616,9 @@ class Worker:
                 )
                 if not success:
                     await session.rollback()
-                    self._log_lease_lost(state, operation="retry")
+                    self._record_finalization_lease_loss(
+                        state, operation="retry", duration=duration
+                    )
                     return
                 await session.commit()
                 self._metrics.record_job_outcome(
@@ -599,7 +654,9 @@ class Worker:
             )
             if not success:
                 await session.rollback()
-                self._log_lease_lost(state, operation="fail")
+                self._record_finalization_lease_loss(
+                    state, operation="fail", duration=duration
+                )
                 return
             await session.commit()
             self._metrics.record_job_outcome(
@@ -629,6 +686,21 @@ class Worker:
                 "ctx_operation": operation,
             },
         )
+
+    def _record_finalization_lease_loss(
+        self,
+        state: _ExecutionState,
+        *,
+        operation: str,
+        duration: float,
+    ) -> None:
+        state.lease_lost = True
+        self._metrics.record_job_outcome(
+            job_type=state.job_type,
+            status="lease_lost",
+            duration_seconds=duration,
+        )
+        self._log_lease_lost(state, operation=operation)
 
     async def _renew_lease_loop(self, *, state: _ExecutionState) -> None:
         # Active handlers retain ownership while the worker drains. Renewal stops
@@ -731,6 +803,8 @@ class Worker:
 
         if pending or renewal_tasks:
             await asyncio.gather(*pending, *renewal_tasks, return_exceptions=True)
+        # Let completion callbacks finish before the worker task returns.
+        await asyncio.sleep(0)
 
         if timed_out:
             logger.warning(

@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.settings import Settings, get_settings
 from app.knowledge.chunking import build_chunk_metadata
@@ -219,6 +220,33 @@ class LlamaIndexRuntime:
             self._vector_store = factory()
         return self._vector_store
 
+    async def _initialize_vector_store(self, store: Any) -> None:
+        # PGVectorStore creates its table lazily. Serialize that DDL across
+        # workers so two first-time claims cannot race its CREATE TABLE call.
+        initialization_engine = store._async_engine
+        owns_initialization_engine = initialization_engine is None
+        if initialization_engine is None:
+            initialization_url = make_url(str(store.connection_string)).set(
+                drivername="postgresql+asyncpg"
+            )
+            initialization_engine = create_async_engine(initialization_url)
+        try:
+            async with initialization_engine.connect() as connection:
+                await connection.execute(
+                    text("SELECT pg_advisory_lock(hashtext(:key))"),
+                    {"key": "fotosintesis-pgvector-store-initialization"},
+                )
+                try:
+                    await asyncio.to_thread(store._initialize)
+                finally:
+                    await connection.execute(
+                        text("SELECT pg_advisory_unlock(hashtext(:key))"),
+                        {"key": "fotosintesis-pgvector-store-initialization"},
+                    )
+        finally:
+            if owns_initialization_engine:
+                await initialization_engine.dispose()
+
     def _build_chunk_from_node(
         self,
         node: Any,
@@ -374,7 +402,7 @@ class LlamaIndexRuntime:
 
         store = self._get_vector_store()
         try:
-            await asyncio.to_thread(store._initialize)
+            await self._initialize_vector_store(store)
             table = store._table_class
             schema_name = store.schema_name
             table_name = table.__tablename__
@@ -389,6 +417,13 @@ class LlamaIndexRuntime:
             index_name = f"uq_pgvector_node_id_{index_hash}"
 
             async with store._async_engine.begin() as connection:
+                # CREATE INDEX IF NOT EXISTS can still deadlock when two
+                # first-time workers issue it concurrently. Keep only this
+                # vector DDL/upsert transaction under a database-wide lock.
+                await connection.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": "fotosintesis-pgvector-node-upsert"},
+                )
                 await connection.execute(
                     text(
                         f'CREATE UNIQUE INDEX IF NOT EXISTS "{index_name}" '
@@ -430,7 +465,7 @@ class LlamaIndexRuntime:
         store = self._get_vector_store()
         expected_ids = {str(node_id) for node_id in node_ids}
         try:
-            await asyncio.to_thread(store._initialize)
+            await self._initialize_vector_store(store)
             nodes = await store.aget_nodes(node_ids=sorted(expected_ids))
         except Exception as exc:
             raise VectorIndexError("PGVector node verification failed") from exc

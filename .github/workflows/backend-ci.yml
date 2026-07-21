@@ -6,13 +6,19 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/deploy.yml"
       - "deploy/k8s/**"
+      - "deploy/scripts/**"
+      - "docker-compose.yml"
       - "infra/opentofu/**"
   pull_request:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/deploy.yml"
       - "deploy/k8s/**"
+      - "deploy/scripts/**"
+      - "docker-compose.yml"
   workflow_call:
     inputs:
       environment:

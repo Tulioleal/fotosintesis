@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from app.schemas.common import ApiSchema
 
 
-INGESTION_POLICY_VERSION = 1
+LEGACY_V1_INGESTION_POLICY_VERSION = 1
+CURRENT_INGESTION_POLICY_VERSION = 1
 MAX_CLAIMS_PER_PAYLOAD = 50
 MAX_CLAIM_FIELD_LENGTH = 2000
 MAX_ASPECT_LENGTH = 80
@@ -141,6 +142,17 @@ class IngestValidatedClaimsPayload(ApiSchema):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True, extra="forbid")
 
     payload_version: int = Field(default=JobPayloadVersion.INGEST_VALIDATED_CLAIMS_V1, ge=1)
+    ingestion_policy_version: int = Field(
+        default=LEGACY_V1_INGESTION_POLICY_VERSION,
+        ge=1,
+    )
+
+    @field_validator("ingestion_policy_version", mode="before")
+    @classmethod
+    def _require_int_for_policy(cls, v: object) -> int:
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ValueError("ingestion_policy_version must be an integer")
+        return v
     claims: list[IngestValidatedClaimInput] = Field(
         min_length=1, max_length=MAX_CLAIMS_PER_PAYLOAD
     )

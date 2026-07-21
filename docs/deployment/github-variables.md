@@ -81,6 +81,34 @@ no other iac.yml job has that permission.
 | `DEV_STATIC_IP_ADDRESS` / `PROD_STATIC_IP_ADDRESS` | `frontend_static_ip_address` |
 | `DEV_SECRET_NAMES` / `PROD_SECRET_NAMES` | `secret_names` (compact JSON containing container names only) |
 
+## Durable job variables (hand-set)
+
+These variables are consumed by `.github/workflows/deploy.yml` and control
+the durable background job subsystem. The API reads `JOBS_PRODUCER_ENABLED`
+and `JOBS_MAX_ATTEMPTS_DEFAULT`. The worker reads polling, lease, retry, drain,
+and metrics settings. Kubernetes uses
+`JOBS_TERMINATION_GRACE_PERIOD_SECONDS` for pod termination configuration.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `JOBS_PRODUCER_ENABLED` | `false` | Enable job enqueueing in the API process |
+| `JOBS_WORKER_ENABLED` | `true` | Enable job consumption in the worker process |
+| `JOBS_POLL_INTERVAL_SECONDS` | `5` | Worker poll loop interval |
+| `JOBS_BATCH_SIZE` | `10` | Maximum jobs claimed per batch |
+| `JOBS_WORKER_CONCURRENCY` | `5` | Maximum concurrent handler executions |
+| `JOBS_LEASE_DURATION_SECONDS` | `300` | Lease duration for claimed jobs |
+| `JOBS_LEASE_RENEWAL_INTERVAL_SECONDS` | `60` | Lease renewal interval (must be shorter than lease duration) |
+| `JOBS_MAX_ATTEMPTS_DEFAULT` | `3` | Default maximum handler attempts |
+| `JOBS_BACKOFF_BASE_SECONDS` | `10` | Exponential backoff base |
+| `JOBS_BACKOFF_CAP_SECONDS` | `3600` | Exponential backoff cap |
+| `JOBS_SHUTDOWN_DRAIN_SECONDS` | `30` | Graceful drain timeout on shutdown |
+| `JOBS_METRICS_HOST` | `0.0.0.0` | Private metrics listener host |
+| `JOBS_METRICS_PORT` | `9100` | Private metrics listener port |
+| `JOBS_TERMINATION_GRACE_PERIOD_SECONDS` | `90` | Kubernetes termination grace period (must exceed drain timeout) |
+
+**Invariant**: `JOBS_LEASE_RENEWAL_INTERVAL_SECONDS` must always be shorter
+than `JOBS_LEASE_DURATION_SECONDS` or leases may expire before renewal.
+
 ## Operator inputs (hand-set)
 
 | Variable | Purpose | Required |

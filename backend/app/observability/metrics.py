@@ -9,10 +9,16 @@ JOB_DURATION_BUCKETS: tuple[float, ...] = (
 )
 
 _JOB_TYPES = frozenset(item.value for item in JobType)
-_OUTCOME_STATUSES = frozenset(item.value for item in JobStatus) | {"retry_scheduled"}
+_OUTCOME_STATUSES = frozenset(item.value for item in JobStatus) | {
+    "retry_scheduled",
+    "lease_lost",
+    "cancelled",
+}
 _FAILURE_CATEGORIES = frozenset(item.value for item in JobFailureCategory)
 _RECOVERY_OUTCOMES = frozenset({"lease_expired", "attempts_exhausted"})
 _BACKLOG_STATUSES = frozenset({JobStatus.pending.value, JobStatus.processing.value})
+_JOB_STATUSES = frozenset(item.value for item in JobStatus)
+_SCHEDULE_OUTCOMES = frozenset({"created", "reused"})
 
 
 def _require_closed_label(*, name: str, value: str, allowed: frozenset[str]) -> None:
@@ -98,6 +104,10 @@ class MetricsRegistry:
     job_retries_by_type_category: dict[tuple[str, str], int] = field(default_factory=dict)
     job_stale_recoveries_by_type: dict[tuple[str, str], int] = field(default_factory=dict)
     job_backlog_by_type_status: dict[tuple[str, str], int] = field(default_factory=dict)
+    job_status_by_type: dict[tuple[str, str], int] = field(default_factory=dict)
+    job_schedules_by_type_outcome: dict[tuple[str, str], int] = field(
+        default_factory=dict
+    )
     job_oldest_eligible_age_seconds: float | None = None
     worker_last_successful_poll_timestamp_seconds: float | None = None
     request_latency_seconds_max_samples: int = 10_000
@@ -147,8 +157,28 @@ class MetricsRegistry:
         key = (job_type, status)
         self.job_backlog_by_type_status[key] = count
 
+    def record_job_status_count(
+        self, *, job_type: str, status: str, count: int
+    ) -> None:
+        _require_closed_label(name="job_type", value=job_type, allowed=_JOB_TYPES)
+        _require_closed_label(name="status", value=status, allowed=_JOB_STATUSES)
+        self.job_status_by_type[(job_type, status)] = count
+
+    def record_job_schedule(self, *, job_type: str, outcome: str) -> None:
+        _require_closed_label(name="job_type", value=job_type, allowed=_JOB_TYPES)
+        _require_closed_label(
+            name="outcome", value=outcome, allowed=_SCHEDULE_OUTCOMES
+        )
+        key = (job_type, outcome)
+        self.job_schedules_by_type_outcome[key] = (
+            self.job_schedules_by_type_outcome.get(key, 0) + 1
+        )
+
     def reset_job_backlog(self) -> None:
         self.job_backlog_by_type_status.clear()
+
+    def reset_job_status_counts(self) -> None:
+        self.job_status_by_type.clear()
 
     def record_oldest_eligible_age(self, *, age_seconds: float | None) -> None:
         self.job_oldest_eligible_age_seconds = age_seconds
@@ -234,6 +264,26 @@ class MetricsRegistry:
             for (job_type, status), count in sorted_backlog
         ]
 
+        status_lines = [
+            (
+                "fotosintesis_job_status_count"
+                f'{{job_type="{_escape(job_type)}",'
+                f'status="{_escape(status)}"}} {count}'
+            )
+            for (job_type, status), count in sorted(self.job_status_by_type.items())
+        ]
+
+        schedule_lines = [
+            (
+                "fotosintesis_job_schedules_total"
+                f'{{job_type="{_escape(job_type)}",'
+                f'outcome="{_escape(outcome)}"}} {count}'
+            )
+            for (job_type, outcome), count in sorted(
+                self.job_schedules_by_type_outcome.items()
+            )
+        ]
+
         sorted_histograms = sorted(self.job_duration_histograms.items())
         histogram_lines = [
             histogram.render(
@@ -312,7 +362,13 @@ class MetricsRegistry:
                 *job_outcome_lines,
                 *retry_lines,
                 *stale_lines,
+                "# HELP fotosintesis_job_schedules_total Durable job scheduling outcomes.",
+                "# TYPE fotosintesis_job_schedules_total counter",
+                *schedule_lines,
                 *backlog_lines,
+                "# HELP fotosintesis_job_status_count Durable job rows by lifecycle status.",
+                "# TYPE fotosintesis_job_status_count gauge",
+                *status_lines,
                 "# HELP fotosintesis_job_oldest_eligible_age_seconds Oldest eligible pending job age.",
                 "# TYPE fotosintesis_job_oldest_eligible_age_seconds gauge",
                 age_line,

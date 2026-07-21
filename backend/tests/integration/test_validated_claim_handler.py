@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,12 +16,17 @@ from app.assistant.tools.types import EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
 from app.core.settings import get_settings
 from app.jobs.handler import RetryableJobError
 from app.jobs.handlers import ingest_validated_claims as handler_module
-from app.jobs.handlers.ingest_validated_claims import IngestValidatedClaimsHandler
+from app.jobs.handlers.ingest_validated_claims import (
+    IngestValidatedClaimsHandler,
+    compute_claim_ingestion_key,
+    stable_chunk_id,
+)
 from app.jobs.schemas import (
     IngestValidatedClaimsPayload,
     JobFailureCategory,
     JobLimitation,
     JobStatus,
+    JobType,
 )
 from app.knowledge.rag import KnowledgeVectorIndex, LlamaIndexRuntime, VectorIndexError
 from app.providers.errors import ProviderError
@@ -197,6 +203,33 @@ async def test_production_handler_persists_and_reuses_one_relational_and_vector_
     assert metadata["confidence"] == expected_confidence
 
 
+async def test_readiness_registry_object_is_reused_by_handler_execution(
+    pg_session_factory,
+    vector_index_factory,
+) -> None:
+    registry = SimpleNamespace(embeddings=_EmbeddingProvider())
+    calls = 0
+
+    def registry_factory():
+        nonlocal calls
+        calls += 1
+        return registry
+
+    handler = IngestValidatedClaimsHandler(
+        session_factory=pg_session_factory,
+        provider_registry_factory=registry_factory,
+        vector_index_factory=vector_index_factory,
+    )
+    handler.validate_dependencies()
+    result = await handler.handle(
+        payload=_payload(), attempt_count=1, max_attempts=3
+    )
+
+    assert result.status is JobStatus.complete
+    assert calls == 1
+    assert handler._providers is registry
+
+
 async def test_normalized_payload_values_are_stored_without_surrounding_whitespace(
     pg_session_factory,
     vector_index_factory,
@@ -255,13 +288,19 @@ async def test_failure_before_relational_commit_leaves_both_stores_empty(
         vector_index_factory,
         provider=_FailingEmbeddingProvider(),
     )
+    payload = _payload()
+    ingestion_key = compute_claim_ingestion_key(
+        payload.claims[0].model_dump(mode="json"),
+        ingestion_policy_version=1,
+    )
+    expected_node_id = stable_chunk_id(ingestion_key, 0)
 
     with pytest.raises(RetryableJobError) as raised:
-        await handler.handle(payload=_payload(), attempt_count=1, max_attempts=3)
+        await handler.handle(payload=payload, attempt_count=1, max_attempts=3)
 
     assert raised.value.category is JobFailureCategory.provider_transient
     assert await _counts(pg_session_factory) == (0, 0, 0, 0)
-    assert not await vector_store.aget_nodes(node_ids=[str(uuid4())])
+    assert not await vector_store.aget_nodes(node_ids=[str(expected_node_id)])
 
     result = await _handler(pg_session_factory, vector_index_factory).handle(
         payload=_payload(), attempt_count=2, max_attempts=3
@@ -391,3 +430,194 @@ async def test_retry_after_vector_insert_reuses_node_id_and_marks_complete(
                 select(knowledge_documents.c.validated_claim_index_status)
             )
         ) == "complete"
+
+
+async def test_concurrent_production_handlers_converge_on_one_claim(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+) -> None:
+    first_handler = _handler(pg_session_factory, vector_index_factory)
+    second_handler = _handler(pg_session_factory, vector_index_factory)
+    payload = _payload()
+
+    first, second = await asyncio.gather(
+        first_handler.handle(payload=payload, attempt_count=1, max_attempts=3),
+        second_handler.handle(payload=payload, attempt_count=1, max_attempts=3),
+    )
+
+    assert {first.status, second.status} == {JobStatus.complete}
+    assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+    chunk_ids = await _chunk_ids(pg_session_factory)
+    assert len(await vector_store.aget_nodes(node_ids=[str(value) for value in chunk_ids])) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_url", "https://example.org/other"),
+        ("source_domain", "other.example.org"),
+        ("source_provenance", "external_fallback"),
+        ("claim", "Water only after the substrate is completely dry."),
+        ("evidence_quote", "Water after the substrate has dried completely."),
+        ("scientific_name", "Cotyledon orbiculata"),
+    ],
+)
+def test_ingestion_key_changes_for_stable_identity_components(field, value) -> None:
+    claim = _payload().claims[0].model_dump(mode="json")
+    original = compute_claim_ingestion_key(claim, ingestion_policy_version=1)
+    changed = {**claim, field: value}
+    assert compute_claim_ingestion_key(changed, ingestion_policy_version=1) != original
+
+
+def test_ingestion_key_canonicalizes_covered_aspects_and_policy_version(monkeypatch) -> None:
+    claim = _payload().claims[0].model_dump(mode="json")
+    reordered = {
+        **claim,
+        "covered_aspects": ["light", claim["covered_aspects"][0], "light"],
+    }
+    canonical = {
+        **claim,
+        "covered_aspects": [claim["covered_aspects"][0], "light"],
+    }
+    assert compute_claim_ingestion_key(reordered, ingestion_policy_version=1) == compute_claim_ingestion_key(canonical, ingestion_policy_version=1)
+    assert compute_claim_ingestion_key(canonical, ingestion_policy_version=1) != compute_claim_ingestion_key(claim, ingestion_policy_version=1)
+
+    original = compute_claim_ingestion_key(claim, ingestion_policy_version=1)
+    different_policy = compute_claim_ingestion_key(
+        claim, ingestion_policy_version=2
+    )
+    assert different_policy != original
+
+
+@pytest.mark.parametrize("failure_stage", ["before_vector", "after_vector"])
+async def test_multichunk_retries_converge_without_duplicate_effects(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    failure_stage,
+) -> None:
+    claim = _payload().claims[0].model_copy(
+        update={
+            "claim": "water " * 350,
+            "evidence_quote": "evidence " * 220,
+        }
+    )
+    payload = _payload().model_copy(update={"claims": [claim]})
+
+    class _FailBeforeVector(KnowledgeVectorIndex):
+        async def ensure_vector_nodes(self, **kwargs) -> None:
+            raise VectorIndexError("injected before vector insert")
+
+    class _FailAfterVector(KnowledgeVectorIndex):
+        async def mark_index_complete(self, document_id) -> None:
+            raise VectorIndexError("injected after vector insert")
+
+    failing_cls = _FailBeforeVector if failure_stage == "before_vector" else _FailAfterVector
+
+    def failing_factory(repository):
+        return failing_cls(repository, runtime=vector_index_factory(repository).runtime)
+
+    with pytest.raises(RetryableJobError):
+        await _handler(pg_session_factory, failing_factory).handle(
+            payload=payload, attempt_count=1, max_attempts=3
+        )
+    first_ids = await _chunk_ids(pg_session_factory)
+    assert len(first_ids) >= 3
+
+    result = await _handler(pg_session_factory, vector_index_factory).handle(
+        payload=payload, attempt_count=2, max_attempts=3
+    )
+    second_ids = await _chunk_ids(pg_session_factory)
+    assert result.status is JobStatus.complete
+    assert second_ids == first_ids
+    assert await _counts(pg_session_factory) == (1, 1, len(first_ids), len(first_ids))
+    nodes = await vector_store.aget_nodes(node_ids=[str(value) for value in second_ids])
+    assert {node.node_id for node in nodes} == {str(value) for value in second_ids}
+
+
+async def test_assistant_producer_to_real_worker_persists_once(
+    pg_session_factory,
+    test_user,
+    vector_store,
+    vector_index_factory,
+    monkeypatch,
+) -> None:
+    from app.assistant.schemas import AssistantChatRequest
+    from app.assistant.service import AssistantService
+    from app.auth.tables import application_jobs, conversation_messages
+    from app.core.settings import get_settings
+    from app.jobs.handler import HandlerRegistry
+    from app.jobs.repository import JobRepository
+    from app.jobs.worker import Worker
+
+    class _Graph:
+        async def run(self, **kwargs):
+            return {
+                "answer": "Persisted assistant answer.",
+                "sources": [],
+                "tool_failures": [],
+                "ingestion_claims": [_payload().claims[0].model_dump(mode="json")],
+                "answerability_status": "full",
+            }
+
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    monkeypatch.setenv("JOBS_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("JOBS_METRICS_PORT", "0")
+    get_settings.cache_clear()
+    async with pg_session_factory() as session:
+        service = AssistantService(session)
+        service.graph = _Graph()
+        response = await service.chat(
+            user_id=test_user,
+            payload=AssistantChatRequest(message="Persist claim", plant="Pata"),
+        )
+        job_id = await session.scalar(
+            select(application_jobs.c.id).where(
+                application_jobs.c.conversation_id == response.conversation_id
+            )
+        )
+
+    registry = HandlerRegistry()
+    registry.register(
+        JobType.ingest_validated_claims.value,
+        _handler(pg_session_factory, vector_index_factory),
+        payload_models={1: IngestValidatedClaimsPayload},
+    )
+    worker = Worker(
+        session_factory=pg_session_factory,
+        handler_registry=registry,
+        settings=get_settings(),
+    )
+    task = asyncio.create_task(worker.start())
+    try:
+        async with asyncio.timeout(5):
+            while True:
+                async with pg_session_factory() as session:
+                    status = await session.scalar(
+                        select(application_jobs.c.status).where(
+                            application_jobs.c.id == job_id
+                        )
+                    )
+                if status == JobStatus.complete.value:
+                    break
+                await asyncio.sleep(0.05)
+    finally:
+        worker.stop()
+        await task
+
+    assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+    async with pg_session_factory() as session:
+        status = await JobRepository(session).get_job_status(
+            job_id=job_id, user_id=test_user
+        )
+        assistant_message = await session.scalar(
+            select(conversation_messages.c.content).where(
+                conversation_messages.c.conversation_id == response.conversation_id,
+                conversation_messages.c.role == "assistant",
+            )
+        )
+    assert status is not None and status.status is JobStatus.complete
+    assert status.result is not None and status.result.succeeded == 1
+    assert assistant_message == "Persisted assistant answer."

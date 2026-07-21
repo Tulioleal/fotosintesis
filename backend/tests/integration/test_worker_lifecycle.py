@@ -207,7 +207,8 @@ class TestWorkerExecution:
 
         handler = registry.get_handler(_VALID_JOB_TYPE)
         assert handler is not None
-        assert 99 not in handler.supported_payload_versions()
+        model = registry.get_payload_model(_VALID_JOB_TYPE, 99)
+        assert model is None
 
 
 class TestWorkerShutdown:

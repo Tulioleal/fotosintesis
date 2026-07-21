@@ -743,12 +743,33 @@ jobs:
 
           echo "Required provider API keys are present"
           echo "result=pass" >> "$GITHUB_OUTPUT"
+      - name: Validate workload manifests with Kubernetes API
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+
+          for manifest in \
+            30-backend.yaml \
+            40-frontend.yaml \
+            50-migrations.yaml \
+            55-worker.yaml; do
+            kubectl apply \
+              --dry-run=server \
+              -f ".generated/k8s/$ENVIRONMENT/rendered/$manifest"
+          done
       - name: Apply migrations before backend/worker rollout
         env:
           ENVIRONMENT: ${{ inputs.environment }}
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
+          server_minor="$(kubectl version --output=json | jq -r '.serverVersion.minor' | tr -cd '0-9')"
+          if [ -z "$server_minor" ] || [ "$server_minor" -lt 29 ]; then
+            echo "::error::Native migration sidecars require Kubernetes 1.29 or newer." >&2
+            exit 1
+          fi
           kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found
           # Render and apply migrations only. Backend and worker are
           # rolled out by the next step, after the migration wait below.
@@ -759,80 +780,22 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
-
-          deadline=$((SECONDS + 600))
-          selector="app.kubernetes.io/name=fotosintesis-migrations"
-
-          while [ "$SECONDS" -lt "$deadline" ]; do
-            pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-
-            if [ -z "$pod" ]; then
-              sleep 5
-              continue
-            fi
-
-            phase="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-            exit_code="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.containerStatuses[?(@.name=="migrations")].state.terminated.exitCode}' 2>/dev/null || true)"
-            reason="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.containerStatuses[?(@.name=="migrations")].state.terminated.reason}' 2>/dev/null || true)"
-            restart_count="$(kubectl get pod "$pod" -n "$TF_OUT_NAMESPACE" -o jsonpath='{.status.containerStatuses[?(@.name=="migrations")].restartCount}' 2>/dev/null || true)"
-
-            if [ "$reason" = "Completed" ] && [ "$exit_code" = "0" ]; then
-              if [ "${restart_count:-0}" -gt 0 ]; then
-                echo "--- Previous migration attempt logs ---"
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations --previous || true
-              fi
-              echo "--- Migration logs ---"
-              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
-              kubectl delete job/fotosintesis-migrations -n "$TF_OUT_NAMESPACE" --ignore-not-found --wait=false
-              echo "result=pass" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            if [ -n "$exit_code" ] && [ "$exit_code" != "0" ] && [ "${restart_count:-0}" -ge 2 ]; then
-              echo "::error::Migration container exited with code $exit_code after ${restart_count} restarts" >&2
-              if [ "${restart_count:-0}" -gt 0 ]; then
-                echo "--- Previous migration attempt logs ---"
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations --previous || true
-              fi
-              echo "--- Migration logs ---"
-              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
-              echo "--- Cloud SQL Proxy logs ---"
-              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
-              kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
-              echo "result=fail" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-
-            if [ "$phase" = "Failed" ]; then
-              echo "::error::Migration pod failed" >&2
-              if [ "${restart_count:-0}" -gt 0 ]; then
-                echo "--- Previous migration attempt logs ---"
-                kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations --previous || true
-              fi
-              echo "--- Migration logs ---"
-              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
-              echo "--- Cloud SQL Proxy logs ---"
-              kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
-              kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
-              echo "result=fail" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-
-            sleep 5
-          done
-
-          echo "::error::Timed out waiting for migrations container to complete" >&2
-          kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o wide || true
-          pod="$(kubectl get pods -n "$TF_OUT_NAMESPACE" -l "$selector" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-          if [ -n "$pod" ]; then
-            echo "--- Migration logs ---"
-            kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c migrations || true
-            echo "--- Cloud SQL Proxy logs ---"
-            kubectl logs "$pod" -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
-            kubectl describe pod "$pod" -n "$TF_OUT_NAMESPACE" || true
+          if ! kubectl wait \
+            --for=condition=complete \
+            job/fotosintesis-migrations \
+            -n "$TF_OUT_NAMESPACE" \
+            --timeout=600s; then
+            echo "::error::Migration Job did not complete" >&2
+            kubectl logs job/fotosintesis-migrations \
+              -n "$TF_OUT_NAMESPACE" -c migrations || true
+            kubectl logs job/fotosintesis-migrations \
+              -n "$TF_OUT_NAMESPACE" -c cloud-sql-proxy || true
+            kubectl describe job/fotosintesis-migrations \
+              -n "$TF_OUT_NAMESPACE" || true
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
-          echo "result=fail" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "result=pass" >> "$GITHUB_OUTPUT"
       - name: Apply backend
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -847,7 +810,10 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
+          set -euo pipefail
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/55-worker.yaml"
+          kubectl rollout restart deployment/fotosintesis-worker \
+            -n "$TF_OUT_NAMESPACE"
       - name: Apply frontend, ingress, certificate
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -868,12 +834,24 @@ jobs:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
           set -euo pipefail
-          sh deploy/scripts/rollout-deployment.sh \
-            "$TF_OUT_NAMESPACE" fotosintesis-backend backend 600s
-          sh deploy/scripts/rollout-deployment.sh \
-            "$TF_OUT_NAMESPACE" fotosintesis-worker worker 600s
-          sh deploy/scripts/rollout-deployment.sh \
-            "$TF_OUT_NAMESPACE" fotosintesis-frontend frontend 600s
+
+          wait_for_rollout() {
+            deployment="$1"
+            container="$2"
+
+            if ! sh deploy/scripts/rollout-deployment.sh \
+                "$TF_OUT_NAMESPACE" \
+                "$deployment" \
+                "$container" \
+                600s; then
+              echo "result=fail" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          }
+
+          wait_for_rollout fotosintesis-backend backend
+          wait_for_rollout fotosintesis-worker worker
+          wait_for_rollout fotosintesis-frontend frontend
 
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke

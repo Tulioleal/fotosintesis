@@ -242,12 +242,15 @@ cannot be recorded as healthy.
 Inspect rollout history and roll back the affected Deployment:
 
 ```bash
-kubectl -n fotosintesis rollout history deployment/fotosintesis-frontend
-kubectl -n fotosintesis rollout history deployment/fotosintesis-backend
-kubectl -n fotosintesis rollout undo deployment/fotosintesis-frontend --to-revision=<revision>
-kubectl -n fotosintesis rollout undo deployment/fotosintesis-backend --to-revision=<revision>
-kubectl -n fotosintesis rollout status deployment/fotosintesis-frontend
-kubectl -n fotosintesis rollout status deployment/fotosintesis-backend
+kubectl rollout history deployment/fotosintesis-worker -n "$NAMESPACE"
+kubectl rollout history deployment/fotosintesis-frontend -n "$NAMESPACE"
+kubectl rollout history deployment/fotosintesis-backend -n "$NAMESPACE"
+kubectl rollout undo deployment/fotosintesis-worker -n "$NAMESPACE"
+kubectl rollout undo deployment/fotosintesis-frontend -n "$NAMESPACE" --to-revision=<revision>
+kubectl rollout undo deployment/fotosintesis-backend -n "$NAMESPACE" --to-revision=<revision>
+kubectl rollout status deployment/fotosintesis-worker -n "$NAMESPACE" --timeout=600s
+kubectl rollout status deployment/fotosintesis-frontend -n "$NAMESPACE"
+kubectl rollout status deployment/fotosintesis-backend -n "$NAMESPACE"
 ```
 
 Migration jobs are not automatically reversible. If a migration must be rolled back, restore from an approved database backup or apply a reviewed forward-fix migration, then redeploy the backend image that matches the database state.

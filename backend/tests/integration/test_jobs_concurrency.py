@@ -93,6 +93,90 @@ class TestConcurrentClaiming:
         assert claimed[0].id == job_id
         assert claimed[0].lease_owner == "w2"
 
+    async def test_expired_job_waits_for_recovery_backoff_before_claim(self, pg_session_factory, monkeypatch):
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "5")
+        monkeypatch.setenv("JOBS_BACKOFF_CAP_SECONDS", "10")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+        async with pg_session_factory() as s:
+            repo = JobRepository(s)
+            job_id = await _enqueue_job(repo, "recovery-boundary")
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            await _set_processing(s, job_id, owner="w1", lease_duration=-1)
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            claimed = await JobRepository(s).claim_jobs(
+                owner="w2", batch_size=1, lease_duration_seconds=300
+            )
+            await s.rollback()
+        assert claimed == []
+
+        async with pg_session_factory() as s:
+            await s.execute(
+                text(
+                    "UPDATE application_jobs "
+                    "SET lease_expires_at = NOW() - INTERVAL '6 seconds' "
+                    "WHERE id = :id"
+                ),
+                {"id": job_id},
+            )
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            claimed = await JobRepository(s).claim_jobs(
+                owner="w2", batch_size=1, lease_duration_seconds=300
+            )
+            await s.commit()
+        assert [job.id for job in claimed] == [job_id]
+
+    async def test_expired_job_uses_configured_recovery_backoff_cap(self, pg_session_factory, monkeypatch):
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "1")
+        monkeypatch.setenv("JOBS_BACKOFF_CAP_SECONDS", "5")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+        async with pg_session_factory() as s:
+            repo = JobRepository(s)
+            job_id = await _enqueue_job(repo, "recovery-cap", max_attempts=20)
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            await _set_processing(s, job_id, owner="w1", lease_duration=-1)
+            await s.execute(
+                text("UPDATE application_jobs SET attempt_count = 10 WHERE id = :id"),
+                {"id": job_id},
+            )
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            claimed = await JobRepository(s).claim_jobs(
+                owner="w2", batch_size=1, lease_duration_seconds=300
+            )
+            await s.rollback()
+        assert claimed == []
+
+        async with pg_session_factory() as s:
+            await s.execute(
+                text(
+                    "UPDATE application_jobs "
+                    "SET lease_expires_at = NOW() - INTERVAL '6 seconds' "
+                    "WHERE id = :id"
+                ),
+                {"id": job_id},
+            )
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            claimed = await JobRepository(s).claim_jobs(
+                owner="w2", batch_size=1, lease_duration_seconds=300
+            )
+            await s.commit()
+        assert [job.id for job in claimed] == [job_id]
+
     async def test_stale_token_cannot_finalize_after_reassignment(self, pg_session_factory):
         async with pg_session_factory() as s:
             repo = JobRepository(s)
@@ -448,7 +532,7 @@ class TestReconciliation:
             await s.commit()
 
         async with pg_session_factory() as s:
-            await _set_processing(s, job_id, owner="w1", lease_duration=-10)
+            await _set_processing(s, job_id, owner="w1", lease_duration=-20)
             await s.commit()
 
         async with pg_session_factory() as s:
@@ -465,4 +549,129 @@ class TestReconciliation:
                 )
             ).first()
         assert row._mapping["status"] == "pending"
-        assert row._mapping["available_at"] > datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        assert now - timedelta(seconds=11) < row._mapping["available_at"] <= now
+
+    async def test_direct_and_reconciled_recovery_use_same_absolute_eligibility(
+        self, pg_session_factory, monkeypatch
+    ):
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "5")
+        monkeypatch.setenv("JOBS_BACKOFF_CAP_SECONDS", "10")
+        from app.core.settings import get_settings
+        from app.jobs.repository import recovery_backoff_seconds
+
+        get_settings.cache_clear()
+        async with pg_session_factory() as s:
+            repo = JobRepository(s)
+            reconciled_job_id = await _enqueue_job(repo, "recovery-parity-reconciled")
+            await s.commit()
+
+        lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        async with pg_session_factory() as s:
+            await s.execute(
+                text(
+                    """
+                    UPDATE application_jobs
+                    SET status = 'processing', attempt_count = 1,
+                        lease_owner = 'w1', lease_token = :token,
+                        lease_expires_at = :expires
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": reconciled_job_id,
+                    "token": str(uuid4()),
+                    "expires": lease_expires_at,
+                },
+            )
+            await s.commit()
+
+        expected = lease_expires_at + timedelta(
+            seconds=recovery_backoff_seconds(
+                attempt_count=1,
+                base=5,
+                cap=10,
+            )
+        )
+        async with pg_session_factory() as s:
+            result = await JobRepository(s).reconcile_expired_processing(batch_limit=1)
+            await s.commit()
+            assert sum(result.recovered_by_type.values()) == 1
+            available_at = await s.scalar(
+                select(application_jobs.c.available_at).where(
+                    application_jobs.c.id == reconciled_job_id
+                )
+            )
+
+        assert abs((available_at - expected).total_seconds()) < 0.01
+
+        async with pg_session_factory() as s:
+            await s.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id == reconciled_job_id)
+                .values(status=JobStatus.failed.value)
+            )
+            direct_job_id = await _enqueue_job(
+                JobRepository(s), "recovery-parity-direct"
+            )
+            await s.commit()
+            await s.execute(
+                text(
+                    """
+                    UPDATE application_jobs
+                    SET status = 'processing', attempt_count = 1,
+                        lease_owner = 'w1', lease_token = :token,
+                        lease_expires_at = :expires
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": direct_job_id,
+                    "token": str(uuid4()),
+                    "expires": lease_expires_at,
+                },
+            )
+            await s.commit()
+
+        async with pg_session_factory() as s:
+            direct_claimed = await JobRepository(s).claim_jobs(
+                owner="direct-worker",
+                batch_size=1,
+                lease_duration_seconds=300,
+            )
+            await s.commit()
+
+        assert [job.id for job in direct_claimed] == [direct_job_id]
+        assert direct_claimed[0].recovered is True
+
+    async def test_two_workers_claim_recovered_job_only_once_after_backoff(
+        self, pg_session_factory, monkeypatch
+    ):
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "1")
+        monkeypatch.setenv("JOBS_BACKOFF_CAP_SECONDS", "1")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+        async with pg_session_factory() as s:
+            repo = JobRepository(s)
+            job_id = await _enqueue_job(repo, "recovery-race")
+            await s.commit()
+        async with pg_session_factory() as s:
+            await _set_processing(s, job_id, owner="original", lease_duration=-2)
+            await s.commit()
+
+        async with pg_session_factory() as s1, pg_session_factory() as s2:
+            first, second = await asyncio.gather(
+                JobRepository(s1).claim_jobs(
+                    owner="w1", batch_size=1, lease_duration_seconds=300
+                ),
+                JobRepository(s2).claim_jobs(
+                    owner="w2", batch_size=1, lease_duration_seconds=300
+                ),
+            )
+            await s1.commit()
+            await s2.commit()
+
+        claimed = [*first, *second]
+        assert [job.id for job in claimed] == [job_id]
+        assert claimed[0].recovered is True

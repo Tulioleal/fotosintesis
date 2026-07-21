@@ -22,6 +22,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RENDER_SCRIPT = REPO_ROOT / "deploy" / "k8s" / "render.sh"
 ROLLOUT_SCRIPT = REPO_ROOT / "deploy" / "scripts" / "rollout-deployment.sh"
+DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+BACKEND_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backend-ci.yml"
 DEV_VALUES = REPO_ROOT / "deploy" / "k8s" / "dev" / "values.env.example"
 PROD_VALUES = REPO_ROOT / "deploy" / "k8s" / "prod" / "values.env.example"
 
@@ -53,6 +55,17 @@ def _render(tmp_path: Path, values_file: Path) -> Path:
         cwd=REPO_ROOT,
     )
     return out
+
+
+def _render_result(tmp_path: Path, values_file: Path) -> subprocess.CompletedProcess[str]:
+    out = tmp_path / "rendered"
+    out.mkdir()
+    return subprocess.run(
+        ["sh", str(RENDER_SCRIPT), str(values_file), str(out)],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
 
 
 @pytest.mark.skipif(not RENDER_SCRIPT.exists(), reason="render.sh missing")
@@ -151,24 +164,7 @@ class TestRenderedWorkerContract:
         assert "__" not in (rendered / "30-backend.yaml").read_text(encoding="utf-8")
         assert "__" not in (rendered / "55-worker.yaml").read_text(encoding="utf-8")
 
-    def test_no_service_selects_the_worker(self, tmp_path: Path) -> None:
-        rendered = _render(tmp_path, DEV_VALUES)
-        worker = _find_kind(
-            _load_yaml(rendered / "55-worker.yaml"),
-            "Deployment",
-            "fotosintesis-worker",
-        )
-        worker_selector = worker["spec"]["template"]["metadata"]["labels"]
-        for service_file in rendered.glob("*.yaml"):
-            docs = _load_yaml(service_file)
-            for doc in docs:
-                if doc.get("kind") != "Service":
-                    continue
-                spec = doc.get("spec") or {}
-                if spec.get("selector") == worker_selector:
-                    pytest.fail(
-                        f"Service {service_file.name} unexpectedly selects the worker"
-                    )
+
 
     def test_job_settings_are_resolved(self, tmp_path: Path) -> None:
         rendered = _render(tmp_path, DEV_VALUES)
@@ -194,14 +190,12 @@ class TestRenderedWorkerContract:
     def test_producer_and_worker_can_be_enabled_independently(
         self, tmp_path: Path
     ) -> None:
-        # Render with worker disabled, then verify the worker's
-        # environment reflects the override. The API process reads the
-        # producer flag from its own environment, separate from the
-        # worker manifest.
+        # Opposing values prove the renderer does not couple the API producer
+        # switch to the worker runtime switch.
         env_file = tmp_path / "values.env"
         env_file.write_text(
             DEV_VALUES.read_text(encoding="utf-8")
-            + "\nJOBS_WORKER_ENABLED=false\n"
+            + "\nJOBS_PRODUCER_ENABLED=true\nJOBS_WORKER_ENABLED=false\n"
         )
         rendered = _render(tmp_path, env_file)
         worker = _find_kind(
@@ -223,7 +217,7 @@ class TestRenderedWorkerContract:
             e["name"]: e.get("value")
             for e in backend["spec"]["template"]["spec"]["containers"][0]["env"]
         }
-        assert backend_env["JOBS_PRODUCER_ENABLED"] == "false"
+        assert backend_env["JOBS_PRODUCER_ENABLED"] == "true"
         assert backend_env["JOBS_MAX_ATTEMPTS_DEFAULT"] == "3"
 
     def test_renderer_refuses_missing_values(self, tmp_path: Path) -> None:
@@ -255,9 +249,138 @@ class TestRenderedWorkerContract:
         drain = int(drain_env["JOBS_SHUTDOWN_DRAIN_SECONDS"])
         assert grace > drain, f"grace={grace}, drain={drain}"
 
+    @pytest.mark.parametrize("values_file", [DEV_VALUES, PROD_VALUES])
+    def test_render_emits_native_complete_migration_job(
+        self, tmp_path: Path, values_file: Path
+    ) -> None:
+        rendered = _render(tmp_path, values_file)
+        migration = _find_kind(
+            _load_yaml(rendered / "50-migrations.yaml"),
+            "Job",
+            "fotosintesis-migrations",
+        )
+        backend = _find_kind(
+            _load_yaml(rendered / "30-backend.yaml"),
+            "Deployment",
+            "fotosintesis-backend",
+        )
+        worker = _find_kind(
+            _load_yaml(rendered / "55-worker.yaml"),
+            "Deployment",
+            "fotosintesis-worker",
+        )
+        pod_spec = migration["spec"]["template"]["spec"]
+
+        assert migration["apiVersion"] == "batch/v1"
+        assert migration["kind"] == "Job"
+        assert pod_spec["restartPolicy"] == "Never"
+        assert [container["name"] for container in pod_spec["containers"]] == [
+            "migrations"
+        ]
+        assert "exec alembic upgrade head" in "\n".join(
+            pod_spec["containers"][0]["command"]
+        )
+        proxy = next(
+            container
+            for container in pod_spec["initContainers"]
+            if container["name"] == "cloud-sql-proxy"
+        )
+        assert proxy["restartPolicy"] == "Always"
+
+        images = {
+            pod_spec["containers"][0]["image"],
+            backend["spec"]["template"]["spec"]["containers"][0]["image"],
+            worker["spec"]["template"]["spec"]["containers"][0]["image"],
+        }
+        assert len(images) == 1
+        assert re.search(r":[0-9a-f]{40}$", images.pop())
+
+    @pytest.mark.parametrize(
+        ("drain", "grace", "message"),
+        [
+            ("30", "30", "termination grace must exceed"),
+            ("30", "29", "termination grace must exceed"),
+            ("not-a-number", "90", "JOBS_SHUTDOWN_DRAIN_SECONDS must be an integer"),
+            (
+                "30",
+                "not-a-number",
+                "JOBS_TERMINATION_GRACE_PERIOD_SECONDS must be an integer",
+            ),
+        ],
+    )
+    def test_renderer_rejects_invalid_worker_shutdown_timings(
+        self, tmp_path: Path, drain: str, grace: str, message: str
+    ) -> None:
+        values_file = tmp_path / "values.env"
+        values_file.write_text(
+            DEV_VALUES.read_text(encoding="utf-8")
+            + f"\nJOBS_SHUTDOWN_DRAIN_SECONDS={drain}"
+            + f"\nJOBS_TERMINATION_GRACE_PERIOD_SECONDS={grace}\n",
+            encoding="utf-8",
+        )
+
+        result = _render_result(tmp_path, values_file)
+
+        assert result.returncode != 0
+        assert message in result.stderr
+
+
+def selector_matches_labels(
+    selector: dict[str, str],
+    labels: dict[str, str],
+) -> bool:
+    return bool(selector) and all(
+        labels.get(key) == value
+        for key, value in selector.items()
+    )
+
+
+class TestServiceSelector:
+    def test_exact_selector_match(self) -> None:
+        selector = {"app": "worker"}
+        labels = {"app": "worker"}
+        assert selector_matches_labels(selector, labels) is True
+
+    def test_one_label_subset_match(self) -> None:
+        selector = {"app": "worker"}
+        labels = {"app": "worker", "tier": "backend"}
+        assert selector_matches_labels(selector, labels) is True
+
+    def test_unrelated_selector(self) -> None:
+        selector = {"app": "frontend"}
+        labels = {"app": "worker"}
+        assert selector_matches_labels(selector, labels) is False
+
+    def test_empty_selector(self) -> None:
+        assert selector_matches_labels({}, {"app": "worker"}) is False
+
+
+def test_no_service_selects_worker_with_subset_selector_check(
+    tmp_path: Path,
+) -> None:
+    rendered = _render(tmp_path, DEV_VALUES)
+    worker = _find_kind(
+        _load_yaml(rendered / "55-worker.yaml"),
+        "Deployment",
+        "fotosintesis-worker",
+    )
+    worker_labels = worker["spec"]["template"]["metadata"]["labels"]
+    for service_file in rendered.glob("*.yaml"):
+        docs = _load_yaml(service_file)
+        for doc in docs:
+            if doc.get("kind") != "Service":
+                continue
+            spec = doc.get("spec") or {}
+            svc_selector = spec.get("selector", {})
+            if selector_matches_labels(svc_selector, worker_labels):
+                pytest.fail(
+                    f"Service {service_file.name} selects the worker "
+                    f"(selector={svc_selector}, labels={worker_labels})"
+                )
+
 
 def test_deploy_workflow_migration_before_backend_rollout() -> None:
-    text = (REPO_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     # The deploy workflow must run the migration step before the rollout
     # step that includes backend and worker.
     migration_index = text.find("Wait for migrations")
@@ -266,10 +389,42 @@ def test_deploy_workflow_migration_before_backend_rollout() -> None:
     assert migration_index > 0
     assert backend_apply_index > migration_index
     assert rollout_index > backend_apply_index
-    assert "echo \"JOBS_WORKER_ENABLED=${JOBS_WORKER_ENABLED}\"" in text
-    assert "fotosintesis-worker worker 600s" in text
+    assert "wait_for_rollout fotosintesis-worker" in text
+    assert "Native migration sidecars require Kubernetes 1.29 or newer" in text
     healthy_index = text.find("Record last healthy image pair")
     assert healthy_index > rollout_index
+
+
+def test_deploy_workflow_waits_for_native_migration_job_completion() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    migration_wait = text[
+        text.find("name: Wait for migrations") : text.find("name: Apply backend")
+    ]
+
+    assert "kubectl wait" in migration_wait
+    assert "--for=condition=complete" in migration_wait
+    assert "job/fotosintesis-migrations" in migration_wait
+    assert '--timeout=600s' in migration_wait
+    assert "Migration Job did not complete" in migration_wait
+    assert "-c migrations" in migration_wait
+    assert "-c cloud-sql-proxy" in migration_wait
+    assert "describe job/fotosintesis-migrations" in migration_wait
+    assert "exit 1" in migration_wait
+    assert "jsonpath" not in migration_wait
+
+
+def test_backend_ci_triggers_when_deployment_test_dependencies_change() -> None:
+    text = BACKEND_CI_WORKFLOW.read_text(encoding="utf-8")
+    push_paths = text[text.find("  push:") : text.find("  pull_request:")]
+    pull_request_paths = text[text.find("  pull_request:") : text.find("  workflow_call:")]
+
+    for path in (
+        '".github/workflows/deploy.yml"',
+        '"deploy/scripts/**"',
+        '"docker-compose.yml"',
+    ):
+        assert path in push_paths
+        assert path in pull_request_paths
 
 
 def test_compose_runs_local_worker_with_postgresql_and_production_entrypoint() -> None:
@@ -350,3 +505,153 @@ def test_worker_rollout_success_returns_zero(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
+
+
+def test_deploy_workflow_worker_restart_after_apply() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    worker_step = text[
+        text.find("name: Apply worker") : text.find("name: Apply frontend")
+    ]
+    apply_index = worker_step.index("kubectl apply")
+    restart_index = worker_step.index(
+        "kubectl rollout restart deployment/fotosintesis-worker"
+    )
+    assert restart_index > apply_index
+
+
+def test_deploy_workflow_server_side_dry_run_before_migrations() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    dry_run_step = text[
+        text.find("Validate workload manifests with Kubernetes API"): text.find(
+            "Apply migrations before backend/worker rollout"
+        )
+    ]
+    assert "kubectl apply" in dry_run_step
+    assert "--dry-run=server" in dry_run_step
+    assert "30-backend.yaml" in dry_run_step
+    assert "40-frontend.yaml" in dry_run_step
+    assert "50-migrations.yaml" in dry_run_step
+    assert "55-worker.yaml" in dry_run_step
+    assert "--dry-run=client" not in dry_run_step
+
+
+def test_deploy_workflow_uses_rollout_wrapper() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    rollout_step = text[
+        text.find("name: Wait for rollouts") : text.find("name: Backend health")
+    ]
+    assert "wait_for_rollout()" in rollout_step
+    assert "result=fail" in rollout_step
+    assert "result=pass" in rollout_step
+    assert "wait_for_rollout fotosintesis-backend" in rollout_step
+    assert "wait_for_rollout fotosintesis-worker" in rollout_step
+    assert "wait_for_rollout fotosintesis-frontend" in rollout_step
+
+
+def test_deploy_workflow_jobs_producer_default_false() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "JOBS_PRODUCER_ENABLED: "
+        "${{ vars.JOBS_PRODUCER_ENABLED || 'false' }}"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "latest",
+        "main",
+        "0" * 39,
+        "0" * 41,
+        "A" + "0" * 39,
+        "0" * 39 + "g",
+        "abc/def",
+        "abc:def",
+    ],
+)
+def test_renderer_rejects_invalid_image_tags(
+    tmp_path: Path, tag: str
+) -> None:
+    env_file = tmp_path / "values.env"
+    content = DEV_VALUES.read_text(encoding="utf-8")
+    content = content.replace(
+        "BACKEND_IMAGE_TAG=0000000000000000000000000000000000000000",
+        f"BACKEND_IMAGE_TAG={tag}",
+    )
+    env_file.write_text(content, encoding="utf-8")
+
+    result = _render_result(tmp_path, env_file)
+
+    assert result.returncode != 0
+    assert "40-character lowercase hexadecimal" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "latest",
+        "main",
+        "0" * 39,
+        "0" * 41,
+        "A" + "0" * 39,
+        "0" * 39 + "g",
+        "abc/def",
+        "abc:def",
+    ],
+)
+def test_renderer_rejects_invalid_frontend_image_tags(
+    tmp_path: Path, tag: str
+) -> None:
+    env_file = tmp_path / "values.env"
+    content = DEV_VALUES.read_text(encoding="utf-8")
+    content = content.replace(
+        "FRONTEND_IMAGE_TAG=0000000000000000000000000000000000000000",
+        f"FRONTEND_IMAGE_TAG={tag}",
+    )
+    env_file.write_text(content, encoding="utf-8")
+
+    result = _render_result(tmp_path, env_file)
+
+    assert result.returncode != 0
+    assert "40-character lowercase hexadecimal" in result.stderr
+
+
+def test_backend_podmonitoring_emitted(tmp_path: Path) -> None:
+    rendered = _render(tmp_path, DEV_VALUES)
+    backend_docs = _load_yaml(rendered / "30-backend.yaml")
+    monitor = _find_kind(backend_docs, "PodMonitoring", "fotosintesis-backend")
+    assert monitor["spec"]["selector"]["matchLabels"] == {
+        "app.kubernetes.io/name": "fotosintesis-backend"
+    }
+    assert monitor["spec"]["endpoints"] == [
+        {
+            "port": "http",
+            "path": "/metrics",
+            "interval": "30s",
+        }
+    ]
+
+
+def test_backend_podmonitoring_name_differs_from_worker(tmp_path: Path) -> None:
+    rendered = _render(tmp_path, DEV_VALUES)
+    backend_docs = _load_yaml(rendered / "30-backend.yaml")
+    worker_docs = _load_yaml(rendered / "55-worker.yaml")
+    backend_monitor = _find_kind(backend_docs, "PodMonitoring", "fotosintesis-backend")
+    worker_monitor = _find_kind(worker_docs, "PodMonitoring", "fotosintesis-worker")
+    assert (
+        backend_monitor["spec"]["selector"]["matchLabels"]
+        != worker_monitor["spec"]["selector"]["matchLabels"]
+    )
+    assert backend_monitor["metadata"]["name"] != worker_monitor["metadata"]["name"]
+
+
+@pytest.mark.parametrize("values_file", [DEV_VALUES, PROD_VALUES])
+def test_backend_podmonitoring_emitted_for_all_envs(
+    tmp_path: Path, values_file: Path
+) -> None:
+    rendered = _render(tmp_path, values_file)
+    backend_docs = _load_yaml(rendered / "30-backend.yaml")
+    monitor = _find_kind(backend_docs, "PodMonitoring", "fotosintesis-backend")
+    assert monitor["spec"]["selector"]["matchLabels"] == {
+        "app.kubernetes.io/name": "fotosintesis-backend"
+    }
