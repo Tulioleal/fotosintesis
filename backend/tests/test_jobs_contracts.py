@@ -247,6 +247,43 @@ def test_policy_1_identity_remains_stable() -> None:
     )
 
 
+def test_policy_2_identity_ignores_topic_drift() -> None:
+    from app.jobs.handlers.ingest_validated_claims import compute_claim_ingestion_key
+
+    claim = _valid_payload_data()["claims"][0]
+    changed_topic = {**claim, "topic": "irrigation"}
+
+    assert compute_claim_ingestion_key(
+        claim, ingestion_policy_version=2
+    ) == compute_claim_ingestion_key(changed_topic, ingestion_policy_version=2)
+    assert compute_claim_ingestion_key(
+        claim, ingestion_policy_version=1
+    ) != compute_claim_ingestion_key(changed_topic, ingestion_policy_version=1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scientific_name", "Rosmarinus tomentosus"),
+        ("source_url", "https://example.org/other"),
+        ("source_domain", "other.example.org"),
+        ("source_provenance", "external_fallback"),
+        ("covered_aspects", ["light"]),
+        ("claim", "Water only after the soil dries."),
+        ("evidence_quote", "Wait for dry soil before watering."),
+    ],
+)
+def test_policy_2_identity_keeps_documented_components(field: str, value: object) -> None:
+    from app.jobs.handlers.ingest_validated_claims import compute_claim_ingestion_key
+
+    claim = _valid_payload_data()["claims"][0]
+    original = compute_claim_ingestion_key(claim, ingestion_policy_version=2)
+
+    assert compute_claim_ingestion_key(
+        {**claim, field: value}, ingestion_policy_version=2
+    ) != original
+
+
 def test_handler_registry_validates_version_mapping() -> None:
     registry = HandlerRegistry()
     handler = _NoopHandler()

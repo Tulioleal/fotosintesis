@@ -41,6 +41,9 @@ files.
 | Frontend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
 | Dev Artifact Registry immutable tags | pending | <repository describe output> | Expect `dockerConfig.immutableTags=True`. |
 | Kubernetes server-side admission | pending | <run-url or command output> | All backend, frontend, migration, and worker manifests. |
+| Worker rollout | pending | <run-url> | `fotosintesis-worker` rollout completed. |
+| Worker `/ready` probe | pending | <run-url> | Worker container reported ready after queue validation. |
+| Producer mode | pending | `JOBS_PRODUCER_ENABLED=<value>` | Normal operation requires `true`. |
 | Migration Job completion | pass | <run-url> | deploy.yml migration step. |
 | Backend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |
@@ -64,6 +67,10 @@ files.
 | Verify source images (dev tags) | pass | <run-url> | release.yml verify-source-images. |
 | Promote images to prod registry | pass | <run-url> | release.yml promote-images. |
 | Deploy prod (manifests) | pass | <run-url> | release.yml deploy-prod. |
+| Kubernetes server-side admission | pending | <run-url> | All workload manifests admitted. |
+| Worker rollout | pending | <run-url> | `fotosintesis-worker` rollout completed. |
+| Worker `/ready` probe | pending | <run-url> | Worker container reported ready after queue validation. |
+| Producer mode | pending | `JOBS_PRODUCER_ENABLED=<value>` | Normal operation requires `true`. |
 | Migration Job completion | pass | <run-url> | deploy.yml migration step. |
 | Backend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |

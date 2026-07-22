@@ -26,6 +26,7 @@ from app.jobs.schemas import (
     JobStatus,
     ReadJobResult,
     SourceProvenance,
+    LEGACY_V1_INGESTION_POLICY_VERSION,
 )
 from app.knowledge.rag import (
     KnowledgeVectorIndex,
@@ -77,7 +78,6 @@ def compute_claim_ingestion_key(
     source_provenance = SourceProvenance(str(claim["source_provenance"])).value
     normalized = {
         "scientific_name": _normalize_scientific_name(str(claim.get("scientific_name") or "")),
-        "topic": (str(claim.get("topic") or "")).strip().lower(),
         "source_url": _normalize_url(str(claim.get("source_url") or "")),
         "source_domain": (str(claim.get("source_domain") or "")).strip().lower(),
         "source_provenance": source_provenance,
@@ -88,6 +88,8 @@ def compute_claim_ingestion_key(
         "evidence_quote": (str(claim.get("evidence_quote") or "")).strip(),
         "ingestion_policy_version": ingestion_policy_version,
     }
+    if ingestion_policy_version == LEGACY_V1_INGESTION_POLICY_VERSION:
+        normalized["topic"] = (str(claim.get("topic") or "")).strip().lower()
     raw = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
     return f"v{ingestion_policy_version}:" + hashlib.sha256(raw.encode()).hexdigest()
 

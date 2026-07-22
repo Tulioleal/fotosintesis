@@ -140,20 +140,22 @@ the deployment and cannot replace the last-known-good release record.
 ## Durable job rollout controls
 
 `JOBS_PRODUCER_ENABLED` and `JOBS_WORKER_ENABLED` are independent repository
-variables. Deployment defaults keep producers off and the worker process on:
+variables. Normal deployment defaults enable both roles:
 
-- `JOBS_PRODUCER_ENABLED=false` prevents the API from creating new durable
-  ingestion jobs.
+- `JOBS_PRODUCER_ENABLED=true` allows the API to create durable ingestion jobs.
 - `JOBS_WORKER_ENABLED=true` allows the worker to consume eligible persisted
   jobs.
 - `JOBS_WORKER_ENABLED=false` keeps the worker process deployed and ready after
-  a read-only database check, but it does not claim work.
+  PostgreSQL connectivity and read-only durable-job queue queries, but it does
+  not claim work.
 
-Keep producers disabled for the initial schema and worker rollout. Enable them
-only after the migration, worker readiness, retry/idempotency, telemetry, and
-deployment verification gates pass. API and worker Deployments always use the
-same immutable backend SHA so their payload contracts and registered handlers
-remain compatible.
+Use `JOBS_PRODUCER_ENABLED=false` with the worker enabled to drain existing
+backlog without creating more work, or set both switches to `false` for a full
+pause. `true` producer with a disabled worker is technically supported but
+unsafe for normal operation because backlog grows without a consumer. Local
+application defaults remain disabled until developers opt in. API and worker
+Deployments always use the same immutable backend SHA so their payload contracts
+and registered handlers remain compatible.
 
 ## How to find the deployed image tag
 

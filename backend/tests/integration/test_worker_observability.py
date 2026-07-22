@@ -1259,6 +1259,107 @@ class TestWorkerReadiness:
         assert metrics.worker_last_successful_poll_timestamp_seconds > 0
         assert metrics.job_claims_total == 0
 
+    async def test_disabled_worker_stays_unready_when_queue_query_fails(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.repository import JobRepository
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        sentinel = "SECRET_QUEUE_SCHEMA_FAILURE"
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        get_settings.cache_clear()
+
+        async def fail_backlog_counts(_repository):
+            raise RuntimeError(sentinel)
+
+        monkeypatch.setattr(JobRepository, "get_backlog_counts", fail_backlog_counts)
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        worker._claim = AsyncMock()
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.2)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+        finally:
+            worker.stop()
+            await task
+
+        worker._claim.assert_not_awaited()
+        assert metrics.worker_last_successful_poll_timestamp_seconds is None
+        assert sentinel not in " ".join(str(record.__dict__) for record in caplog.records)
+
+    async def test_disabled_worker_recovers_after_queue_query_failure(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import JobStatus, JobType
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        get_settings.cache_clear()
+        async with pg_session_factory() as session:
+            await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(),
+                idempotency_key=f"disabled-recovery-{uuid4()}",
+            )
+            await session.commit()
+        original_get_backlog_counts = JobRepository.get_backlog_counts
+        calls = 0
+
+        async def fail_once(repository):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("SECRET_QUEUE_SCHEMA_FAILURE")
+            return await original_get_backlog_counts(repository)
+
+        monkeypatch.setattr(JobRepository, "get_backlog_counts", fail_once)
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        worker._claim = AsyncMock()
+
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.05)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            await _wait_for_state(worker._ready_event.is_set)
+            assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
+            key = (JobType.ingest_validated_claims.value, JobStatus.pending.value)
+            assert key in metrics.job_status_by_type
+        finally:
+            worker.stop()
+            await task
+
+        assert calls >= 2
+        worker._claim.assert_not_awaited()
+        assert metrics.worker_last_successful_poll_timestamp_seconds is not None
+
     async def test_readiness_requires_successful_reconciliation(self):
         from app.jobs.metrics_server import start_metrics_server, stop_metrics_server
 

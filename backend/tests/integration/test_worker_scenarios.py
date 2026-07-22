@@ -34,6 +34,7 @@ from app.jobs.handler import (
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import (
     IngestValidatedClaimsPayload,
+    JobError,
     JobFailureCategory,
     JobLimitation,
     JobStatus,
@@ -239,6 +240,35 @@ class TestWorkerPolling:
             status=JobStatus.partial,
             result=ReadJobResult(succeeded=1, partial=True),
         ),
+        JobHandlerResult(
+            status=JobStatus.partial,
+            result=ReadJobResult(
+                failed=1,
+                partial=True,
+                limitations=[JobLimitation.some_claims_failed],
+            ),
+        ),
+        JobHandlerResult(
+            status=JobStatus.complete,
+            result=ReadJobResult(succeeded=1, failed=1),
+        ),
+        JobHandlerResult(
+            status=JobStatus.complete,
+            result=ReadJobResult(
+                succeeded=1,
+                partial=True,
+                limitations=[JobLimitation.some_claims_failed],
+            ),
+        ),
+        JobHandlerResult(
+            status=JobStatus.failed,
+            result=ReadJobResult(succeeded=1),
+            error=JobError(
+                category=JobFailureCategory.invariant_violation,
+                retryable=False,
+            ),
+        ),
+        JobHandlerResult(status=JobStatus.processing),
     ])
     async def test_invalid_partial_result_contract_fails_terminally(
         self, pg_session_factory, invalid_result
@@ -267,6 +297,7 @@ class TestWorkerPolling:
             "category": JobFailureCategory.invariant_violation.value,
             "retryable": False,
         }
+        assert row["completed_at"] is not None
 
     async def test_retryable_failure_returns_to_pending(self, pg_session_factory):
         from app.jobs.worker import JobFailureCategory

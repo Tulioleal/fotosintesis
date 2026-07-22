@@ -139,12 +139,22 @@ process-level bound. Unfinished jobs retain their leases and recover after expir
 
 The Kubernetes worker exposes `/ready` on its private metrics port. An enabled
 worker reports ready only after registered handler dependencies validate and a
-database reconciliation succeeds. A disabled worker does not claim jobs, but it
-reports ready after a successful read-only database connectivity check. Either
-mode clears readiness after a poll or health-check failure and retries at the
-configured poll interval. Failure to start the private metrics listener is a
-terminal startup error. GKE Managed Prometheus scrapes `/metrics` through the
-worker `PodMonitoring`; no Service is created.
+database reconciliation succeeds. A disabled worker never claims jobs and
+becomes ready only after PostgreSQL connectivity and read-only durable-job queue
+queries succeed. Missing migrations or an incompatible `application_jobs` schema
+therefore keep a disabled worker unready. Either mode clears readiness after a
+poll or health-check failure and retries at the configured poll interval. Failure
+to start the private metrics listener is a terminal startup error. GKE Managed
+Prometheus scrapes `/metrics` through the worker `PodMonitoring`; no Service is
+created.
+
+## Ingestion policy compatibility
+
+Payload version remains `1`. Policy version `1` includes `topic` in the durable
+claim identity for existing queued work. Current producers use policy version
+`2`, which excludes `topic` from identity so classifier-label drift cannot create
+duplicate knowledge. Policy-1 jobs remain supported and retain their original
+hashes.
 
 ### Backlog diagnosis
 

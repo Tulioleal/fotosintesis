@@ -81,6 +81,7 @@ end-to-end evidence:
      SHAs).
    - Migration `pass`.
    - Rollout `pass`.
+   - Worker readiness `pass`.
    - Required provider API keys `pass`.
    - Backend in-cluster smoke `pass`.
    - Frontend public smoke `pass` (or document the DNS gap when
@@ -89,7 +90,9 @@ end-to-end evidence:
    in `validation-evidence.md` under "Dev end-to-end."
 5. Record `gcloud artifacts repositories describe` output proving
    `dockerConfig.immutableTags=True`, plus the server-side admission result for
-   backend, frontend, migration, and worker manifests.
+   backend, frontend, migration, and worker manifests. Record worker rollout,
+   worker `/ready` probe, and `JOBS_PRODUCER_ENABLED=true` in the evidence
+   template.
 
 The dev evidence satisfies task 7.7 only when every gate reports
 `pass` and the run URLs are recorded.
@@ -126,7 +129,8 @@ The prod operator must confirm:
    - Verify source images: `success`.
    - Promote images: `success`.
    - Deploy: `success` with `migration=pass`, `rollout=pass`,
-     `required_keys=pass`, `backend_smoke=pass`, `frontend_smoke=pass`.
+     `required_keys=pass`, `worker_readiness=pass`, `backend_smoke=pass`,
+     `frontend_smoke=pass`.
 4. Save the run URLs and per-gate results in `validation-evidence.md`
    under "Prod release."
 

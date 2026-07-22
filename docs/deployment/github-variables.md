@@ -91,7 +91,7 @@ and metrics settings. Kubernetes uses
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `JOBS_PRODUCER_ENABLED` | `false` | Enable job enqueueing in the API process |
+| `JOBS_PRODUCER_ENABLED` | `true` | Enable job enqueueing in the API process; set `false` to drain backlog or stop new work |
 | `JOBS_WORKER_ENABLED` | `true` | Enable job consumption in the worker process |
 | `JOBS_POLL_INTERVAL_SECONDS` | `5` | Worker poll loop interval |
 | `JOBS_BATCH_SIZE` | `10` | Maximum jobs claimed per batch |

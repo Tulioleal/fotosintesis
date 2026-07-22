@@ -31,6 +31,9 @@ on:
       rollout_result:
         description: "Result of the backend, worker, and frontend rollout waits."
         value: ${{ jobs.deploy.outputs.rollout_result }}
+      worker_readiness_result:
+        description: "Result of the durable worker readiness check."
+        value: ${{ jobs.deploy.outputs.worker_readiness_result }}
       required_keys_result:
         description: "Result of the provider API key secret projection check."
         value: ${{ jobs.deploy.outputs.required_keys_result }}
@@ -106,7 +109,7 @@ env:
   AUTH_SECRET_SECRET_KEY: ${{ vars.AUTH_SECRET_SECRET_KEY || 'auth-secret' }}
   DEFAULT_REPLICAS_DEV: ${{ vars.DEFAULT_REPLICAS_DEV || '1' }}
   DEFAULT_REPLICAS_PROD: ${{ vars.DEFAULT_REPLICAS_PROD || '2' }}
-  JOBS_PRODUCER_ENABLED: ${{ vars.JOBS_PRODUCER_ENABLED || 'false' }}
+  JOBS_PRODUCER_ENABLED: ${{ vars.JOBS_PRODUCER_ENABLED || 'true' }}
   JOBS_WORKER_ENABLED: ${{ vars.JOBS_WORKER_ENABLED || 'true' }}
   JOBS_POLL_INTERVAL_SECONDS: ${{ vars.JOBS_POLL_INTERVAL_SECONDS || '5' }}
   JOBS_BATCH_SIZE: ${{ vars.JOBS_BATCH_SIZE || '10' }}
@@ -136,6 +139,7 @@ jobs:
       frontend_smoke_result: ${{ steps.frontend-smoke.outputs.result }}
       migration_result: ${{ steps.migration.outputs.result || 'skipped' }}
       rollout_result: ${{ steps.rollout.outputs.result || 'skipped' }}
+      worker_readiness_result: ${{ steps.worker-readiness.outputs.result || 'skipped' }}
       required_keys_result: ${{ steps.required-keys.outputs.result || 'skipped' }}
       backend_image_tag: ${{ steps.render.outputs.backend_image_tag }}
       frontend_image_tag: ${{ steps.render.outputs.frontend_image_tag }}
@@ -854,6 +858,49 @@ jobs:
           wait_for_rollout fotosintesis-frontend frontend
 
           echo "result=pass" >> "$GITHUB_OUTPUT"
+      - id: worker-readiness
+        name: Confirm durable worker readiness
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+
+          if ! kubectl wait \
+            --namespace "$TF_OUT_NAMESPACE" \
+            --for=condition=Ready \
+            pod \
+            --selector app.kubernetes.io/name=fotosintesis-worker \
+            --timeout=120s; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            kubectl get pods \
+              --namespace "$TF_OUT_NAMESPACE" \
+              --selector app.kubernetes.io/name=fotosintesis-worker \
+              -o wide || true
+            exit 1
+          fi
+
+          worker_ready="$(
+            kubectl get pods \
+              --namespace "$TF_OUT_NAMESPACE" \
+              --selector app.kubernetes.io/name=fotosintesis-worker \
+              -o json |
+            jq -r '
+              .items
+              | map(
+                  .status.containerStatuses[]
+                  | select(.name == "worker")
+                  | .ready
+                )
+              | all
+            '
+          )"
+
+          if [ "$worker_ready" != "true" ]; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke
         name: Backend health smoke check (in-cluster curl)
         env:
@@ -1005,6 +1052,7 @@ jobs:
           FRONTEND_IMAGE_TAG_SOURCE: ${{ steps.resolve.outputs.frontend_image_tag_source }}
           MIGRATION: ${{ steps.migration.outputs.result || 'skipped' }}
           ROLLOUT: ${{ steps.rollout.outputs.result || 'skipped' }}
+          WORKER_READINESS: ${{ steps.worker-readiness.outputs.result || 'skipped' }}
           REQUIRED_KEYS: ${{ steps.required-keys.outputs.result || 'skipped' }}
           BACKEND_SMOKE: ${{ steps.backend-smoke.outputs.result || 'skipped' }}
           FRONTEND_SMOKE: ${{ steps.frontend-smoke.outputs.result || 'skipped' }}
@@ -1040,6 +1088,7 @@ jobs:
             echo "| Frontend static IP | \`${STATIC_IP_ADDRESS}\` |"
             echo "| Migration Job | ${MIGRATION} |"
             echo "| Backend/worker/frontend rollouts | ${ROLLOUT} |"
+            echo "| Worker readiness | ${WORKER_READINESS} |"
             echo "| Required provider API keys | ${REQUIRED_KEYS} |"
             echo "| Backend in-cluster smoke | ${BACKEND_SMOKE} |"
             echo "| Frontend public smoke | ${FRONTEND_SMOKE} |"

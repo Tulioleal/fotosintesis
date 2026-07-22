@@ -47,18 +47,38 @@ def _is_retryable(failure_category: JobFailureCategory) -> bool:
 
 
 def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
-    if result.status is not JobStatus.partial:
-        return result
-    if (
-        result.result is None
-        or not result.result.partial
-        or not result.result.limitations
-    ):
-        return JobHandlerResult.failed(
-            category=JobFailureCategory.invariant_violation,
-            retryable=False,
+    details = result.result
+    useful_count = details.succeeded + details.skipped if details is not None else 0
+
+    valid = False
+    if result.status is JobStatus.complete:
+        valid = (
+            details is not None
+            and result.error is None
+            and useful_count > 0
+            and details.failed == 0
+            and not details.partial
+            and not details.limitations
         )
-    return result
+    elif result.status is JobStatus.partial:
+        valid = (
+            details is not None
+            and result.error is None
+            and useful_count > 0
+            and details.partial
+            and bool(details.limitations)
+        )
+    elif result.status is JobStatus.failed:
+        valid = result.error is not None and (
+            details is None or (useful_count == 0 and not details.partial)
+        )
+
+    if valid:
+        return result
+    return JobHandlerResult.failed(
+        category=JobFailureCategory.invariant_violation,
+        retryable=False,
+    )
 
 
 @dataclass
@@ -178,7 +198,7 @@ class Worker:
         while not self._shutdown_event.is_set():
             try:
                 await self._check_database_connectivity()
-                await self._refresh_backlog_metrics()
+                await self._refresh_backlog_metrics(propagate_errors=True)
                 self._metrics.record_worker_successful_poll()
                 self._ready_event.set()
             except asyncio.CancelledError:
@@ -254,19 +274,21 @@ class Worker:
             )
         await self._refresh_backlog_metrics()
 
-    async def _refresh_backlog_metrics(self) -> None:
+    async def _refresh_backlog_metrics(self, *, propagate_errors: bool = False) -> None:
         try:
             async with self._session_factory() as session:
                 repo = JobRepository(session, self.settings)
                 counts = await repo.get_backlog_counts()
                 status_counts = await repo.get_status_counts()
                 age = await repo.oldest_eligible_age_seconds()
-            await session.commit()
+                await session.commit()
         except Exception:
             logger.warning(
                 "worker_backlog_poll_failed",
                 extra={"ctx_failure_category": "database_transient"},
             )
+            if propagate_errors:
+                raise
             return
         # Counts is the authoritative snapshot, including absent series.
         self._metrics.reset_job_backlog()

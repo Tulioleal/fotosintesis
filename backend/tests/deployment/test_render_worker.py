@@ -148,7 +148,7 @@ class TestRenderedWorkerContract:
             item["name"]: item.get("value")
             for item in worker_container["env"]
         }
-        assert backend_env["JOBS_PRODUCER_ENABLED"] == "false"
+        assert backend_env["JOBS_PRODUCER_ENABLED"] == "true"
         assert backend_env["JOBS_MAX_ATTEMPTS_DEFAULT"] == "3"
         assert {
             "JOBS_WORKER_ENABLED",
@@ -190,15 +190,19 @@ class TestRenderedWorkerContract:
         ):
             assert placeholder not in text, f"unresolved placeholder {placeholder}"
 
+    @pytest.mark.parametrize(
+        ("producer_enabled", "worker_enabled"),
+        [("true", "false"), ("false", "true")],
+    )
     def test_producer_and_worker_can_be_enabled_independently(
-        self, tmp_path: Path
+        self, tmp_path: Path, producer_enabled: str, worker_enabled: str
     ) -> None:
         # Opposing values prove the renderer does not couple the API producer
         # switch to the worker runtime switch.
         env_file = tmp_path / "values.env"
         env_file.write_text(
             DEV_VALUES.read_text(encoding="utf-8")
-            + "\nJOBS_PRODUCER_ENABLED=true\nJOBS_WORKER_ENABLED=false\n"
+            + f"\nJOBS_PRODUCER_ENABLED={producer_enabled}\nJOBS_WORKER_ENABLED={worker_enabled}\n"
         )
         rendered = _render(tmp_path, env_file)
         worker = _find_kind(
@@ -210,7 +214,7 @@ class TestRenderedWorkerContract:
             e["name"]: e.get("value")
             for e in worker["spec"]["template"]["spec"]["containers"][0]["env"]
         }
-        assert worker_env.get("JOBS_WORKER_ENABLED") == "false"
+        assert worker_env.get("JOBS_WORKER_ENABLED") == worker_enabled
         backend = _find_kind(
             _load_yaml(rendered / "30-backend.yaml"),
             "Deployment",
@@ -220,7 +224,7 @@ class TestRenderedWorkerContract:
             e["name"]: e.get("value")
             for e in backend["spec"]["template"]["spec"]["containers"][0]["env"]
         }
-        assert backend_env["JOBS_PRODUCER_ENABLED"] == "true"
+        assert backend_env["JOBS_PRODUCER_ENABLED"] == producer_enabled
         assert backend_env["JOBS_MAX_ATTEMPTS_DEFAULT"] == "3"
 
     def test_renderer_refuses_missing_values(self, tmp_path: Path) -> None:
@@ -557,11 +561,31 @@ def test_deploy_workflow_uses_rollout_wrapper() -> None:
     assert "wait_for_rollout fotosintesis-frontend" in rollout_step
 
 
-def test_deploy_workflow_jobs_producer_default_false() -> None:
+def test_deploy_workflow_reports_worker_readiness_separately() -> None:
+    deploy = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    readiness_index = deploy.find("name: Confirm durable worker readiness")
+
+    assert readiness_index > deploy.find("name: Wait for rollouts")
+    readiness_step = deploy[readiness_index : deploy.find("name: Backend health")]
+    assert "app.kubernetes.io/name=fotosintesis-worker" in readiness_step
+    assert 'select(.name == "worker")' in readiness_step
+    assert 'echo "result=pass" >> "$GITHUB_OUTPUT"' in readiness_step
+    assert 'echo "result=fail" >> "$GITHUB_OUTPUT"' in readiness_step
+    assert "worker_readiness_result:" in deploy
+    assert "steps.worker-readiness.outputs.result" in deploy
+    assert "| Worker readiness | ${WORKER_READINESS} |" in deploy
+    assert "DEPLOY_WORKER_READINESS" in release
+    assert '[ "$WORKER_READINESS" != "pass" ]' in release
+
+
+def test_deploy_workflow_jobs_producer_default_true() -> None:
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     assert (
         "JOBS_PRODUCER_ENABLED: "
-        "${{ vars.JOBS_PRODUCER_ENABLED || 'false' }}"
+        "${{ vars.JOBS_PRODUCER_ENABLED || 'true' }}"
     ) in text
 
 

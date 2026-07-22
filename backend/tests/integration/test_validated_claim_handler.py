@@ -649,6 +649,78 @@ async def test_policy_versions_remain_durable_across_replacement_workers(
     assert await _counts(pg_session_factory) == (2, 2, 2, 2)
 
 
+async def test_policy_2_topic_drift_converges_across_replacement_workers(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    monkeypatch,
+) -> None:
+    from app.jobs.handler import HandlerRegistry
+    from app.jobs.repository import JobRepository, canonical_idempotency_key, compute_claims_hash
+    from app.jobs.worker import Worker
+
+    monkeypatch.setenv("JOBS_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("JOBS_METRICS_PORT", "0")
+    get_settings.cache_clear()
+    first_payload = _payload().model_copy(
+        update={"ingestion_policy_version": 2}
+    ).model_dump(mode="json")
+    second_payload = {
+        **first_payload,
+        "claims": [{**first_payload["claims"][0], "topic": "irrigation"}],
+    }
+
+    async def enqueue(payload):
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=payload,
+                idempotency_key=canonical_idempotency_key(
+                    job_type=JobType.ingest_validated_claims.value,
+                    conversation_id=None,
+                    claims_hash=compute_claims_hash(payload["claims"]),
+                    payload_version=1,
+                    ingestion_policy_version=2,
+                ),
+            )
+            await session.commit()
+            return job_id
+
+    async def run_replacement_worker(job_id):
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _handler(pg_session_factory, vector_index_factory),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            await _wait_for_job_status(pg_session_factory, job_id, JobStatus.complete)
+        finally:
+            worker.stop()
+            await task
+
+    first_job_id = await enqueue(first_payload)
+    await run_replacement_worker(first_job_id)
+    assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+    second_job_id = await enqueue(second_payload)
+    assert first_job_id != second_job_id
+    await run_replacement_worker(second_job_id)
+
+    second_job = await _job_row(pg_session_factory, second_job_id)
+    assert second_job["result"]["skipped"] == 1
+    assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+    chunk_ids = await _chunk_ids(pg_session_factory)
+    assert len(await vector_store.aget_nodes(node_ids=[str(chunk_ids[0])])) == 1
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -818,3 +890,22 @@ async def test_assistant_producer_to_real_worker_persists_once(
     assert status is not None and status.status is JobStatus.complete
     assert status.result is not None and status.result.succeeded == 1
     assert assistant_message == "Persisted assistant answer."
+    async with pg_session_factory() as session:
+        job = (
+            await session.execute(
+                select(
+                    application_jobs.c.payload,
+                    application_jobs.c.idempotency_key,
+                ).where(application_jobs.c.id == job_id)
+            )
+        ).mappings().one()
+    assert job["payload"]["ingestion_policy_version"] == 2
+    from app.jobs.repository import canonical_idempotency_key, compute_claims_hash
+
+    assert job["idempotency_key"] == canonical_idempotency_key(
+        job_type=JobType.ingest_validated_claims.value,
+        conversation_id=response.conversation_id,
+        claims_hash=compute_claims_hash(job["payload"]["claims"]),
+        payload_version=1,
+        ingestion_policy_version=2,
+    )
