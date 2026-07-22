@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from math import inf, nan
 from uuid import uuid4
 
 import pytest
@@ -313,7 +314,6 @@ async def test_retry_job_reschedules(session_factory) -> None:
         await _set_processing(session, job_id)
         await session.commit()
 
-    future = datetime.now(timezone.utc) + timedelta(seconds=60)
     async with session_factory() as session:
         token = await _get_token(session, job_id)
         repo = JobRepository(session)
@@ -323,7 +323,7 @@ async def test_retry_job_reschedules(session_factory) -> None:
                 category=JobFailureCategory.provider_transient,
                 retryable=True,
             ),
-            available_at=future,
+            delay_seconds=60,
         )
         await session.commit()
 
@@ -336,6 +336,25 @@ async def test_retry_job_reschedules(session_factory) -> None:
             )
         ).first()
     assert row._mapping["status"] == "pending"
+
+
+@pytest.mark.parametrize("delay", [-1, nan, inf, -inf])
+async def test_retry_job_rejects_invalid_delay_before_sql(delay) -> None:
+    from unittest.mock import AsyncMock
+
+    session = AsyncMock()
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        await JobRepository(session).retry_job(
+            job_id=uuid4(),
+            owner="worker",
+            lease_token="lease",
+            error=JobError(
+                category=JobFailureCategory.provider_transient,
+                retryable=True,
+            ),
+            delay_seconds=delay,
+        )
+    session.execute.assert_not_awaited()
 
 
 async def test_get_job_status_owner_only(session_factory) -> None:

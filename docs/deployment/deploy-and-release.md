@@ -29,10 +29,13 @@ lower-case hex SHA, including `latest`, branch names, empty values, and
 tag prefixes.
 
 The CI build step tags each image with the GitHub Actions `$GITHUB_SHA`
-exposed at the start of the run. Path filters in the workflow triggers
-limit the registry to immutable artifacts: there is one tag per source
-revision, and the only way to deploy a different image is to push a new
-revision.
+exposed at the start of the run. Tag format alone does not make an image
+immutable. The shared Artifact Registry repository sets
+`docker_config.immutable_tags = true`, so a tag always resolves to the same
+digest and a push of different bytes under an existing SHA fails. If a build
+succeeds but deployment fails, retry `deploy.yml` with the existing tag rather
+than rebuilding that SHA. SHA-tagged images are retained permanently; that
+storage cost is accepted for this university project.
 
 ## Auto dev deploy
 

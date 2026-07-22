@@ -131,12 +131,9 @@ class TestWorkerExecution:
         repo = JobRepository.__new__(JobRepository)
         repo.settings = settings
         for attempt in [1, 2, 3, 10]:
-            backoff = repo.compute_backoff(attempt_count=attempt)
-            delay = (backoff - datetime.now(timezone.utc)).total_seconds()
+            delay = repo.compute_backoff_seconds(attempt_count=attempt)
             expected = min(settings.jobs_backoff_base_seconds * (2 ** (attempt - 1)), settings.jobs_backoff_cap_seconds)
-            assert abs(delay - expected) < 1.0, (
-                f"Attempt {attempt}: expected {expected}s, got {delay}s"
-            )
+            assert delay == expected
 
     async def test_non_retryable_failure_terminates_immediately(self, pg_session_factory):
         job_id = await _setup_job(pg_session_factory)

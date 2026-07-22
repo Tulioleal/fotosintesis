@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
-from app.jobs.schemas import JobError, JobFailureCategory, JobStatus, ReadJobResult
+from app.jobs.schemas import (
+    JobError,
+    JobFailureCategory,
+    JobStatus,
+    JobType,
+    ReadJobResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,7 @@ class HandlerRegistry:
         *,
         payload_models: Mapping[int, type[BaseModel]],
     ) -> None:
+        normalized_job_type = JobType(job_type).value
         normalized_models = dict(payload_models)
 
         if not normalized_models:
@@ -77,7 +84,7 @@ class HandlerRegistry:
             )
 
         for version, model in normalized_models.items():
-            if not isinstance(version, int) or version < 1:
+            if type(version) is not int or version < 1:
                 raise ValueError(
                     "payload versions must be positive integers"
                 )
@@ -89,14 +96,23 @@ class HandlerRegistry:
                     "payload models must be Pydantic BaseModel classes"
                 )
 
-        self._entries[job_type] = HandlerRegistryEntry(
+        existing = self._entries.get(normalized_job_type)
+        if existing is not None:
+            if (
+                type(existing.handler) is type(handler)
+                and existing.payload_models == normalized_models
+            ):
+                return
+            raise ValueError(f"handler already registered for {normalized_job_type}")
+
+        self._entries[normalized_job_type] = HandlerRegistryEntry(
             handler=handler,
             payload_models=normalized_models,
         )
         logger.info(
             "job_handler_registered",
             extra={
-                "ctx_job_type": job_type,
+                "ctx_job_type": normalized_job_type,
                 "ctx_payload_versions": sorted(normalized_models),
             },
         )

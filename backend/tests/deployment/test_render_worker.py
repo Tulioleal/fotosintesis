@@ -26,6 +26,9 @@ DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 BACKEND_CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backend-ci.yml"
 DEV_VALUES = REPO_ROOT / "deploy" / "k8s" / "dev" / "values.env.example"
 PROD_VALUES = REPO_ROOT / "deploy" / "k8s" / "prod" / "values.env.example"
+ARTIFACT_REGISTRY_MODULE = (
+    REPO_ROOT / "infra" / "opentofu" / "modules" / "artifact-registry" / "main.tf"
+)
 
 
 def _load_yaml(path: Path) -> list[dict]:
@@ -393,6 +396,12 @@ def test_deploy_workflow_migration_before_backend_rollout() -> None:
     assert "Native migration sidecars require Kubernetes 1.29 or newer" in text
     healthy_index = text.find("Record last healthy image pair")
     assert healthy_index > rollout_index
+
+
+def test_artifact_registry_enforces_immutable_docker_tags() -> None:
+    text = ARTIFACT_REGISTRY_MODULE.read_text(encoding="utf-8")
+    docker_config = text[text.index("docker_config {") : text.index("}", text.index("docker_config {"))]
+    assert "immutable_tags = true" in docker_config
 
 
 def test_deploy_workflow_waits_for_native_migration_job_completion() -> None:

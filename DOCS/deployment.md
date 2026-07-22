@@ -105,13 +105,19 @@ Build and push images to the Artifact Registry output:
 
 ```bash
 REGISTRY="$(tofu output -raw artifact_repository_url)"
-docker build -t "$REGISTRY/backend:latest" backend
-docker build -t "$REGISTRY/frontend:latest" frontend
-docker push "$REGISTRY/backend:latest"
-docker push "$REGISTRY/frontend:latest"
+IMAGE_TAG=<40-character-git-sha>
+docker build -t "$REGISTRY/backend:$IMAGE_TAG" backend
+docker build -t "$REGISTRY/frontend:$IMAGE_TAG" frontend
+docker push "$REGISTRY/backend:$IMAGE_TAG"
+docker push "$REGISTRY/frontend:$IMAGE_TAG"
 ```
 
 The CI workflows (`backend-ci.yml`, `frontend-ci.yml`) build and push the images with a 40-character Git commit SHA tag, not `latest`. They authenticate as `DEV_CI_SERVICE_ACCOUNT_EMAIL` through the dev WIF provider.
+
+Artifact Registry enforces tag immutability through
+`docker_config.immutable_tags = true`. A SHA-shaped tag alone is not an
+immutability guarantee. Do not rebuild and push different bytes under an
+existing SHA; redeploy the existing tag after a deployment failure.
 
 Create an environment values file from OpenTofu outputs:
 

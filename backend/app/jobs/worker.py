@@ -39,6 +39,7 @@ TERMINAL_FAILURE_CATEGORIES: frozenset[JobFailureCategory] = frozenset(
         JobFailureCategory.invariant_violation,
     }
 )
+CANCELLATION_CLEANUP_TIMEOUT_SECONDS = 1.0
 
 
 def _is_retryable(failure_category: JobFailureCategory) -> bool:
@@ -607,12 +608,14 @@ class Worker:
             )
 
             if not is_last_attempt and should_retry:
-                backoff = repo.compute_backoff(attempt_count=attempt_count)
+                retry_delay_seconds = repo.compute_backoff_seconds(
+                    attempt_count=attempt_count,
+                )
                 success = await repo.retry_job(
                     job_id=job_id, owner=self.owner,
                     lease_token=lease_token,
                     error=JobError(category=failure_category, retryable=True),
-                    available_at=backoff,
+                    delay_seconds=retry_delay_seconds,
                 )
                 if not success:
                     await session.rollback()
@@ -638,10 +641,7 @@ class Worker:
                         "ctx_duration": duration,
                         "ctx_worker_identity": self.owner,
                         "ctx_outcome": "retry_scheduled",
-                        "ctx_retry_delay_seconds": max(
-                            0.0,
-                            (backoff - datetime.now(timezone.utc)).total_seconds(),
-                        ),
+                        "ctx_retry_delay_seconds": retry_delay_seconds,
                     },
                 )
                 return
@@ -801,8 +801,21 @@ class Worker:
             if not renewal.done():
                 renewal.cancel()
 
-        if pending or renewal_tasks:
-            await asyncio.gather(*pending, *renewal_tasks, return_exceptions=True)
+        cleanup_tasks = {*pending, *renewal_tasks}
+        lingering: set[asyncio.Task] = set()
+        if cleanup_tasks:
+            _, lingering = await asyncio.wait(
+                cleanup_tasks,
+                timeout=CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+            )
+        if lingering:
+            logger.warning(
+                "worker_cancellation_cleanup_timeout",
+                extra={
+                    "ctx_remaining": len(lingering),
+                    "ctx_cleanup_timeout": CANCELLATION_CLEANUP_TIMEOUT_SECONDS,
+                },
+            )
         # Let completion callbacks finish before the worker task returns.
         await asyncio.sleep(0)
 

@@ -973,6 +973,7 @@ class TestWorkerReadiness:
         from app.jobs.repository import JobRepository
         from app.jobs.schemas import IngestValidatedClaimsPayload, JobStatus, JobType
         from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
 
         sentinel = "SECRET_PROVIDER_REGISTRY_FAILURE"
 
@@ -1007,10 +1008,16 @@ class TestWorkerReadiness:
             )
             await session.commit()
 
-        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            metrics=metrics,
+        )
         caplog.set_level(logging.INFO, logger="app.jobs.worker")
         task = asyncio.create_task(worker.start())
-        await asyncio.sleep(0.25)
+        key = (JobType.ingest_validated_claims.value, JobStatus.pending.value)
+        await _wait_for_state(lambda: metrics.job_backlog_by_type_status.get(key) == 1)
         assert not worker._ready_event.is_set()
         assert (await _request_worker(worker)).startswith(
             "HTTP/1.1 503 Service Unavailable"
@@ -1030,6 +1037,12 @@ class TestWorkerReadiness:
         assert row["status"] == JobStatus.pending.value
         assert row["attempt_count"] == 0
         assert handler.calls == []
+        assert metrics.job_backlog_by_type_status[key] == 1
+        assert metrics.job_status_by_type[key] == 1
+        assert metrics.job_oldest_eligible_age_seconds is not None
+        assert metrics.job_oldest_eligible_age_seconds >= 0
+        assert metrics.worker_last_successful_poll_timestamp_seconds is None
+        assert metrics.job_claims_total == 0
         assert any(
             record.message == "worker_dependency_validation_failed"
             for record in caplog.records
@@ -1199,6 +1212,7 @@ class TestWorkerReadiness:
         from app.jobs.repository import JobRepository
         from app.jobs.schemas import JobStatus, JobType
         from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
 
         monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
         get_settings.cache_clear()
@@ -1210,10 +1224,12 @@ class TestWorkerReadiness:
                 idempotency_key="disabled-worker",
             )
             await session.commit()
+        metrics = MetricsRegistry()
         worker = Worker(
             session_factory=pg_session_factory,
             handler_registry=HandlerRegistry(),
             settings=get_settings(),
+            metrics=metrics,
         )
         worker._claim = AsyncMock()
         worker._reconcile = AsyncMock()
@@ -1234,6 +1250,14 @@ class TestWorkerReadiness:
         worker._claim.assert_not_awaited()
         worker._reconcile.assert_not_awaited()
         assert not worker._ready_event.is_set()
+        key = (JobType.ingest_validated_claims.value, JobStatus.pending.value)
+        assert metrics.job_backlog_by_type_status[key] == 1
+        assert metrics.job_status_by_type[key] == 1
+        assert metrics.job_oldest_eligible_age_seconds is not None
+        assert metrics.job_oldest_eligible_age_seconds >= 0
+        assert metrics.worker_last_successful_poll_timestamp_seconds is not None
+        assert metrics.worker_last_successful_poll_timestamp_seconds > 0
+        assert metrics.job_claims_total == 0
 
     async def test_readiness_requires_successful_reconciliation(self):
         from app.jobs.metrics_server import start_metrics_server, stop_metrics_server

@@ -35,6 +35,120 @@ _VALID_CLAIM_PAYLOAD = {
 
 
 class TestAssistantDurableIngestion:
+    @pytest.mark.parametrize("quote_case", ["missing", None, "", "   "])
+    async def test_invalid_evidence_quotes_do_not_enqueue_through_answerability_normalization(
+        self, pg_session_factory, test_user, quote_case
+    ):
+        from types import SimpleNamespace
+
+        from app.assistant.graph.answers import _generate_web_answer
+        from app.assistant.graph.plant_resolution import _sources_from_web_results
+        from app.assistant.graph.web_evidence import _judge_combined_evidence
+        from app.assistant.schemas import AssistantChatRequest
+        from app.assistant.service import AssistantService
+        from app.auth.tables import application_jobs, conversation_messages
+        from app.core.settings import get_settings
+        from app.knowledge.page_evidence import TrustedPageEvidence
+        from app.providers.types import SearchResult
+        from sqlalchemy import select
+
+        source_url = "https://example.org/invalid-quote"
+
+        class FakeJudge:
+            async def judge_response(self, payload, rubric):
+                support = {
+                    "claim": "Water when dry.",
+                    "source_urls": [source_url],
+                    "covered_aspects": ["watering_frequency_or_trigger"],
+                    "confidence": 0.9,
+                }
+                if quote_case != "missing":
+                    support["evidence_quote"] = quote_case
+                return SimpleNamespace(
+                    status="full",
+                    passed=True,
+                    score=0.9,
+                    confidence=0.9,
+                    covered_aspects=["watering_frequency_or_trigger"],
+                    missing_aspects=[],
+                    source_support=[support],
+                    contradictions=[],
+                    reasons=["support supplied"],
+                )
+
+        evidence = TrustedPageEvidence(
+            result=SearchResult(
+                title="Watering guide",
+                url=source_url,
+                snippet="Water when dry.",
+                source_domain="example.org",
+            ),
+            content="Water when dry.",
+            validation_status="trusted",
+            fetch_status="success",
+            fetched_content_length=15,
+        )
+
+        class FakeGraph:
+            async def run(self, **kwargs):
+                state = {
+                    "message": "Watering care",
+                    "topic": "watering",
+                    "plant_scientific_name": "Cotyledon tomentosa",
+                    "display_plant_name": "Pata",
+                    "required_aspects": ["watering_frequency_or_trigger"],
+                    "missing_aspects": ["watering_frequency_or_trigger"],
+                    "answer_language": "en",
+                    "sources": _sources_from_web_results([evidence]),
+                }
+                judged = await _judge_combined_evidence(
+                    SimpleNamespace(providers=SimpleNamespace(judge=FakeJudge())),
+                    get_settings(),
+                    state,
+                    [evidence],
+                )
+                state.update(
+                    {
+                        "answerability_status": judged.status,
+                        "answerability": judged.as_metadata(),
+                        "source_support": judged.source_support,
+                        "covered_aspects": judged.covered_aspects,
+                        "missing_aspects": judged.missing_aspects,
+                        "web_validation_confidence": judged.confidence,
+                    }
+                )
+
+                class Owner:
+                    async def _generate_grounded_answer(self, current_state, **_kwargs):
+                        return {"answer": "Response remains available.", "sources": current_state["sources"], "tool_failures": []}
+
+                return {**state, **await _generate_web_answer(Owner(), state, [evidence])}
+
+        async with pg_session_factory() as session:
+            service = AssistantService(session)
+            service.graph = FakeGraph()
+            response = await service.chat(
+                user_id=test_user,
+                payload=AssistantChatRequest(message="How should I water it?", plant="Pata"),
+            )
+
+        async with pg_session_factory() as session:
+            jobs = (
+                await session.execute(
+                    select(application_jobs).where(
+                        application_jobs.c.conversation_id == response.conversation_id
+                    )
+                )
+            ).all()
+            answer = await session.scalar(
+                select(conversation_messages.c.content).where(
+                    conversation_messages.c.conversation_id == response.conversation_id,
+                    conversation_messages.c.role == "assistant",
+                )
+            )
+        assert jobs == []
+        assert answer == "Response remains available."
+
     @pytest.mark.parametrize(
         ("claim", "quote", "provenance"),
         [

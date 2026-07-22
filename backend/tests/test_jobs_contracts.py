@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict
+from typing import Literal
 
 from app.core.settings import Settings
 from app.jobs.repository import JobRepository, canonical_idempotency_key
@@ -14,8 +16,27 @@ from app.jobs.schemas import (
     IngestValidatedClaimsPayload,
     JobStatus,
     ReadJobResult,
+    JobType,
 )
 from app.observability.metrics import MetricsRegistry
+from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
+
+
+class _PayloadV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payload_version: Literal[1]
+    value_v1: str
+
+
+class _PayloadV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payload_version: Literal[2]
+    value_v2: int
+
+
+class _NoopHandler(JobHandler):
+    async def handle(self, *, payload, attempt_count, max_attempts) -> JobHandlerResult:
+        raise AssertionError("not used")
 
 
 def test_durable_job_controls_default_to_disabled(monkeypatch) -> None:
@@ -221,6 +242,60 @@ def test_policy_1_identity_remains_stable() -> None:
         "covered_aspects": ["watering"],
     }
 
-    key = compute_claim_ingestion_key(claim, ingestion_policy_version=1)
-    assert key.startswith("v1:")
-    assert len(key) > 2
+    assert compute_claim_ingestion_key(claim, ingestion_policy_version=1) == (
+        "v1:77f7f3d9fe2346568ea7252fd1c878af3336d568d7dbe83e8c296a6705c82163"
+    )
+
+
+def test_handler_registry_validates_version_mapping() -> None:
+    registry = HandlerRegistry()
+    handler = _NoopHandler()
+    with pytest.raises(ValueError, match="at least one payload version"):
+        registry.register(JobType.ingest_validated_claims.value, handler, payload_models={})
+    for version in (0, -1, True, False, "1", 1.5):
+        with pytest.raises(ValueError):
+            registry.register(
+                JobType.ingest_validated_claims.value,
+                handler,
+                payload_models={version: _PayloadV1},
+            )
+    with pytest.raises(TypeError):
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: object},
+        )
+
+
+def test_handler_registry_resolves_multiple_payload_versions() -> None:
+    registry = HandlerRegistry()
+    handler = _NoopHandler()
+    job_type = JobType.ingest_validated_claims.value
+    registry.register(job_type, handler, payload_models={1: _PayloadV1, 2: _PayloadV2})
+    assert registry.get_payload_model(job_type, 1) is _PayloadV1
+    assert registry.get_payload_model(job_type, 2) is _PayloadV2
+
+
+def test_handler_registry_rejects_unknown_job_type() -> None:
+    with pytest.raises(ValueError):
+        HandlerRegistry().register("unknown", _NoopHandler(), payload_models={1: _PayloadV1})
+
+
+def test_handler_registry_duplicate_rules_preserve_compatibility() -> None:
+    class _OtherHandler(_NoopHandler):
+        pass
+
+    registry = HandlerRegistry()
+    job_type = JobType.ingest_validated_claims.value
+    original = _NoopHandler()
+    registry.register(job_type, original, payload_models={1: _PayloadV1, 2: _PayloadV2})
+    registry.register(job_type, _NoopHandler(), payload_models={1: _PayloadV1, 2: _PayloadV2})
+    assert registry.get_handler(job_type) is original
+    for handler, models in (
+        (_OtherHandler(), {1: _PayloadV1, 2: _PayloadV2}),
+        (_NoopHandler(), {1: _PayloadV1}),
+        (_NoopHandler(), {1: _PayloadV1, 2: _PayloadV2, 3: _PayloadV1}),
+        (_NoopHandler(), {1: _PayloadV2, 2: _PayloadV2}),
+    ):
+        with pytest.raises(ValueError, match="already registered"):
+            registry.register(job_type, handler, payload_models=models)

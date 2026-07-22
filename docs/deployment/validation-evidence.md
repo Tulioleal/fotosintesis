@@ -39,6 +39,8 @@ files.
 | Frontend image build (`frontend:<sha>`) | pass | <run-url> | frontend-ci.yml build job (skip if path filter excluded it). |
 | Backend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
 | Frontend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
+| Dev Artifact Registry immutable tags | pending | <repository describe output> | Expect `dockerConfig.immutableTags=True`. |
+| Kubernetes server-side admission | pending | <run-url or command output> | All backend, frontend, migration, and worker manifests. |
 | Migration Job completion | pass | <run-url> | deploy.yml migration step. |
 | Backend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |
@@ -58,6 +60,7 @@ files.
 | DNS points at the prod static IP | pass | <hostname + lookup> | Required for `hostname-https`. |
 | Prod IaC `iac.yml` plan/apply | pass | <run-url> | Uses `PROD_IAC_SERVICE_ACCOUNT_EMAIL`; successful apply runs output sync. |
 | Prod output variables synchronized | pass | <iac apply run-url> | Publishes `PROD_ARTIFACT_REGISTRY_URL`, storage, static IP, and other non-sensitive outputs. |
+| Prod Artifact Registry immutable tags | pending | <repository describe output> | Expect `dockerConfig.immutableTags=True`. |
 | Verify source images (dev tags) | pass | <run-url> | release.yml verify-source-images. |
 | Promote images to prod registry | pass | <run-url> | release.yml promote-images. |
 | Deploy prod (manifests) | pass | <run-url> | release.yml deploy-prod. |

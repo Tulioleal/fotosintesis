@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import make_url
 
 from app.auth.tables import (
@@ -28,6 +28,7 @@ from app.jobs.schemas import (
     JobStatus,
     JobType,
 )
+from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.rag import KnowledgeVectorIndex, LlamaIndexRuntime, VectorIndexError
 from app.providers.errors import ProviderError
 from app.providers.types import EmbeddingResult
@@ -278,6 +279,23 @@ async def _chunk_ids(session_factory) -> list:
         return list((await session.scalars(select(knowledge_chunks.c.id))).all())
 
 
+async def _job_row(session_factory, job_id):
+    from app.auth.tables import application_jobs
+
+    async with session_factory() as session:
+        return (
+            await session.execute(
+                select(application_jobs).where(application_jobs.c.id == job_id)
+            )
+        ).mappings().one()
+
+
+async def _wait_for_job_status(session_factory, job_id, status: JobStatus) -> None:
+    async with asyncio.timeout(5):
+        while (await _job_row(session_factory, job_id))["status"] != status.value:
+            await asyncio.sleep(0.05)
+
+
 async def test_failure_before_relational_commit_leaves_both_stores_empty(
     pg_session_factory,
     vector_store,
@@ -308,6 +326,108 @@ async def test_failure_before_relational_commit_leaves_both_stores_empty(
     assert result.status is JobStatus.complete
     assert result.result and result.result.succeeded == 1
     assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+
+
+async def test_real_workers_rollback_staged_relational_writes_then_retry_once(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    monkeypatch,
+) -> None:
+    from app.auth.tables import application_jobs
+    from app.jobs.handler import HandlerRegistry
+    from app.jobs.repository import JobRepository
+    from app.jobs.worker import Worker
+
+    monkeypatch.setenv("JOBS_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "30")
+    monkeypatch.setenv("JOBS_METRICS_PORT", "0")
+    get_settings.cache_clear()
+
+    async with pg_session_factory() as session:
+        job_id = await JobRepository(session).enqueue(
+            job_type=JobType.ingest_validated_claims.value,
+            payload_version=1,
+            payload=_payload().model_dump(mode="json"),
+            idempotency_key=f"staged-rollback-{uuid4()}",
+        )
+        await session.commit()
+
+    staged = asyncio.Event()
+    release_failure = asyncio.Event()
+    original_add_embeddings = KnowledgeRepository.add_embeddings
+
+    async def stage_then_fail(repository, **kwargs):
+        kwargs["commit"] = False
+        await original_add_embeddings(repository, **kwargs)
+        for table in (
+            knowledge_documents,
+            knowledge_sources,
+            knowledge_chunks,
+            knowledge_embeddings,
+        ):
+            assert await repository.session.scalar(select(func.count()).select_from(table)) == 1
+        staged.set()
+        await release_failure.wait()
+        raise RetryableJobError(JobFailureCategory.database_transient)
+
+    registry = HandlerRegistry()
+    registry.register(
+        JobType.ingest_validated_claims.value,
+        _handler(pg_session_factory, vector_index_factory),
+        payload_models={1: IngestValidatedClaimsPayload},
+    )
+    worker_1 = Worker(
+        session_factory=pg_session_factory,
+        handler_registry=registry,
+        settings=get_settings(),
+    )
+    with monkeypatch.context() as patcher:
+        patcher.setattr(KnowledgeRepository, "add_embeddings", stage_then_fail)
+        worker_1_task = asyncio.create_task(worker_1.start())
+        await asyncio.wait_for(staged.wait(), timeout=5)
+        worker_1.stop()
+        release_failure.set()
+        await worker_1_task
+
+    assert await _counts(pg_session_factory) == (0, 0, 0, 0)
+    failed_attempt = await _job_row(pg_session_factory, job_id)
+    assert failed_attempt["status"] == JobStatus.pending.value
+    assert failed_attempt["attempt_count"] == 1
+
+    async with pg_session_factory() as session:
+        await session.execute(
+            update(application_jobs)
+            .where(application_jobs.c.id == job_id)
+            .values(available_at=func.now())
+        )
+        await session.commit()
+
+    replacement_registry = HandlerRegistry()
+    replacement_registry.register(
+        JobType.ingest_validated_claims.value,
+        _handler(pg_session_factory, vector_index_factory),
+        payload_models={1: IngestValidatedClaimsPayload},
+    )
+    worker_2 = Worker(
+        session_factory=pg_session_factory,
+        handler_registry=replacement_registry,
+        settings=get_settings(),
+    )
+    worker_2_task = asyncio.create_task(worker_2.start())
+    try:
+        await _wait_for_job_status(pg_session_factory, job_id, JobStatus.complete)
+    finally:
+        worker_2.stop()
+        await worker_2_task
+
+    final_job = await _job_row(pg_session_factory, job_id)
+    assert await _counts(pg_session_factory) == (1, 1, 1, 1)
+    assert final_job["attempt_count"] == 2
+    assert final_job["result"]["succeeded"] == 1
+    chunk_ids = await _chunk_ids(pg_session_factory)
+    assert len(await vector_store.aget_nodes(node_ids=[str(value) for value in chunk_ids])) == 1
 
 
 async def test_permanent_claim_failure_returns_bounded_partial_result(
@@ -450,6 +570,83 @@ async def test_concurrent_production_handlers_converge_on_one_claim(
     assert await _counts(pg_session_factory) == (1, 1, 1, 1)
     chunk_ids = await _chunk_ids(pg_session_factory)
     assert len(await vector_store.aget_nodes(node_ids=[str(value) for value in chunk_ids])) == 1
+
+
+async def test_policy_versions_remain_durable_across_replacement_workers(
+    pg_session_factory,
+    vector_index_factory,
+    monkeypatch,
+) -> None:
+    from app.jobs.handler import HandlerRegistry
+    from app.jobs.repository import JobRepository, canonical_idempotency_key, compute_claims_hash
+    from app.jobs.worker import Worker
+
+    monkeypatch.setenv("JOBS_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("JOBS_METRICS_PORT", "0")
+    get_settings.cache_clear()
+    legacy_payload = _payload().model_dump(mode="json")
+    legacy_payload.pop("ingestion_policy_version")
+    policy_2_payload = _payload().model_copy(
+        update={"ingestion_policy_version": 2}
+    ).model_dump(mode="json")
+
+    async def enqueue(payload, policy_version):
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=payload,
+                idempotency_key=canonical_idempotency_key(
+                    job_type=JobType.ingest_validated_claims.value,
+                    conversation_id=None,
+                    claims_hash=compute_claims_hash(payload["claims"]),
+                    payload_version=1,
+                    ingestion_policy_version=policy_version,
+                ),
+            )
+            await session.commit()
+            return job_id
+
+    async def run_replacement_worker(job_id):
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _handler(pg_session_factory, vector_index_factory),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            await _wait_for_job_status(pg_session_factory, job_id, JobStatus.complete)
+        finally:
+            worker.stop()
+            await task
+
+    legacy_job_id = await enqueue(legacy_payload, 1)
+    await run_replacement_worker(legacy_job_id)
+    policy_2_job_id = await enqueue(policy_2_payload, 2)
+    await run_replacement_worker(policy_2_job_id)
+
+    legacy_identity = compute_claim_ingestion_key(
+        legacy_payload["claims"][0], ingestion_policy_version=1
+    )
+    policy_2_identity = compute_claim_ingestion_key(
+        policy_2_payload["claims"][0], ingestion_policy_version=2
+    )
+    assert legacy_identity.startswith("v1:")
+    assert policy_2_identity.startswith("v2:")
+    assert legacy_identity != policy_2_identity
+    assert await _counts(pg_session_factory) == (2, 2, 2, 2)
+
+    assert await enqueue(legacy_payload, 1) == legacy_job_id
+    assert await enqueue(policy_2_payload, 2) == policy_2_job_id
+    await run_replacement_worker(legacy_job_id)
+    assert await _counts(pg_session_factory) == (2, 2, 2, 2)
 
 
 @pytest.mark.parametrize(

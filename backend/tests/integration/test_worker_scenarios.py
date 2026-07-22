@@ -13,13 +13,14 @@ import os
 import signal
 import socket
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.auth.tables import application_jobs
 from app.jobs.handler import (
@@ -302,6 +303,79 @@ class TestWorkerPolling:
         assert row["status"] == JobStatus.pending.value
         assert row["attempt_count"] == 1
 
+    async def test_real_worker_applies_exponential_retry_delay_and_cap(
+        self, pg_session_factory, monkeypatch
+    ):
+        monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.02")
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "0.05")
+        monkeypatch.setenv("JOBS_BACKOFF_CAP_SECONDS", "0.10")
+        monkeypatch.setenv("JOBS_MAX_ATTEMPTS_DEFAULT", "4")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+
+        class _ScriptedHandler(JobHandler):
+            def __init__(self) -> None:
+                self.invocations: list[tuple[object, object]] = []
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                async with pg_session_factory() as session:
+                    invocation_time = await session.scalar(select(func.clock_timestamp()))
+                    eligible_at = await session.scalar(
+                        select(application_jobs.c.available_at).where(
+                            application_jobs.c.idempotency_key == "retry-timing"
+                        )
+                    )
+                self.invocations.append((invocation_time, eligible_at))
+                if attempt_count < 4:
+                    return JobHandlerResult.failed(
+                        category=JobFailureCategory.provider_transient,
+                        retryable=True,
+                    )
+                return JobHandlerResult(
+                    status=JobStatus.complete,
+                    result=ReadJobResult(succeeded=1),
+                )
+
+        handler = _ScriptedHandler()
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        job_id = await _enqueue_async(pg_session_factory, idempotency_key="retry-timing")
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            async with asyncio.timeout(5):
+                while (await _job_status(pg_session_factory, job_id)).get("status") != "complete":
+                    await asyncio.sleep(0.02)
+        finally:
+            worker.stop()
+            await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["attempt_count"] == 4
+        assert row["status"] == JobStatus.complete.value
+        assert len(handler.invocations) == 4
+        assert all(
+            invocation_time >= eligible_at
+            for invocation_time, eligible_at in handler.invocations[1:]
+        )
+        delays = [
+            (next_eligible - invocation_time).total_seconds()
+            for (invocation_time, _), (_, next_eligible) in zip(
+                handler.invocations,
+                handler.invocations[1:],
+            )
+        ]
+        assert delays == pytest.approx([0.05, 0.10, 0.10], abs=0.04)
+
     async def test_retryable_failure_on_final_attempt_becomes_failed(
         self, pg_session_factory
     ):
@@ -572,6 +646,42 @@ class TestWorkerPolling:
         assert row["status"] == JobStatus.failed.value
         assert row["last_error"] == {
             "category": "invalid_payload",
+            "retryable": False,
+        }
+        assert handler.calls == []
+
+    async def test_column_payload_version_mismatch_fails_before_handler_execution(
+        self, pg_session_factory
+    ):
+        handler = _FakeHandler()
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        payload = _valid_payload()
+        payload["payload_version"] = 2
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=payload,
+                idempotency_key=f"column-body-mismatch-{uuid4()}",
+            )
+            await session.commit()
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+        task = asyncio.create_task(worker.start())
+        try:
+            async with asyncio.timeout(3):
+                while (await _job_status(pg_session_factory, job_id)).get("status") != "failed":
+                    await asyncio.sleep(0.02)
+        finally:
+            worker.stop()
+            await task
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["last_error"] == {
+            "category": JobFailureCategory.invalid_payload.value,
             "retryable": False,
         }
         assert handler.calls == []
@@ -1075,6 +1185,68 @@ class TestShutdownDuringClaim:
 
 
 class TestWorkerShutdown:
+    async def test_cancellation_cleanup_is_bounded_and_leaves_job_recoverable(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        import logging
+
+        monkeypatch.setenv("JOBS_SHUTDOWN_DRAIN_SECONDS", "0.05")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+
+        class _SlowCancellationHandler(JobHandler):
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.cancelled = asyncio.Event()
+                self.release_cleanup = asyncio.Event()
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                self.started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    self.cancelled.set()
+                    await self.release_cleanup.wait()
+                    raise
+
+        handler = _SlowCancellationHandler()
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            handler,
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        job_id = await _enqueue_async(pg_session_factory, idempotency_key="slow-cancellation")
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+        )
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        worker_task = asyncio.create_task(worker.start())
+        await asyncio.wait_for(handler.started.wait(), timeout=3)
+
+        start = time.monotonic()
+        worker.stop()
+        await asyncio.wait_for(worker_task, timeout=2)
+        elapsed = time.monotonic() - start
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert elapsed < 1.5
+        assert handler.cancelled.is_set()
+        assert row["status"] == JobStatus.processing.value
+        assert row["last_error"] is None
+        assert any(
+            record.message == "worker_cancellation_cleanup_timeout"
+            for record in caplog.records
+        )
+
+        lingering = worker._handler_tasks[str(job_id)]
+        handler.release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(lingering, timeout=1)
+
     async def test_module_entrypoint_handles_sigterm_cleanly(self):
         backend_root = __import__("pathlib").Path(__file__).resolve().parents[2]
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:

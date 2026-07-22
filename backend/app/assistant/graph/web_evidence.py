@@ -310,11 +310,25 @@ def _validated_claim_payloads(
         return []
     payloads: list[dict[str, object]] = []
     sources_by_url = {str(source.get("url")): source for source in state.get("sources", []) if source.get("url")}
+    final_covered = {
+        str(aspect)
+        for aspect in state.get("covered_aspects", [])
+        if isinstance(aspect, str)
+    }
     for support in state.get("source_support", []):
         urls = support.get("source_urls")
         aspects = support.get("covered_aspects")
         claim = str(support.get("claim") or "").strip()
         if not claim or not isinstance(urls, list) or not isinstance(aspects, list):
+            continue
+        normalized_aspects = list(
+            dict.fromkeys(
+                str(aspect)
+                for aspect in aspects
+                if isinstance(aspect, str) and aspect in final_covered
+            )
+        )
+        if not normalized_aspects:
             continue
 
         raw_quote = support.get("evidence_quote")
@@ -324,31 +338,38 @@ def _validated_claim_payloads(
         if not evidence_quote:
             continue
 
-        for url in urls:
-            if not isinstance(url, str) or not url.strip():
-                continue
-            source = sources_by_url.get(url, {})
-            source_provenance = source.get("source_provenance")
-            if source_provenance not in {"trusted", "external_fallback"}:
-                continue
-            payloads.append(
-                {
-                    "scientific_name": scientific_name,
-                    "topic": topic,
-                    "required_aspects": list(state.get("required_aspects", [])),
-                    "covered_aspects": [str(aspect) for aspect in aspects],
-                    "missing_aspects": list(state.get("missing_aspects", [])),
-                    "answerability_status": status,
-                    "claim": claim,
-                    "evidence_quote": evidence_quote,
-                    "source_url": url,
-                    "source_title": source.get("title"),
-                    "source_domain": source.get("domain"),
-                    "source_provenance": source_provenance,
-                    "confidence": float(support.get("confidence", state.get("web_validation_confidence", 0.0)) or 0.0),
-                    "language": state.get("answer_language") or "es",
-                }
+        valid_urls = list(
+            dict.fromkeys(
+                url.strip()
+                for url in urls
+                if isinstance(url, str) and url.strip()
             )
+        )
+        if len(valid_urls) != 1:
+            continue
+        url = valid_urls[0]
+        source = sources_by_url.get(url, {})
+        source_provenance = source.get("source_provenance")
+        if source_provenance not in {"trusted", "external_fallback"}:
+            continue
+        payloads.append(
+            {
+                "scientific_name": scientific_name,
+                "topic": topic,
+                "required_aspects": list(state.get("required_aspects", [])),
+                "covered_aspects": normalized_aspects,
+                "missing_aspects": list(state.get("missing_aspects", [])),
+                "answerability_status": status,
+                "claim": claim,
+                "evidence_quote": evidence_quote,
+                "source_url": url,
+                "source_title": source.get("title"),
+                "source_domain": source.get("domain"),
+                "source_provenance": source_provenance,
+                "confidence": float(support.get("confidence", state.get("web_validation_confidence", 0.0)) or 0.0),
+                "language": state.get("answer_language") or "es",
+            }
+        )
     return payloads
 
 

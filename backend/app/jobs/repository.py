@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, text, update
@@ -124,7 +125,6 @@ class JobRepository(RepositoryBase):
         available_at: datetime | None = None,
     ) -> EnqueueResult:
         validated_job_type = JobType(job_type)
-        now = datetime.now(timezone.utc)
         resolved_max_attempts = (
             self.settings.jobs_max_attempts_default
             if max_attempts is None
@@ -144,10 +144,9 @@ class JobRepository(RepositoryBase):
             "status": JobStatus.pending.value,
             "idempotency_key": idempotency_key,
             "max_attempts": resolved_max_attempts,
-            "available_at": available_at or now,
-            "created_at": now,
-            "updated_at": now,
         }
+        if available_at is not None:
+            insert_values["available_at"] = available_at
 
         stmt = (
             pg_insert(application_jobs)
@@ -355,8 +354,17 @@ class JobRepository(RepositoryBase):
         owner: str,
         lease_token: str,
         error: JobError,
-        available_at: datetime,
+        delay_seconds: float,
     ) -> bool:
+        if not math.isfinite(delay_seconds) or delay_seconds < 0:
+            raise ValueError("delay_seconds must be finite and non-negative")
+        if self.session.bind and self.session.bind.dialect.name == "postgresql":
+            available_at = func.now() + text(
+                "(:retry_delay_seconds * INTERVAL '1 second')"
+            )
+        else:
+            # SQLite only backs repository unit tests; production scheduling is PostgreSQL.
+            available_at = func.datetime(func.now(), f"+{delay_seconds} seconds")
         transition = await self.session.execute(
             update(application_jobs)
             .where(
@@ -374,7 +382,8 @@ class JobRepository(RepositoryBase):
                 lease_owner=None,
                 lease_token=None,
                 lease_expires_at=None,
-            )
+            ),
+            {"retry_delay_seconds": delay_seconds},
         )
         return transition.rowcount > 0
 
@@ -412,7 +421,6 @@ class JobRepository(RepositoryBase):
     async def reconcile_expired_processing(
         self, *, batch_limit: int | None = None
     ) -> ReconciliationResult:
-        now = datetime.now(timezone.utc)
         limit = batch_limit or 100
         rows = (
             await self.session.execute(
@@ -426,7 +434,7 @@ class JobRepository(RepositoryBase):
                 .where(
                     application_jobs.c.status == JobStatus.processing.value,
                     application_jobs.c.lease_expires_at.is_not(None),
-                    application_jobs.c.lease_expires_at <= now,
+                    application_jobs.c.lease_expires_at <= func.now(),
                 )
                 .order_by(application_jobs.c.lease_expires_at.asc())
                 .limit(limit)
@@ -451,8 +459,8 @@ class JobRepository(RepositoryBase):
                             category=JobFailureCategory.attempts_exhausted,
                             retryable=False,
                         ).model_dump(mode="json"),
-                        completed_at=now,
-                        updated_at=now,
+                        completed_at=func.now(),
+                        updated_at=func.now(),
                         lease_owner=None,
                         lease_token=None,
                         lease_expires_at=None,
@@ -476,7 +484,7 @@ class JobRepository(RepositoryBase):
                         ).model_dump(mode="json"),
                         available_at=row["lease_expires_at"] + timedelta(seconds=delay),
                         completed_at=None,
-                        updated_at=now,
+                        updated_at=func.now(),
                         lease_owner=None,
                         lease_token=None,
                         lease_expires_at=None,
@@ -555,13 +563,12 @@ class JobRepository(RepositoryBase):
             return None
         return float(row._mapping["age"])
 
-    def compute_backoff(self, *, attempt_count: int) -> datetime:
-        delay = recovery_backoff_seconds(
+    def compute_backoff_seconds(self, *, attempt_count: int) -> float:
+        return recovery_backoff_seconds(
             attempt_count=attempt_count,
             base=self.settings.jobs_backoff_base_seconds,
             cap=self.settings.jobs_backoff_cap_seconds,
         )
-        return datetime.now(timezone.utc) + timedelta(seconds=delay)
 
     def _row_to_status_response(self, row: dict) -> JobStatusResponse:
         last_error_raw = row.get("last_error")

@@ -66,6 +66,7 @@ async def _judge_answerability(
             "Do not use general model knowledge outside the supplied evidence.",
             "Use aspect_validation_guidance when deciding whether evidence directly covers a required aspect.",
             "Evaluate coverage independently for each requested domain-qualified aspect.",
+            "Each source_support item intended for durable ingestion must contain exactly one source URL and an evidence quote taken from that source. Use separate support items when different sources support the same claim.",
         ],
         "expected_output": {
             "status": "one of full, partial, insufficient, contradictory",
@@ -187,7 +188,6 @@ def _validated_answerability(
     requested = [aspect for aspect in requested_aspects if aspect]
     covered = [aspect for aspect in result.covered_aspects if aspect in requested]
     missing = [aspect for aspect in requested if aspect not in covered]
-    support = [item for item in result.source_support if _valid_source_support(item, requested)]
     contradictions = [item for item in result.contradictions if _valid_contradiction(item)]
     if result.status == "full":
         if not requested:
@@ -197,18 +197,30 @@ def _validated_answerability(
         if result.answerable and not covered:
             covered = list(requested)
             missing = []
+        support = _normalized_source_support(
+            result.source_support,
+            allowed_aspects=covered,
+        )
         if set(covered) >= set(requested) and support:
             return AnswerabilityResult("full", True, covered, [], support, contradictions, result.reason, result.confidence)
         if covered and support:
             return AnswerabilityResult("partial", False, covered, missing, support, contradictions, result.reason, result.confidence)
         return AnswerabilityResult("insufficient", False, [], requested, reason=result.reason, confidence=result.confidence)
     if result.status == "partial":
+        support = _normalized_source_support(
+            result.source_support,
+            allowed_aspects=covered,
+        )
         if set(covered) >= set(requested) and support and not contradictions:
             return AnswerabilityResult("full", True, covered, [], support, contradictions, result.reason, result.confidence)
         if covered and support:
             return AnswerabilityResult("partial", False, covered, missing, support, contradictions, result.reason, result.confidence)
         return AnswerabilityResult("insufficient", False, [], requested, reason=result.reason, confidence=result.confidence)
     if result.status == "contradictory":
+        support = _normalized_source_support(
+            result.source_support,
+            allowed_aspects=covered,
+        )
         if contradictions:
             return AnswerabilityResult("contradictory", False, covered, missing or requested, support, contradictions, result.reason, result.confidence)
         return AnswerabilityResult(
@@ -220,7 +232,38 @@ def _validated_answerability(
             reason=result.reason or "contradictory answerability result lacked source URLs",
             confidence=result.confidence,
         )
+    support = _normalized_source_support(
+        result.source_support,
+        allowed_aspects=covered,
+    )
     return AnswerabilityResult("insufficient", False, covered, missing or requested, support, contradictions, result.reason, result.confidence)
+
+
+def _normalized_source_support(
+    items: list[dict[str, object]],
+    *,
+    allowed_aspects: list[str],
+) -> list[dict[str, object]]:
+    allowed = set(allowed_aspects)
+    normalized_items: list[dict[str, object]] = []
+    for item in items:
+        if not _valid_source_support(item, allowed_aspects):
+            continue
+        aspects = item.get("covered_aspects")
+        if not isinstance(aspects, list):
+            continue
+        normalized_aspects: list[str] = []
+        for aspect in aspects:
+            if not isinstance(aspect, str) or aspect not in allowed:
+                continue
+            if aspect not in normalized_aspects:
+                normalized_aspects.append(aspect)
+        if not normalized_aspects:
+            continue
+        normalized_item = dict(item)
+        normalized_item["covered_aspects"] = normalized_aspects
+        normalized_items.append(normalized_item)
+    return normalized_items
 
 
 def _valid_source_support(item: dict[str, object], requested_aspects: list[str]) -> bool:
@@ -430,6 +473,7 @@ __all__ = [
     "_graph_aspect_validation_guidance",
     "_is_strong_full_support",
     "_judge_answerability",
+    "_normalized_source_support",
     "_required_aspects_from_state",
     "_validated_answerability",
     "_validation_threshold_for_aspect",

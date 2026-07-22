@@ -24,6 +24,7 @@ from app.assistant.graph import (
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
 from app.assistant.service import AssistantService
+from app.assistant.graph.web_evidence import _validated_claim_payloads
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -210,6 +211,108 @@ def test_validated_answerability_preserves_true_partial_for_multi_aspect() -> No
     assert result.answerable is False
     assert "watering_frequency_or_trigger" in result.covered_aspects
     assert "light_exposure" in result.missing_aspects
+
+
+def test_partial_support_cannot_cover_final_missing_aspect() -> None:
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="partial",
+            answerable=False,
+            covered_aspects=["watering_frequency_or_trigger"],
+            missing_aspects=["light_requirement"],
+            source_support=[{
+                "claim": "Needs bright light.",
+                "source_urls": ["https://example.org/light"],
+                "covered_aspects": ["light_requirement"],
+                "evidence_quote": "Provide bright light.",
+                "confidence": 0.9,
+            }],
+        ),
+        requested_aspects=["watering_frequency_or_trigger", "light_requirement"],
+    )
+
+    assert result.status == "insufficient"
+    assert result.source_support == []
+
+
+def test_support_removes_unknown_aspects() -> None:
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="partial",
+            answerable=False,
+            covered_aspects=["watering_frequency_or_trigger"],
+            source_support=[{
+                "claim": "Water after drying.",
+                "source_urls": ["https://example.org/water"],
+                "covered_aspects": ["watering_frequency_or_trigger", "invented_aspect"],
+                "evidence_quote": "Allow soil to dry.",
+                "confidence": 0.9,
+            }],
+        ),
+        requested_aspects=["watering_frequency_or_trigger"],
+    )
+
+    assert result.source_support[0]["covered_aspects"] == ["watering_frequency_or_trigger"]
+
+
+@pytest.mark.parametrize("quote_case", ["missing", None, "", "   "])
+def test_source_support_requires_real_evidence_quote(quote_case) -> None:
+    support = {
+        "claim": "Water after drying.",
+        "source_urls": ["https://example.org/water"],
+        "covered_aspects": ["watering_frequency_or_trigger"],
+        "confidence": 0.9,
+    }
+    if quote_case != "missing":
+        support["evidence_quote"] = quote_case
+    result = _validated_answerability(
+        AnswerabilityResult(
+            status="full", answerable=True,
+            covered_aspects=["watering_frequency_or_trigger"],
+            source_support=[support],
+        ),
+        requested_aspects=["watering_frequency_or_trigger"],
+    )
+    assert result.status == "insufficient"
+    assert result.source_support == []
+
+
+def test_validated_claim_payloads_require_one_source_per_quote() -> None:
+    state = {
+        "answerability_status": "full",
+        "covered_aspects": ["watering_frequency_or_trigger"],
+        "source_support": [{
+            "claim": "Water after drying.",
+            "source_urls": ["https://example.org/a", "https://example.org/b"],
+            "covered_aspects": ["watering_frequency_or_trigger"],
+            "evidence_quote": "Allow soil to dry.",
+        }],
+        "sources": [
+            {"url": "https://example.org/a", "domain": "example.org", "source_provenance": "trusted"},
+            {"url": "https://example.org/b", "domain": "example.org", "source_provenance": "trusted"},
+        ],
+    }
+    assert _validated_claim_payloads(state, scientific_name="Plantus testus", topic="care") == []
+
+
+def test_validated_claim_payloads_preserve_source_specific_quotes() -> None:
+    state = {
+        "answerability_status": "full",
+        "covered_aspects": ["watering_frequency_or_trigger"],
+        "source_support": [
+            {"claim": "Water after drying.", "source_urls": ["https://example.org/a"], "covered_aspects": ["watering_frequency_or_trigger"], "evidence_quote": " Source A quote. "},
+            {"claim": "Water after drying.", "source_urls": ["https://example.org/b"], "covered_aspects": ["watering_frequency_or_trigger"], "evidence_quote": "Source B quote."},
+        ],
+        "sources": [
+            {"url": "https://example.org/a", "domain": "a.example.org", "source_provenance": "trusted"},
+            {"url": "https://example.org/b", "domain": "b.example.org", "source_provenance": "external_fallback"},
+        ],
+    }
+    payloads = _validated_claim_payloads(state, scientific_name="Plantus testus", topic="care")
+    assert [(item["source_url"], item["evidence_quote"], item["source_domain"], item["source_provenance"]) for item in payloads] == [
+        ("https://example.org/a", "Source A quote.", "a.example.org", "trusted"),
+        ("https://example.org/b", "Source B quote.", "b.example.org", "external_fallback"),
+    ]
 
 def test_assistant_chat_request_accepts_legacy_plant_payload() -> None:
     payload = AssistantChatRequest(message="How do I water my Pata?", plant="Pata")
@@ -475,4 +578,3 @@ async def test_low_confidence_valid_classifier_output_is_accepted() -> None:
     assert result["intent"] == "botanical"
     assert result["required_aspects"] == ["watering_frequency_or_trigger"]
     assert not any("confidence" in f for f in result["tool_failures"])
-

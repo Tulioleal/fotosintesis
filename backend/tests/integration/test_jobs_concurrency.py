@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 
 from app.auth.tables import application_jobs
 from app.jobs.repository import JobRepository
@@ -271,7 +271,7 @@ class TestConcurrentClaiming:
                     category=JobFailureCategory.provider_transient,
                     retryable=True,
                 ),
-                available_at=datetime.now(timezone.utc),
+                delay_seconds=0,
             )),
             ("fail", lambda r, tok: r.fail_job(
                 job_id=job_id,
@@ -308,7 +308,7 @@ class TestConcurrentClaiming:
                     category=JobFailureCategory.provider_transient,
                     retryable=True,
                 ),
-                available_at=datetime.now(timezone.utc),
+                delay_seconds=0,
             )),
             ("fail", lambda r: r.fail_job(
                 job_id=job_id,
@@ -377,6 +377,84 @@ class TestClaimBatch:
 
 
 class TestTransactionDurability:
+    async def test_default_enqueue_timestamps_use_database_time(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.jobs import repository as repository_module
+
+        class ForbiddenHostClock:
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("enqueue must not read the host clock")
+
+        monkeypatch.setattr(repository_module, "datetime", ForbiddenHostClock)
+        async with pg_session_factory() as session:
+            database_now = await session.scalar(select(func.now()))
+            job_id = await _enqueue_job(
+                JobRepository(session), f"database-enqueue-{uuid4()}"
+            )
+            await session.commit()
+
+        async with pg_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(application_jobs).where(application_jobs.c.id == job_id)
+                )
+            ).mappings().one()
+        assert row["available_at"] == database_now
+        assert row["created_at"] == database_now
+        assert row["updated_at"] == database_now
+
+    async def test_enqueue_preserves_explicit_available_at(self, pg_session_factory):
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        async with pg_session_factory() as session:
+            job_id = await _enqueue_job(
+                JobRepository(session), f"explicit-enqueue-{uuid4()}", available_at=future
+            )
+            await session.commit()
+        async with pg_session_factory() as session:
+            available_at = await session.scalar(
+                select(application_jobs.c.available_at).where(application_jobs.c.id == job_id)
+            )
+        assert available_at == future
+
+    async def test_retry_eligibility_uses_database_time(self, pg_session_factory, monkeypatch):
+        from app.jobs import repository as repository_module
+
+        class ForbiddenHostClock:
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("retry must not read the host clock")
+
+        async with pg_session_factory() as session:
+            job_id = await _enqueue_job(JobRepository(session), f"database-retry-{uuid4()}")
+            token = await _set_processing(session, job_id)
+            database_now = await session.scalar(select(func.now()))
+            monkeypatch.setattr(repository_module, "datetime", ForbiddenHostClock)
+            success = await JobRepository(session).retry_job(
+                job_id=job_id,
+                owner="w1",
+                lease_token=token,
+                error=JobError(
+                    category=JobFailureCategory.provider_transient,
+                    retryable=True,
+                ),
+                delay_seconds=5,
+            )
+            await session.commit()
+        assert success is True
+        async with pg_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(application_jobs).where(application_jobs.c.id == job_id)
+                )
+            ).mappings().one()
+        assert row["status"] == JobStatus.pending.value
+        assert row["available_at"] == database_now + timedelta(seconds=5)
+        assert row["lease_owner"] is None
+        assert row["lease_token"] is None
+        assert row["lease_expires_at"] is None
+
     async def test_rollback_removes_enqueued_job(self, pg_session_factory):
         async with pg_session_factory() as s:
             repo = JobRepository(s)
@@ -459,6 +537,75 @@ class TestIdempotentEnqueue:
 
 
 class TestReconciliation:
+    async def test_reconciliation_uses_database_time_not_worker_time(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.jobs import repository as repository_module
+
+        async with pg_session_factory() as session:
+            job_id = await _enqueue_job(JobRepository(session), "database-clock-reconciliation")
+            await session.commit()
+
+        async with pg_session_factory() as session:
+            database_now = await session.scalar(select(func.now()))
+            lease_expires_at = database_now + timedelta(seconds=60)
+            await session.execute(
+                update(application_jobs)
+                .where(application_jobs.c.id == job_id)
+                .values(
+                    status=JobStatus.processing.value,
+                    attempt_count=1,
+                    lease_owner="active-worker",
+                    lease_token=str(uuid4()),
+                    lease_expires_at=lease_expires_at,
+                )
+            )
+            await session.commit()
+
+        real_datetime = repository_module.datetime
+
+        class FastWorkerClock:
+            @classmethod
+            def now(cls, tz=None):
+                return real_datetime.now(tz) + timedelta(hours=1)
+
+        monkeypatch.setattr(repository_module, "datetime", FastWorkerClock)
+        async with pg_session_factory() as session:
+            result = await JobRepository(session).reconcile_expired_processing(batch_limit=10)
+            await session.commit()
+        assert result.recovered_by_type == {}
+        assert result.exhausted_by_type == {}
+
+        async with pg_session_factory() as session:
+            row = (
+                await session.execute(select(application_jobs).where(application_jobs.c.id == job_id))
+            ).mappings().one()
+        assert row["status"] == JobStatus.processing.value
+        assert row["lease_owner"] == "active-worker"
+        assert row["lease_expires_at"] == lease_expires_at
+        assert row["attempt_count"] == 1
+
+    async def test_reconciliation_recovers_lease_expired_by_database_time(self, pg_session_factory):
+        async with pg_session_factory() as session:
+            job_id = await _enqueue_job(JobRepository(session), "database-expired-reconciliation")
+            await session.execute(
+                update(application_jobs)
+                .where(application_jobs.c.id == job_id)
+                .values(
+                    status=JobStatus.processing.value,
+                    attempt_count=1,
+                    lease_owner="expired-worker",
+                    lease_token=str(uuid4()),
+                    lease_expires_at=func.now() - timedelta(seconds=30),
+                )
+            )
+            await session.commit()
+
+        async with pg_session_factory() as session:
+            result = await JobRepository(session).reconcile_expired_processing(batch_limit=10)
+            await session.commit()
+        assert result.recovered_by_type == {_VALID_JOB_TYPE: 1}
+
     async def test_exhausted_expired_jobs_become_failed(self, pg_session_factory):
         async with pg_session_factory() as s:
             repo = JobRepository(s)

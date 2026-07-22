@@ -41,6 +41,7 @@ The worker emits JSON structured logs with these event names:
 | `worker_stopped` | Worker stops with `ctx_outcome` set to `clean` or `timeout` |
 | `worker_draining` | Shutdown begins with active count and drain timeout |
 | `worker_drain_timeout` | Active handlers exceeded the bounded drain period |
+| `worker_cancellation_cleanup_timeout` | A cancellation-resistant handler exceeded the one-second cleanup allowance |
 | `worker_signal_handlers_registered` | Signal handlers installed |
 | `worker_handler_exception` | Handler raised an unexpected exception |
 | `worker_lease_lost_during_execution` | Lease lost during handler execution |
@@ -69,10 +70,21 @@ credentials, or tokens.
 
 ### Metrics
 
-Worker metrics are exposed on a private metrics port from the worker process, not
-through the API `/metrics` endpoint. In Kubernetes, the worker Deployment has no
-public Service; metrics are collected via pod-level scraping (e.g. GKE Managed
-Prometheus PodMonitoring).
+#### API-owned durable-job metrics
+
+The API process records scheduling outcomes after the assistant-response and
+job-enqueue transaction commits. These metrics are exposed through the API
+`/metrics` endpoint and scraped by `PodMonitoring/fotosintesis-backend`.
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `fotosintesis_job_schedules_total` | `job_type`, `outcome` | Committed scheduling outcomes: `created` or `reused` |
+
+#### Worker-owned durable-job metrics
+
+The worker process exposes lifecycle and backlog metrics through its private
+metrics listener. Kubernetes scrapes them with
+`PodMonitoring/fotosintesis-worker`; no worker Service is created.
 
 | Metric | Labels | Description |
 |--------|--------|-------------|
@@ -82,11 +94,28 @@ Prometheus PodMonitoring).
 | `fotosintesis_job_attempt_duration_seconds` | `job_type`, `status` | Handler duration by outcome |
 | `fotosintesis_job_retries_total` | `job_type`, `category` | Retry events by job type and failure category |
 | `fotosintesis_job_stale_recoveries_total` | `job_type`, `outcome` | Stale lease recoveries, including `lease_expired` and `attempts_exhausted` |
-| `fotosintesis_job_schedules_total` | `job_type`, `outcome` | Committed scheduling outcomes: `created` or `reused` |
 | `fotosintesis_job_backlog_count` | `job_type`, `status` | Active backlog only: `pending` and `processing` rows |
 | `fotosintesis_job_status_count` | `job_type`, `status` | Durable row count across every lifecycle status |
 | `fotosintesis_job_oldest_eligible_age_seconds` | (none) | Age of the oldest eligible pending job |
 | `fotosintesis_worker_last_successful_poll_timestamp_seconds` | (none) | Unix timestamp of the last successful reconciliation or disabled-mode database check |
+
+API and worker metric registries are process-local and reset when pods restart.
+Scheduling counters must be queried from backend targets. Worker lifecycle and
+backlog metrics must be queried from worker targets.
+
+```promql
+sum by (job_type, outcome) (
+  rate(fotosintesis_job_schedules_total[5m])
+)
+```
+
+```promql
+max by (job_type, status) (
+  fotosintesis_job_backlog_count
+)
+```
+
+Do not sum identical database snapshot gauges across worker replicas.
 
 **Local development**: When running the worker directly with `python -m app.jobs.worker`,
 metrics are available via a local HTTP endpoint on a configurable port. Check the
@@ -102,6 +131,11 @@ ownership during execution and intentionally does not finalize the job.
 not finalized by that worker and is recoverable after lease expiry. Scheduling
 logs may include job and conversation UUIDs for correlation, but metrics never
 use either identifier as a label.
+
+After the drain timeout, cancellation cleanup receives one additional bounded
+second. Python cannot safely force a cancellation-resistant coroutine to stop;
+the Kubernetes termination grace period and eventual SIGKILL remain the final
+process-level bound. Unfinished jobs retain their leases and recover after expiry.
 
 The Kubernetes worker exposes `/ready` on its private metrics port. An enabled
 worker reports ready only after registered handler dependencies validate and a
