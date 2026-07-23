@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from app.jobs.schemas import (
     MAX_CLAIMS_PER_PAYLOAD,
     MAX_LIMITATIONS_PER_RESULT,
     IngestValidatedClaimsPayload,
+    JobFailureCategory,
     JobStatus,
     ReadJobResult,
     JobType,
@@ -108,6 +110,120 @@ async def test_enqueue_rejects_nonpositive_attempt_limits_before_sql() -> None:
     session.execute.assert_not_awaited()
 
 
+async def test_enrichment_dispatch_rejects_run_id_different_from_claimed_job() -> None:
+    from app.jobs.schemas import EnrichConfirmedPlantPayload
+    from app.jobs.worker import Worker, _ExecutionState
+
+    called = False
+
+    class _Handler(JobHandler):
+        async def handle(self, *, payload, attempt_count, max_attempts):
+            nonlocal called
+            called = True
+            return JobHandlerResult.failed(
+                category=JobFailureCategory.unexpected_error,
+                retryable=True,
+            )
+
+    registry = HandlerRegistry()
+    registry.register(
+        JobType.enrich_confirmed_plant.value,
+        _Handler(),
+        payload_models={1: EnrichConfirmedPlantPayload},
+    )
+    claimed_id = uuid4()
+    payload = {
+        "payload_version": 1,
+        "policy_version": 1,
+        "species": {
+            "accepted_gbif_key": 2878688,
+            "normalized_binomial": "Monstera deliciosa",
+        },
+        "taxonomy_provenance_id": str(uuid4()),
+        "run_id": str(uuid4()),
+    }
+
+    result = await Worker(handler_registry=registry)._dispatch(
+        state=_ExecutionState(
+            job_id=str(claimed_id),
+            lease_token="lease",
+            job_type=JobType.enrich_confirmed_plant.value,
+            attempt_count=1,
+        ),
+        job_type=JobType.enrich_confirmed_plant.value,
+        payload_version=1,
+        payload=payload,
+        attempt_count=1,
+        max_attempts=3,
+    )
+
+    assert called is False
+    assert result.error and result.error.category is JobFailureCategory.invariant_violation
+    assert result.error.retryable is False
+
+
+async def test_false_lease_renewal_immediately_cancels_active_handler(monkeypatch) -> None:
+    from app.jobs.worker import Worker, _ExecutionState
+
+    cancelled = asyncio.Event()
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _Repository:
+        def __init__(self, session, settings):
+            pass
+
+        async def renew_lease(self, **kwargs):
+            return False
+
+    class _RenewalDue:
+        def is_set(self):
+            return False
+
+        async def wait(self):
+            raise TimeoutError
+
+    async def active_handler():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr("app.jobs.worker.JobRepository", _Repository)
+    worker = Worker(
+        session_factory=_Session,
+        settings=Settings(
+            jobs_lease_duration_seconds=1,
+            jobs_lease_renewal_interval_seconds=0.01,
+        ),
+    )
+    state = _ExecutionState(
+        job_id=str(uuid4()),
+        lease_token="lease",
+        job_type=JobType.ingest_validated_claims.value,
+        attempt_count=1,
+    )
+    state.completed = _RenewalDue()
+    handler_task = asyncio.create_task(active_handler())
+    worker._handler_tasks[state.job_id] = handler_task
+
+    await asyncio.wait_for(worker._renew_lease_loop(state=state), timeout=1)
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    await asyncio.gather(handler_task, return_exceptions=True)
+
+    assert state.lease_lost is True
+    assert handler_task.cancelled()
+
+
 def test_schedule_and_status_metrics_are_closed_and_payload_safe() -> None:
     registry = MetricsRegistry()
     registry.record_job_schedule(
@@ -133,6 +249,36 @@ def test_schedule_and_status_metrics_are_closed_and_payload_safe() -> None:
     with pytest.raises(ValueError):
         registry.record_job_status_count(
             job_type="ingest_validated_claims", status="arbitrary", count=1
+        )
+
+
+def test_required_enrichment_worker_contract_is_registered() -> None:
+    from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
+    from app.jobs.schemas import EnrichConfirmedPlantPayload
+    from app.jobs.worker import _validate_required_contracts
+
+    class _Handler(JobHandler):
+        async def handle(self, *, payload, attempt_count, max_attempts):
+            return JobHandlerResult.failed(
+                category=JobFailureCategory.invariant_violation,
+                retryable=False,
+            )
+
+    registry = HandlerRegistry()
+    registry.register(
+        "enrich_confirmed_plant",
+        _Handler(),
+        payload_models={1: EnrichConfirmedPlantPayload},
+    )
+
+    _validate_required_contracts(
+        registry=registry,
+        configured="enrich_confirmed_plant:1",
+    )
+    with pytest.raises(RuntimeError, match="not registered"):
+        _validate_required_contracts(
+            registry=registry,
+            configured="enrich_confirmed_plant:2",
         )
 
 

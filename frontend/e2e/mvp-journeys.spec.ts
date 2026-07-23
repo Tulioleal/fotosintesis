@@ -23,10 +23,12 @@ test("identification candidate can lead to a profile", async ({ page }) => {
   });
 
   await expect(page.getByRole("heading", { name: "Pata de oso" })).toBeVisible();
-  await page.getByRole("button", { name: "Confirmar candidata validada" }).click();
-  await page.getByRole("link", { name: "Ver perfil y agregar a Mi Jardin" }).click();
+  await page.getByRole("button", {
+    name: "Seleccionar esta planta",
+  }).click();
 
-  await expect(page.getByText("Perfil botanico trazable")).toBeVisible();
+  await expect(page).toHaveURL(/\/profiles\/.*\?candidateId=/);
+  await expect(page.getByText("Perfil botanico guardado")).toBeVisible();
 });
 
 test("garden save and reminder creation are available from a confirmed profile", async ({ page }) => {
@@ -36,8 +38,11 @@ test("garden save and reminder creation are available from a confirmed profile",
     mimeType: "image/jpeg",
     buffer: Buffer.from("fake-image"),
   });
-  await page.getByRole("button", { name: "Confirmar candidata validada" }).click();
-  await page.getByRole("link", { name: "Ver perfil y agregar a Mi Jardin" }).click();
+  await page.getByRole("button", {
+    name: "Seleccionar esta planta",
+  }).click();
+
+  await expect(page).toHaveURL(/\/profiles\/.*\?candidateId=/);
 
   await page.getByPlaceholder("Nombre personalizado").fill("Pata living");
   await page.getByRole("button", { name: "Guardar planta confirmada" }).click();

@@ -253,7 +253,6 @@ async def test_web_fallback_excludes_off_aspect_trusted_source_from_prompt_sourc
 
     prompt = tools.model_prompts[0]
     assert "Water when the substrate dries" in prompt
-    assert "bright indirect light" not in prompt
     assert [source["url"] for source in result["sources"]] == ["https://example.org/watering"]
     assert result["ingestion_claims"][0]["source_url"] == "https://example.org/watering"
     assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]

@@ -435,10 +435,37 @@
         "title": "Body_create_identification_identifications_post",
         "type": "object"
       },
+      "CandidateEnrichmentStatus": {
+        "properties": {
+          "candidate_id": {
+            "format": "uuid",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobStatusResponse"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "policy_version",
+          "job"
+        ],
+        "title": "CandidateEnrichmentStatus",
+        "type": "object"
+      },
       "ConfirmationResponse": {
         "properties": {
           "candidate": {
             "$ref": "#/components/schemas/TaxonomyCandidate"
+          },
+          "enrichment": {
+            "$ref": "#/components/schemas/CandidateEnrichmentStatus"
           },
           "status": {
             "title": "Status",
@@ -447,7 +474,8 @@
         },
         "required": [
           "status",
-          "candidate"
+          "candidate",
+          "enrichment"
         ],
         "title": "ConfirmationResponse",
         "type": "object"
@@ -494,6 +522,83 @@
         ],
         "title": "CredentialsVerifyResponse",
         "type": "object"
+      },
+      "EnrichmentJobResult": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisition_avoided": {
+            "default": false,
+            "title": "Acquisition Avoided",
+            "type": "boolean"
+          },
+          "covered_aspects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Covered Aspects",
+            "type": "array"
+          },
+          "covered_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Covered Count",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "missing_aspects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Missing Aspects",
+            "type": "array"
+          },
+          "missing_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Missing Count",
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "outcome",
+          "policy_version",
+          "covered_aspects",
+          "missing_aspects",
+          "covered_count",
+          "missing_count"
+        ],
+        "title": "EnrichmentJobResult",
+        "type": "object"
+      },
+      "EnrichmentLimitation": {
+        "enum": [
+          "missing_required_aspects",
+          "safety_evidence_rejected"
+        ],
+        "title": "EnrichmentLimitation",
+        "type": "string"
       },
       "GardenDeleteResponse": {
         "properties": {
@@ -881,7 +986,8 @@
           "attempts_exhausted",
           "unexpected_error",
           "lease_expired",
-          "lease_lost"
+          "lease_lost",
+          "insufficient_evidence"
         ],
         "title": "JobFailureCategory",
         "type": "string"
@@ -958,9 +1064,13 @@
                 "$ref": "#/components/schemas/ReadJobResult"
               },
               {
+                "$ref": "#/components/schemas/EnrichmentJobResult"
+              },
+              {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Result"
           },
           "status": {
             "$ref": "#/components/schemas/JobStatus"
@@ -985,7 +1095,8 @@
       },
       "JobType": {
         "enum": [
-          "ingest_validated_claims"
+          "ingest_validated_claims",
+          "enrich_confirmed_plant"
         ],
         "title": "JobType",
         "type": "string"
@@ -1157,6 +1268,16 @@
           "confidence": {
             "title": "Confidence",
             "type": "number"
+          },
+          "enrichment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateEnrichmentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "format": "uuid",
@@ -2832,6 +2953,81 @@
           }
         },
         "summary": "Create Identification",
+        "tags": [
+          "identifications"
+        ]
+      }
+    },
+    "/identifications/candidates/{candidate_id}/enrichment": {
+      "get": {
+        "operationId": "get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateEnrichmentStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Candidate Enrichment",
         "tags": [
           "identifications"
         ]

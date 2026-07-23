@@ -23,7 +23,16 @@ from app.jobs.handler import (
 from app.jobs.handlers.register import register_handlers
 from app.jobs.metrics_server import start_metrics_server, stop_metrics_server
 from app.jobs.repository import JobRepository
-from app.jobs.schemas import ClaimedJob, JobError, JobFailureCategory, JobStatus
+from app.jobs.schemas import (
+    ClaimedJob,
+    EnrichConfirmedPlantPayload,
+    EnrichmentJobResult,
+    JobError,
+    JobFailureCategory,
+    JobStatus,
+    JobType,
+    ReadJobResult,
+)
 from app.observability.logging import configure_logging
 from app.observability.metrics import metrics_registry
 
@@ -46,9 +55,38 @@ def _is_retryable(failure_category: JobFailureCategory) -> bool:
     return failure_category not in TERMINAL_FAILURE_CATEGORIES
 
 
+def _validate_required_contracts(*, registry, configured: str) -> None:
+    for contract in filter(None, (item.strip() for item in configured.split(","))):
+        job_type, separator, raw_version = contract.partition(":")
+        if not separator or not raw_version.isdigit():
+            raise RuntimeError("invalid required job contract configuration")
+        if registry.get_payload_model(job_type, int(raw_version)) is None:
+            raise RuntimeError("required job contract is not registered")
+
+
 def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
     details = result.result
-    useful_count = details.succeeded + details.skipped if details is not None else 0
+    if isinstance(details, EnrichmentJobResult):
+        valid = result.error is None and (
+            result.status is JobStatus.complete
+            and details.outcome == "complete"
+            and not details.missing_aspects
+            or result.status is JobStatus.partial
+            and details.outcome == "partial"
+            and bool(details.missing_aspects)
+        )
+        if valid:
+            return result
+        return JobHandlerResult.failed(
+            category=JobFailureCategory.invariant_violation,
+            retryable=False,
+        )
+
+    useful_count = (
+        details.succeeded + details.skipped
+        if isinstance(details, ReadJobResult)
+        else 0
+    )
 
     valid = False
     if result.status is JobStatus.complete:
@@ -56,6 +94,7 @@ def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
             details is not None
             and result.error is None
             and useful_count > 0
+            and isinstance(details, ReadJobResult)
             and details.failed == 0
             and not details.partial
             and not details.limitations
@@ -65,6 +104,7 @@ def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
             details is not None
             and result.error is None
             and useful_count > 0
+            and isinstance(details, ReadJobResult)
             and details.partial
             and bool(details.limitations)
         )
@@ -125,6 +165,10 @@ class Worker:
 
     async def start(self) -> None:
         register_handlers()
+        _validate_required_contracts(
+            registry=self._handler_registry,
+            configured=self.settings.jobs_required_contracts,
+        )
 
         logger.info(
             "worker_starting",
@@ -435,24 +479,25 @@ class Worker:
             )
             result = _validate_result_contract(result)
         except asyncio.CancelledError:
-            state.cancelled = True
-            state.completed.set()
-            duration = (datetime.now(timezone.utc) - start).total_seconds()
-            self._metrics.record_job_outcome(
-                job_type=job_type,
-                status="cancelled",
-                duration_seconds=duration,
-            )
-            logger.info(
-                "worker_handler_cancelled",
-                extra={
-                    "ctx_job_id": job_id,
-                    "ctx_job_type": job_type,
-                    "ctx_attempt": attempt_count,
-                    "ctx_worker_identity": self.owner,
-                    "ctx_outcome": "cancelled",
-                },
-            )
+            if not state.lease_lost:
+                state.cancelled = True
+                state.completed.set()
+                duration = (datetime.now(timezone.utc) - start).total_seconds()
+                self._metrics.record_job_outcome(
+                    job_type=job_type,
+                    status="cancelled",
+                    duration_seconds=duration,
+                )
+                logger.info(
+                    "worker_handler_cancelled",
+                    extra={
+                        "ctx_job_id": job_id,
+                        "ctx_job_type": job_type,
+                        "ctx_attempt": attempt_count,
+                        "ctx_worker_identity": self.owner,
+                        "ctx_outcome": "cancelled",
+                    },
+                )
             raise
         except RetryableJobError as exc:
             result = JobHandlerResult.failed(category=exc.category, retryable=True)
@@ -482,6 +527,7 @@ class Worker:
                     attempt_count=attempt_count,
                     max_attempts=max_attempts,
                     duration=duration,
+                    created_at=job_row.created_at,
                 )
             elif state.lease_lost:
                 duration = (datetime.now(timezone.utc) - start).total_seconds()
@@ -536,6 +582,15 @@ class Worker:
                 category=JobFailureCategory.invalid_payload,
                 retryable=False,
             )
+        if (
+            job_type == JobType.enrich_confirmed_plant.value
+            and isinstance(parsed_payload, EnrichConfirmedPlantPayload)
+            and str(parsed_payload.run_id) != state.job_id
+        ):
+            return JobHandlerResult.failed(
+                category=JobFailureCategory.invariant_violation,
+                retryable=False,
+            )
         return await handler.handle(
             payload=parsed_payload,
             attempt_count=attempt_count,
@@ -550,6 +605,7 @@ class Worker:
         attempt_count: int,
         max_attempts: int,
         duration: float,
+        created_at: datetime,
     ) -> None:
         job_id = state.job_id
         lease_token = state.lease_token
@@ -574,6 +630,12 @@ class Worker:
                 self._metrics.record_job_outcome(
                     job_type=job_type, status=JobStatus.complete.value, duration_seconds=duration
                 )
+                if isinstance(result.result, EnrichmentJobResult):
+                    self._metrics.record_enrichment_completion(
+                        duration_seconds=(datetime.now(timezone.utc) - created_at).total_seconds(),
+                        acquisition_avoided=result.result.acquisition_avoided,
+                        partial=False,
+                    )
                 logger.info(
                     "job_completed",
                     extra={
@@ -602,6 +664,12 @@ class Worker:
                 self._metrics.record_job_outcome(
                     job_type=job_type, status=JobStatus.partial.value, duration_seconds=duration
                 )
+                if isinstance(result.result, EnrichmentJobResult):
+                    self._metrics.record_enrichment_completion(
+                        duration_seconds=(datetime.now(timezone.utc) - created_at).total_seconds(),
+                        acquisition_avoided=result.result.acquisition_avoided,
+                        partial=True,
+                    )
                 logger.info(
                     "job_partial",
                     extra={
@@ -760,6 +828,9 @@ class Worker:
                         )
                     else:
                         state.lease_lost = True
+                        handler_task = self._handler_tasks.get(state.job_id)
+                        if handler_task is not None and not handler_task.done():
+                            handler_task.cancel()
                         await session.rollback()
                         logger.warning(
                             "job_lease_lost",

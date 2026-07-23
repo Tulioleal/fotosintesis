@@ -108,6 +108,9 @@ class MetricsRegistry:
     job_schedules_by_type_outcome: dict[tuple[str, str], int] = field(
         default_factory=dict
     )
+    enrichment_acquisition_avoided_total: int = 0
+    enrichment_partial_outcomes_total: int = 0
+    enrichment_completion_time: Histogram = field(default_factory=Histogram)
     job_oldest_eligible_age_seconds: float | None = None
     worker_last_successful_poll_timestamp_seconds: float | None = None
     request_latency_seconds_max_samples: int = 10_000
@@ -173,6 +176,19 @@ class MetricsRegistry:
         self.job_schedules_by_type_outcome[key] = (
             self.job_schedules_by_type_outcome.get(key, 0) + 1
         )
+
+    def record_enrichment_completion(
+        self,
+        *,
+        duration_seconds: float,
+        acquisition_avoided: bool,
+        partial: bool,
+    ) -> None:
+        self.enrichment_completion_time.observe(max(duration_seconds, 0.0))
+        if acquisition_avoided:
+            self.enrichment_acquisition_avoided_total += 1
+        if partial:
+            self.enrichment_partial_outcomes_total += 1
 
     def reset_job_backlog(self) -> None:
         self.job_backlog_by_type_status.clear()
@@ -292,6 +308,10 @@ class MetricsRegistry:
             )
             for (jt, st), histogram in sorted_histograms
         ]
+        enrichment_completion_lines = self.enrichment_completion_time.render(
+            name="fotosintesis_enrichment_completion_time_seconds",
+            label_pairs=(),
+        )
 
         age_line = (
             f"fotosintesis_job_oldest_eligible_age_seconds "
@@ -378,6 +398,15 @@ class MetricsRegistry:
                 "# HELP fotosintesis_job_attempt_duration_seconds Histogram of job attempt duration in seconds.",
                 "# TYPE fotosintesis_job_attempt_duration_seconds histogram",
                 *histogram_lines,
+                "# HELP fotosintesis_enrichment_acquisition_avoided_total Enrichment runs completed without external acquisition.",
+                "# TYPE fotosintesis_enrichment_acquisition_avoided_total counter",
+                f"fotosintesis_enrichment_acquisition_avoided_total {self.enrichment_acquisition_avoided_total}",
+                "# HELP fotosintesis_enrichment_partial_outcomes_total Enrichment runs with a durable partial outcome.",
+                "# TYPE fotosintesis_enrichment_partial_outcomes_total counter",
+                f"fotosintesis_enrichment_partial_outcomes_total {self.enrichment_partial_outcomes_total}",
+                "# HELP fotosintesis_enrichment_completion_time_seconds End-to-end time from durable enqueue to complete or partial enrichment.",
+                "# TYPE fotosintesis_enrichment_completion_time_seconds histogram",
+                enrichment_completion_lines,
                 "",
             ]
         )

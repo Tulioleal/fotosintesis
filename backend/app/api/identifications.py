@@ -8,8 +8,16 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
 from app.db.session import get_async_session
 from app.identification.gbif import GbifClient
+from app.identification.confirmation import (
+    CandidateConfirmationService,
+    ConfirmationRejectedError,
+    ConfirmationSchedulingUnavailable,
+)
 from app.identification.repository import IdentificationRepository
 from app.identification.schemas import ConfirmationResponse, IdentificationResponse
+from app.enrichment import get_current_enrichment_policy
+from app.jobs.repository import JobRepository
+from app.jobs.schemas import CandidateEnrichmentStatus
 from app.providers.factory import get_provider_registry
 from app.storage.factory import get_object_storage
 from app.storage.models import ObjectUpload
@@ -102,7 +110,7 @@ async def create_identification(
     validated = 0
     for candidate in reliable:
         taxonomy = await gbif.match_name(candidate.scientific_name)
-        if taxonomy.matched:
+        if taxonomy.has_canonical_identity:
             validated += 1
         await repository.add_candidate(
             identification_id=identification_id, candidate=candidate, taxonomy=taxonomy
@@ -158,12 +166,38 @@ async def confirm_candidate(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> ConfirmationResponse:
-    candidate = await IdentificationRepository(session).confirm_candidate(
-        identification_id=identification_id, candidate_id=candidate_id, user_id=user.id
-    )
-    if candidate is None:
+    try:
+        return await CandidateConfirmationService(session).confirm(
+            identification_id=identification_id,
+            candidate_id=candidate_id,
+            user_id=user.id,
+        )
+    except ConfirmationRejectedError:
         raise HTTPException(
             status_code=409,
             detail="You can only confirm a taxonomically validated candidate.",
-        )
-    return ConfirmationResponse(status="confirmed", candidate=candidate)
+        ) from None
+    except ConfirmationSchedulingUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Plant enrichment scheduling is temporarily unavailable.",
+        ) from None
+
+
+@router.get(
+    "/candidates/{candidate_id}/enrichment",
+    response_model=CandidateEnrichmentStatus,
+)
+async def get_candidate_enrichment(
+    candidate_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> CandidateEnrichmentStatus:
+    enrichment = await JobRepository(session).get_candidate_enrichment_status(
+        candidate_id=candidate_id,
+        user_id=user.id,
+        policy_version=get_current_enrichment_policy().version,
+    )
+    if enrichment is None:
+        raise HTTPException(status_code=404, detail="Candidate enrichment not found.")
+    return enrichment

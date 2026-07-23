@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.jobs.schemas import CandidateEnrichmentStatus
+
 
 class IdentificationStatus(str, Enum):
     needs_confirmation = "needs_confirmation"
@@ -48,3 +50,4 @@ class IdentificationResponse(BaseModel):
 class ConfirmationResponse(BaseModel):
     status: str
     candidate: TaxonomyCandidate
+    enrichment: CandidateEnrichmentStatus

@@ -4,8 +4,18 @@ Docker Compose is the local development path. It is separate from cloud OpenTofu
 
 ## Start The Local Stack
 
+Basic UI/API mode; confirmation scheduling is unavailable:
+
 ```bash
 docker compose up frontend backend postgres
+```
+
+Confirmation and enrichment mode:
+
+```bash
+JOBS_PRODUCER_ENABLED=true \
+JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1 \
+docker compose up frontend backend worker postgres
 ```
 
 Start optional local object storage:
@@ -54,7 +64,9 @@ pnpm --filter frontend test
 Run Playwright against the local stack:
 
 ```bash
-docker compose up frontend backend postgres
+JOBS_PRODUCER_ENABLED=true \
+JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1 \
+docker compose up frontend backend worker postgres -d
 pnpm --filter frontend test:e2e
 ```
 

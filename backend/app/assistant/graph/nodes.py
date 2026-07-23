@@ -33,7 +33,13 @@ async def load_user_context(owner, state: AssistantState) -> dict:
         return {"tool_failures": state.get("tool_failures", []) + [result.error or "garden_lookup failed"], "garden": []}
     garden = list(result.data or [])
     selected, ambiguous = _select_plant(garden, state.get("display_plant_name") or state.get("operational_plant_name"), state["message"])
-    return {"garden": garden, "selected_plant": selected, "ambiguous": ambiguous}
+    update: dict = {"garden": garden, "selected_plant": selected, "ambiguous": ambiguous}
+    if selected:
+        if selected.get("canonical_species_key"):
+            update["canonical_species_key"] = selected["canonical_species_key"]
+        if selected.get("accepted_gbif_key"):
+            update["accepted_gbif_key"] = selected["accepted_gbif_key"]
+    return update
 
 
 async def retrieve(owner, state: AssistantState) -> dict:
@@ -44,9 +50,14 @@ async def retrieve(owner, state: AssistantState) -> dict:
         _log_missing_taxonomy(state)
         rendered = await owner._generate_fallback_response(state, _missing_taxonomy_draft(state))
         return {**rendered, "fallback_reasons": _append_reason(state, "missing_confirmed_taxonomy")}
+    selected = state.get("selected_plant")
+    canonical_species_key = selected.get("canonical_species_key") if selected else None
+    accepted_gbif_key = selected.get("accepted_gbif_key") if selected else None
     result = await owner.tools.knowledge_search(
         scientific_name=scientific_name,
         topic=state.get("topic") or "care",
+        canonical_species_key=canonical_species_key,
+        accepted_gbif_key=accepted_gbif_key,
         required_aspects=state.get("required_aspects", []),
         question=state["message"],
     )

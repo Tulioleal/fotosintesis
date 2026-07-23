@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import Any
 
 from app.assistant.aspect_metadata import aspect_validation_guidance, is_safety_sensitive_aspect
 from app.assistant.care_contracts import EvidenceValidationResult, RequiredAspect
@@ -11,12 +11,15 @@ from app.assistant.graph.helpers import logger
 from app.assistant.graph.plant_resolution import _display_name_for_answer
 from app.assistant.graph.types import AnswerabilityResult, AssistantState
 from app.assistant.graph_shared import _shorten
+from app.assistant.semantic_coverage import CoverageThresholds, SemanticEvidence, semantic_coverage_service
 from app.assistant.tools import AssistantTools
 from app.knowledge.schemas import KnowledgeChunk
 from app.observability.tracing import get_trace_id
 
 
-ASPECT_VALIDATION_GUIDANCE: dict[str, str] = aspect_validation_guidance([member.value for member in RequiredAspect])
+ASPECT_VALIDATION_GUIDANCE: dict[str, str] = aspect_validation_guidance(
+    [member.value for member in RequiredAspect]
+)
 
 
 def _graph_aspect_validation_guidance(required_aspects: list[str]) -> dict[str, str]:
@@ -95,7 +98,9 @@ async def _judge_answerability(
     )
     try:
         if timeout_seconds is not None:
-            result = await asyncio.wait_for(judge.judge_response(payload, rubric), timeout=timeout_seconds)
+            result = await asyncio.wait_for(
+                judge.judge_response(payload, rubric), timeout=timeout_seconds
+            )
         else:
             result = await judge.judge_response(payload, rubric)
     except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -126,46 +131,7 @@ async def _judge_answerability(
 
 
 def _answerability_from_judge_result(result: Any) -> AnswerabilityResult:
-    score = _float_or_zero(getattr(result, "score", 0.0))
-    confidence = max(0.0, min(1.0, _float_or_zero(getattr(result, "confidence", score))))
-    reasons = [str(reason) for reason in getattr(result, "reasons", []) if str(reason).strip()]
-    status = _answerability_status(getattr(result, "status", None))
-    if status is None:
-        status = "full" if bool(getattr(result, "passed", False)) else "insufficient"
-    answerable = status == "full"
-    if hasattr(result, "answerable"):
-        answerable = bool(getattr(result, "answerable"))
-    return AnswerabilityResult(
-        status=status,
-        answerable=answerable,
-        covered_aspects=_string_list(getattr(result, "covered_aspects", [])),
-        missing_aspects=[] if status == "full" else _string_list(getattr(result, "missing_aspects", [])),
-        source_support=_dict_list(getattr(result, "source_support", [])),
-        contradictions=_dict_list(getattr(result, "contradictions", [])),
-        reason="; ".join(reasons) if reasons else "answerability judge did not provide a reason",
-        confidence=confidence,
-    )
-
-
-def _answerability_status(value: Any) -> Literal["full", "partial", "insufficient", "contradictory"] | None:
-    status = str(value or "").strip().lower()
-    if status in {"full", "partial", "insufficient", "contradictory"}:
-        return status
-    return None
-
-
-def _string_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list | tuple | set):
-        return [str(item) for item in value if str(item).strip()]
-    return []
-
-
-def _dict_list(value: Any) -> list[dict[str, object]]:
-    if not isinstance(value, list | tuple):
-        return []
-    return [dict(item) for item in value if isinstance(item, dict)]
+    return semantic_coverage_service.map_judge_result(result)
 
 
 def _validated_answerability(
@@ -174,69 +140,10 @@ def _validated_answerability(
     requested_aspects: list[str],
     source_metadata: list[dict] | None = None,
 ) -> AnswerabilityResult:
-    if result.answerable and result.status == "insufficient":
-        result = AnswerabilityResult(
-            status="full",
-            answerable=True,
-            covered_aspects=result.covered_aspects,
-            missing_aspects=result.missing_aspects,
-            source_support=result.source_support,
-            contradictions=result.contradictions,
-            reason=result.reason,
-            confidence=result.confidence,
-        )
-    requested = [aspect for aspect in requested_aspects if aspect]
-    covered = [aspect for aspect in result.covered_aspects if aspect in requested]
-    missing = [aspect for aspect in requested if aspect not in covered]
-    contradictions = [item for item in result.contradictions if _valid_contradiction(item)]
-    if result.status == "full":
-        if not requested:
-            requested = [RequiredAspect.general_care_summary.value]
-            covered = requested if result.answerable else covered
-            missing = [] if result.answerable else requested
-        if result.answerable and not covered:
-            covered = list(requested)
-            missing = []
-        support = _normalized_source_support(
-            result.source_support,
-            allowed_aspects=covered,
-        )
-        if set(covered) >= set(requested) and support:
-            return AnswerabilityResult("full", True, covered, [], support, contradictions, result.reason, result.confidence)
-        if covered and support:
-            return AnswerabilityResult("partial", False, covered, missing, support, contradictions, result.reason, result.confidence)
-        return AnswerabilityResult("insufficient", False, [], requested, reason=result.reason, confidence=result.confidence)
-    if result.status == "partial":
-        support = _normalized_source_support(
-            result.source_support,
-            allowed_aspects=covered,
-        )
-        if set(covered) >= set(requested) and support and not contradictions:
-            return AnswerabilityResult("full", True, covered, [], support, contradictions, result.reason, result.confidence)
-        if covered and support:
-            return AnswerabilityResult("partial", False, covered, missing, support, contradictions, result.reason, result.confidence)
-        return AnswerabilityResult("insufficient", False, [], requested, reason=result.reason, confidence=result.confidence)
-    if result.status == "contradictory":
-        support = _normalized_source_support(
-            result.source_support,
-            allowed_aspects=covered,
-        )
-        if contradictions:
-            return AnswerabilityResult("contradictory", False, covered, missing or requested, support, contradictions, result.reason, result.confidence)
-        return AnswerabilityResult(
-            "insufficient",
-            False,
-            covered,
-            missing or requested,
-            support,
-            reason=result.reason or "contradictory answerability result lacked source URLs",
-            confidence=result.confidence,
-        )
-    support = _normalized_source_support(
-        result.source_support,
-        allowed_aspects=covered,
+    return semantic_coverage_service.normalize_answerability(
+        result,
+        requested_aspects=requested_aspects,
     )
-    return AnswerabilityResult("insufficient", False, covered, missing or requested, support, contradictions, result.reason, result.confidence)
 
 
 def _normalized_source_support(
@@ -244,62 +151,18 @@ def _normalized_source_support(
     *,
     allowed_aspects: list[str],
 ) -> list[dict[str, object]]:
-    allowed = set(allowed_aspects)
-    normalized_items: list[dict[str, object]] = []
-    for item in items:
-        if not _valid_source_support(item, allowed_aspects):
-            continue
-        aspects = item.get("covered_aspects")
-        if not isinstance(aspects, list):
-            continue
-        normalized_aspects: list[str] = []
-        for aspect in aspects:
-            if not isinstance(aspect, str) or aspect not in allowed:
-                continue
-            if aspect not in normalized_aspects:
-                normalized_aspects.append(aspect)
-        if not normalized_aspects:
-            continue
-        normalized_item = dict(item)
-        normalized_item["covered_aspects"] = normalized_aspects
-        normalized_items.append(normalized_item)
-    return normalized_items
+    return semantic_coverage_service.normalized_source_support(
+        items,
+        allowed_aspects=allowed_aspects,
+    )
 
 
 def _valid_source_support(item: dict[str, object], requested_aspects: list[str]) -> bool:
-    urls = item.get("source_urls")
-    aspects = item.get("covered_aspects")
-    quote = item.get("evidence_quote")
-    return (
-        isinstance(item.get("claim"), str)
-        and bool(str(item.get("claim")).strip())
-        and isinstance(quote, str)
-        and bool(quote.strip())
-        and isinstance(urls, list)
-        and any(isinstance(url, str) and url.strip() for url in urls)
-        and isinstance(aspects, list)
-        and any(isinstance(aspect, str) and aspect in requested_aspects for aspect in aspects)
-    )
+    return semantic_coverage_service.valid_source_support(item, requested_aspects)
 
 
 def _valid_contradiction(item: dict[str, object]) -> bool:
-    left = item.get("source_a_urls")
-    right = item.get("source_b_urls")
-    return (
-        isinstance(item.get("claim_a"), str)
-        and isinstance(item.get("claim_b"), str)
-        and isinstance(left, list)
-        and isinstance(right, list)
-        and any(isinstance(url, str) and url.strip() for url in left)
-        and any(isinstance(url, str) and url.strip() for url in right)
-    )
-
-
-def _float_or_zero(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+    return semantic_coverage_service.valid_contradiction(item)
 
 
 def _evidence_from_chunks(chunks: list[KnowledgeChunk]) -> str:
@@ -316,8 +179,14 @@ def _validate_evidence_against_required_aspects(
     strong_threshold: float = 0.30,
 ) -> EvidenceValidationResult:
     requested = _required_aspects_from_state(state)
-    candidate_values = [aspect.value for aspect in requested] if semantic_result.status == "full" and semantic_result.answerable else semantic_result.covered_aspects
-    strong_support = _is_strong_full_support(semantic_result, [aspect.value for aspect in requested])
+    candidate_values = (
+        [aspect.value for aspect in requested]
+        if semantic_result.status == "full" and semantic_result.answerable
+        else semantic_result.covered_aspects
+    )
+    strong_support = _is_strong_full_support(
+        semantic_result, [aspect.value for aspect in requested]
+    )
     covered = []
     for aspect in requested:
         if aspect.value not in candidate_values:
@@ -361,18 +230,16 @@ def _validate_evidence_against_required_aspects(
 def _required_aspects_from_state(state: AssistantState | dict) -> list[RequiredAspect]:
     values = state.get("required_aspects", []) or []
     translated = [LEGACY_ASPECT_TRANSLATION.get(value, value) for value in values]
-    aspects = [RequiredAspect(value) for value in translated if value in RequiredAspect._value2member_map_]
+    aspects = [
+        RequiredAspect(value) for value in translated if value in RequiredAspect._value2member_map_
+    ]
     return aspects or [RequiredAspect.general_care_summary]
 
 
-def _is_strong_full_support(semantic_result: AnswerabilityResult, requested_aspects: list[str]) -> bool:
-    return (
-        semantic_result.status == "full"
-        and semantic_result.answerable
-        and bool(semantic_result.source_support)
-        and not semantic_result.contradictions
-        and all(aspect in set(semantic_result.covered_aspects) for aspect in requested_aspects)
-    )
+def _is_strong_full_support(
+    semantic_result: AnswerabilityResult, requested_aspects: list[str]
+) -> bool:
+    return semantic_coverage_service.is_strong_full_support(semantic_result, requested_aspects)
 
 
 def _validation_threshold_for_aspect(
@@ -383,11 +250,16 @@ def _validation_threshold_for_aspect(
     strong_threshold: float,
     safety_threshold: float,
 ) -> float:
-    if is_safety_sensitive_aspect(aspect):
-        return safety_threshold
-    if _is_strong_full_support(semantic_result, requested_aspects):
-        return strong_threshold
-    return default_threshold
+    return semantic_coverage_service.validation_threshold_for_aspect(
+        aspect,
+        semantic_result,
+        requested_aspects,
+        thresholds=CoverageThresholds(
+            default=default_threshold,
+            safety=safety_threshold,
+            strong_full=strong_threshold,
+        ),
+    )
 
 
 def _merge_aspect_values(left: list[str], right: list[str]) -> list[str]:
@@ -426,38 +298,40 @@ async def evaluate_sufficiency(owner, state: AssistantState) -> dict:
         source_metadata=state.get("sources", []),
         timeout_seconds=owner.settings.assistant_judge_timeout_seconds,
     )
-    requested = state.get("required_aspects", [])
-    result = _validated_answerability(
+    evidence = SemanticEvidence(
+        text=_evidence_from_chunks(chunks),
+        source_metadata=tuple(state.get("sources", [])),
+    )
+    normalized = semantic_coverage_service.normalized_coverage(
         result,
-        requested_aspects=requested,
-        source_metadata=state.get("sources", []),
+        required_aspects=_required_aspects_from_state(state),
+        thresholds=CoverageThresholds(
+            default=owner.settings.assistant_evidence_validation_threshold,
+            safety=owner.settings.assistant_safety_validation_threshold,
+            strong_full=owner.settings.assistant_strong_answer_validation_threshold,
+        ),
+        evidence=evidence,
     )
-    _log_answerability_decision("rag", result, None if result.status == "full" else "rag_not_answerable")
-    validation = _validate_evidence_against_required_aspects(
-        state,
-        evidence=_evidence_from_chunks(chunks),
-        semantic_result=result,
-        threshold=owner.settings.assistant_evidence_validation_threshold,
-        safety_threshold=owner.settings.assistant_safety_validation_threshold,
-        strong_threshold=owner.settings.assistant_strong_answer_validation_threshold,
+    _log_answerability_decision(
+        "rag", result, None if normalized.status == "full" else "rag_not_answerable"
     )
-    if validation.covered_aspects:
+    if normalized.covered_aspects:
         return {
-            "sufficient": result.status == "full" and validation.answerable,
-            "answerability_status": result.status,
-            "answerability": result.as_metadata(),
-            "source_support": result.source_support,
-            "contradictions": result.contradictions,
-            "covered_aspects": [aspect.value for aspect in validation.covered_aspects],
-            "missing_aspects": [aspect.value for aspect in validation.missing_aspects],
+            "sufficient": normalized.status == "full" and normalized.answerable,
+            "answerability_status": normalized.status,
+            "answerability": normalized.as_metadata(),
+            "source_support": normalized.source_support,
+            "contradictions": normalized.contradictions,
+            "covered_aspects": normalized.covered_aspects,
+            "missing_aspects": normalized.missing_aspects,
             "evidence_path": _append_evidence_path(state, "rag"),
         }
     return {
         "sufficient": False,
-        "answerability_status": result.status,
-        "answerability": result.as_metadata(),
-        "source_support": result.source_support,
-        "contradictions": result.contradictions,
+        "answerability_status": normalized.status,
+        "answerability": normalized.as_metadata(),
+        "source_support": normalized.source_support,
+        "contradictions": normalized.contradictions,
         "covered_aspects": [],
         "missing_aspects": state.get("required_aspects", []),
         "fallback_reasons": _append_reason(state, "rag_not_answerable"),

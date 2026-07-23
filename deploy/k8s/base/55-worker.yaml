@@ -191,6 +191,8 @@ spec:
               value: "__JOBS_METRICS_HOST__"
             - name: JOBS_METRICS_PORT
               value: "__JOBS_METRICS_PORT__"
+            - name: JOBS_REQUIRED_CONTRACTS
+              value: "__JOBS_REQUIRED_CONTRACTS__"
           ports:
             - name: metrics
               containerPort: __JOBS_METRICS_PORT__

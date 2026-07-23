@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.schemas.common import ApiSchema
 
@@ -18,6 +19,7 @@ MAX_ASPECTS_PER_CLAIM = 20
 MAX_LIMITATIONS_PER_RESULT = 10
 MAX_ERROR_MESSAGE_LENGTH = 500
 MAX_RESULT_DOCUMENT_IDS = 50
+MAX_ENRICHMENT_ASPECTS = 32
 
 
 class JobStatus(str, Enum):
@@ -30,6 +32,7 @@ class JobStatus(str, Enum):
 
 class JobType(str, Enum):
     ingest_validated_claims = "ingest_validated_claims"
+    enrich_confirmed_plant = "enrich_confirmed_plant"
 
 
 class JobFailureCategory(str, Enum):
@@ -44,10 +47,12 @@ class JobFailureCategory(str, Enum):
     unexpected_error = "unexpected_error"
     lease_expired = "lease_expired"
     lease_lost = "lease_lost"
+    insufficient_evidence = "insufficient_evidence"
 
 
 class JobPayloadVersion:
     INGEST_VALIDATED_CLAIMS_V1 = 1
+    ENRICH_CONFIRMED_PLANT_V1 = 1
 
 
 class SourceProvenance(str, Enum):
@@ -63,6 +68,11 @@ class AnswerabilityStatus(str, Enum):
 class JobLimitation(str, Enum):
     some_claims_failed = "some_claims_failed"
     indexing_deferred = "indexing_deferred"
+
+
+class EnrichmentLimitation(str, Enum):
+    missing_required_aspects = "missing_required_aspects"
+    safety_evidence_rejected = "safety_evidence_rejected"
 
 
 class JobError(BaseModel):
@@ -84,6 +94,7 @@ class ClaimedJob(BaseModel):
     lease_token: str
     lease_expires_at: datetime
     available_at: datetime
+    created_at: datetime
     recovered: bool
 
 
@@ -176,6 +187,98 @@ class IngestValidatedClaimsResult(BaseModel):
     )
 
 
+class CanonicalSpeciesIdentityFields(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted_gbif_key: int | None = Field(default=None, gt=0)
+    normalized_binomial: str = Field(min_length=3, max_length=240)
+
+    @field_validator("accepted_gbif_key", mode="before")
+    @classmethod
+    def _reject_boolean_key(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("accepted_gbif_key must be a positive integer")
+        return value
+
+    @field_validator("normalized_binomial")
+    @classmethod
+    def _normalize_binomial(cls, value: str) -> str:
+        from app.enrichment.identity import CanonicalSpeciesIdentity
+
+        identity = CanonicalSpeciesIdentity(
+            accepted_gbif_key=None,
+            normalized_binomial=value,
+            taxonomy_validated=True,
+        )
+        assert identity.normalized_binomial is not None
+        return identity.normalized_binomial
+
+
+class EnrichConfirmedPlantPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payload_version: Literal[1] = JobPayloadVersion.ENRICH_CONFIRMED_PLANT_V1
+    policy_version: int = Field(ge=1)
+    species: CanonicalSpeciesIdentityFields
+    taxonomy_provenance_id: UUID
+    run_id: UUID
+
+
+class EnrichmentJobResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["complete", "partial"]
+    policy_version: int = Field(ge=1)
+    covered_aspects: list[str] = Field(max_length=MAX_ENRICHMENT_ASPECTS)
+    missing_aspects: list[str] = Field(max_length=MAX_ENRICHMENT_ASPECTS)
+    covered_count: int = Field(ge=0, le=MAX_ENRICHMENT_ASPECTS)
+    missing_count: int = Field(ge=0, le=MAX_ENRICHMENT_ASPECTS)
+    limitations: list[EnrichmentLimitation] = Field(
+        default_factory=list,
+        max_length=MAX_LIMITATIONS_PER_RESULT,
+    )
+    acquisition_avoided: bool = False
+
+    @field_validator("covered_aspects", "missing_aspects")
+    @classmethod
+    def _bounded_unique_aspects(cls, value: list[str]) -> list[str]:
+        normalized = [str(item).strip() for item in value]
+        if any(not item or len(item) > MAX_ASPECT_LENGTH for item in normalized):
+            raise ValueError("result aspects must be bounded non-empty identifiers")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("result aspects must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_aggregate(self) -> "EnrichmentJobResult":
+        covered = set(self.covered_aspects)
+        missing = set(self.missing_aspects)
+        if covered & missing:
+            raise ValueError("covered and missing aspects must be disjoint")
+        if self.covered_count != len(self.covered_aspects):
+            raise ValueError("covered_count must match covered_aspects")
+        if self.missing_count != len(self.missing_aspects):
+            raise ValueError("missing_count must match missing_aspects")
+        if not self.covered_aspects:
+            raise ValueError("terminal enrichment results require useful coverage")
+        from app.enrichment.policy import get_enrichment_policy
+
+        policy = get_enrichment_policy(self.policy_version)
+        required = {aspect.value for aspect in policy.required_aspects}
+        if covered | missing != required:
+            raise ValueError("result aspects must exactly partition the selected policy")
+        if self.outcome == "complete" and (self.missing_aspects or self.limitations):
+            raise ValueError("complete enrichment cannot have missing aspects or limitations")
+        if self.outcome == "complete" and covered != required:
+            raise ValueError("complete enrichment requires all aspects covered")
+        if self.outcome == "partial" and (
+            not self.missing_aspects
+            or EnrichmentLimitation.missing_required_aspects not in self.limitations
+        ):
+            raise ValueError("partial enrichment requires bounded missing-aspect limitations")
+        return self
+
+
 class ReadJobResult(BaseModel):
     succeeded: int = Field(default=0, ge=0, le=MAX_CLAIMS_PER_PAYLOAD)
     skipped: int = Field(default=0, ge=0, le=MAX_CLAIMS_PER_PAYLOAD)
@@ -184,6 +287,9 @@ class ReadJobResult(BaseModel):
     limitations: list[JobLimitation] = Field(
         default_factory=list, max_length=MAX_LIMITATIONS_PER_RESULT
     )
+
+
+JobResult: TypeAlias = ReadJobResult | EnrichmentJobResult
 
 
 class ReadJobError(BaseModel):
@@ -200,8 +306,14 @@ class JobStatusResponse(ApiSchema):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
-    result: ReadJobResult | None = None
+    result: JobResult | None = None
     last_error: ReadJobError | None = None
+
+
+class CandidateEnrichmentStatus(ApiSchema):
+    candidate_id: UUID
+    policy_version: int = Field(ge=1)
+    job: JobStatusResponse
 
 
 class EnqueueRequest(ApiSchema):

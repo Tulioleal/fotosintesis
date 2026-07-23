@@ -61,6 +61,7 @@ services:
       JOBS_BACKOFF_BASE_SECONDS: "10"
       JOBS_BACKOFF_CAP_SECONDS: "3600"
       JOBS_SHUTDOWN_DRAIN_SECONDS: "30"
+      JOBS_REQUIRED_CONTRACTS: "enrich_confirmed_plant:1"
     volumes:
       - .:/workspace
     depends_on:

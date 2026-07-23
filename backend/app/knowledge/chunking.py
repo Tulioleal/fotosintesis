@@ -18,6 +18,10 @@ CHUNK_EXTRA_METADATA_KEYS = {
     "persisted_from",
     "claim_ingestion_key",
     "ingestion_policy_version",
+    "canonical_species_key",
+    "accepted_gbif_key",
+    "normalized_binomial",
+    "taxonomy_provenance_id",
 }
 
 

@@ -146,6 +146,16 @@ def test_metrics_registry_renders_required_families() -> None:
     )
     registry.record_oldest_eligible_age(age_seconds=12.5)
     registry.record_worker_successful_poll(timestamp_seconds=123.5)
+    registry.record_enrichment_completion(
+        duration_seconds=12.5,
+        acquisition_avoided=True,
+        partial=False,
+    )
+    registry.record_enrichment_completion(
+        duration_seconds=35.0,
+        acquisition_avoided=False,
+        partial=True,
+    )
 
     text = registry.to_prometheus()
     assert "fotosintesis_job_claims_total" in text
@@ -157,6 +167,10 @@ def test_metrics_registry_renders_required_families() -> None:
     assert "fotosintesis_job_oldest_eligible_age_seconds" in text
     assert "fotosintesis_worker_last_successful_poll_timestamp_seconds 123.500000" in text
     assert "fotosintesis_job_attempt_duration_seconds" in text
+    assert "fotosintesis_enrichment_acquisition_avoided_total 1" in text
+    assert "fotosintesis_enrichment_partial_outcomes_total 1" in text
+    assert "fotosintesis_enrichment_completion_time_seconds_count 2" in text
+    assert "fotosintesis_enrichment_completion_time_seconds_sum 47.500000" in text
     assert 'status="lease_lost"' in text
     assert 'status="cancelled"' in text
     assert text.count("# HELP fotosintesis_job_attempt_duration_seconds ") == 1
@@ -513,7 +527,7 @@ class TestTelemetrySafety:
         from app.jobs.schemas import JobFailureCategory
 
         closed_label_values = {
-            "ingest_validated_claims",
+            "ingest_validated_claims", "enrich_confirmed_plant",
             "pending", "processing", "complete", "partial", "failed", "retry_scheduled",
             "lease_lost", "cancelled",
             "lease_expired", "attempts_exhausted", "provider_transient", "created", "reused",

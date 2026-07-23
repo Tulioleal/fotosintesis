@@ -201,6 +201,8 @@ class FakeTools:
         *,
         scientific_name: str,
         topic: str,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
         required_aspects: list[str] | None = None,
         question: str | None = None,
     ) -> ToolResult:
@@ -349,7 +351,7 @@ class FakeTools:
                 "claim": "Evidence directly supports the requested plant-care answer.",
                 "source_urls": [supported_source["url"]],
                 "covered_aspects": required_aspects,
-                "evidence_quote": "Evidence directly supports the requested plant-care answer.",
+                "evidence_quote": payload.get("evidence") or "Evidence directly supports the requested plant-care answer.",
                 "confidence": score,
             }
         ] if answerable else []
@@ -439,6 +441,12 @@ class StrongWateringJudgeTools(FakeTools):
     async def judge_response(self, payload, rubric, **kwargs):
         evidence_type = payload.get("evidence_type")
         required_aspects = list(payload.get("required_aspects") or ["watering_frequency_or_trigger"])
+        evidence_text = str(payload.get("evidence") or "Requires moderate watering and well-draining substrate.")
+        source_urls = [
+            str(s["url"])
+            for s in (payload.get("source_metadata") or [])
+            if isinstance(s, dict) and s.get("url")
+        ] or ["https://example.org/source"]
         if evidence_type == "rag":
             return SimpleNamespace(
                 score=0.35,
@@ -449,9 +457,9 @@ class StrongWateringJudgeTools(FakeTools):
                 source_support=[
                     {
                         "claim": "Water when soil is dry.",
-                        "source_urls": ["https://example.org/watering"],
+                        "source_urls": source_urls,
                         "covered_aspects": required_aspects,
-                        "evidence_quote": "Water when the top inch of soil is dry.",
+                        "evidence_quote": evidence_text,
                         "confidence": 0.35,
                     }
                 ],
@@ -468,6 +476,12 @@ class LowConfidenceSafetyJudgeTools(FakeTools):
     async def judge_response(self, payload, rubric, **kwargs):
         evidence_type = payload.get("evidence_type")
         required_aspects = list(payload.get("required_aspects") or ["toxicity_pet_safety"])
+        evidence_text = str(payload.get("evidence") or "Requires moderate watering and well-draining substrate.")
+        source_urls = [
+            str(s["url"])
+            for s in (payload.get("source_metadata") or [])
+            if isinstance(s, dict) and s.get("url")
+        ] or ["https://example.org/source"]
         if evidence_type == "rag":
             return SimpleNamespace(
                 score=0.35,
@@ -478,9 +492,9 @@ class LowConfidenceSafetyJudgeTools(FakeTools):
                 source_support=[
                     {
                         "claim": "This plant may be toxic to pets.",
-                        "source_urls": ["https://example.org/toxicity"],
+                        "source_urls": source_urls,
                         "covered_aspects": required_aspects,
-                        "evidence_quote": "Toxic to cats and dogs.",
+                        "evidence_quote": evidence_text,
                         "confidence": 0.35,
                     }
                 ],
@@ -512,6 +526,12 @@ class PartialLowConfidenceJudgeTools(FakeTools):
         required_aspects = list(
             payload.get("required_aspects") or ["watering_frequency_or_trigger", "light_exposure"]
         )
+        evidence_text = str(payload.get("evidence") or "Requires moderate watering and well-draining substrate.")
+        source_urls = [
+            str(s["url"])
+            for s in (payload.get("source_metadata") or [])
+            if isinstance(s, dict) and s.get("url")
+        ] or ["https://example.org/source"]
         if evidence_type == "rag":
             return SimpleNamespace(
                 score=0.35,
@@ -522,9 +542,9 @@ class PartialLowConfidenceJudgeTools(FakeTools):
                 source_support=[
                     {
                         "claim": "Water when soil is dry and provide bright indirect light.",
-                        "source_urls": ["https://example.org/care"],
+                        "source_urls": source_urls,
                         "covered_aspects": required_aspects,
-                        "evidence_quote": "Water when dry, bright indirect light.",
+                        "evidence_quote": evidence_text,
                         "confidence": 0.35,
                     }
                 ],
@@ -553,6 +573,12 @@ class HighConfidencePartialJudgeTools(FakeTools):
 
     async def judge_response(self, payload, rubric, **kwargs):
         evidence_type = payload.get("evidence_type")
+        evidence_text = str(payload.get("evidence") or "Requires moderate watering and well-draining substrate.")
+        source_urls = [
+            str(s["url"])
+            for s in (payload.get("source_metadata") or [])
+            if isinstance(s, dict) and s.get("url")
+        ] or ["https://example.org/source"]
         if evidence_type == "rag":
             return SimpleNamespace(
                 score=0.80,
@@ -563,9 +589,9 @@ class HighConfidencePartialJudgeTools(FakeTools):
                 source_support=[
                     {
                         "claim": "Water when soil is dry.",
-                        "source_urls": ["https://example.org/watering"],
+                        "source_urls": source_urls,
                         "covered_aspects": ["watering_frequency_or_trigger"],
-                        "evidence_quote": "Water when the top inch of soil is dry.",
+                        "evidence_quote": evidence_text,
                         "confidence": 0.80,
                     }
                 ],

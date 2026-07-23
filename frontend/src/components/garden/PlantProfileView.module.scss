@@ -56,6 +56,19 @@
   line-height: $line-height-relaxed;
 }
 
+.evidenceSummary {
+  display: grid;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+.snapshotNote {
+  margin: $space-xs 0 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+}
+
 .form {
   display: grid;
   gap: $space-sm;

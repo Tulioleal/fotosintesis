@@ -48,6 +48,8 @@ class AssistantState(TypedDict, total=False):
     plant_scientific_name: str | None
     operational_plant_name: str | None
     display_plant_name: str | None
+    canonical_species_key: str | None
+    accepted_gbif_key: int | None
     care_classification: Any
     required_aspects: list[str]
     covered_aspects: list[str]

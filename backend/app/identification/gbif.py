@@ -33,6 +33,24 @@ class GbifTaxonomy:
 
         object.__setattr__(self, "binomial_name", f"{genus} {species}")
 
+    @property
+    def has_canonical_identity(self) -> bool:
+        if not self.matched or not self.binomial_name:
+            return False
+
+        try:
+            from app.enrichment.identity import CanonicalSpeciesIdentity
+
+            CanonicalSpeciesIdentity(
+                accepted_gbif_key=self.accepted_key,
+                normalized_binomial=self.binomial_name,
+                taxonomy_validated=True,
+            )
+        except ValueError:
+            return False
+
+        return True
+
 
 class GbifClient:
     base_url = "https://api.gbif.org/v1/species/match"

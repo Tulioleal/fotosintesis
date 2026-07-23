@@ -22,6 +22,8 @@ import iconStyles from "@/components/ui/Icons.module.scss";
 import { buildAssistantHref } from "@/lib/assistant";
 import styles from "./IdentifyFlow.module.scss";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { apiClient } from "@/lib/api/client";
 
 type Candidate = {
   id: string;
@@ -73,8 +75,10 @@ const validationChipCopy: Record<"validated" | "no_gbif_match", string> = {
 };
 
 export function IdentifyFlow() {
+  const router = useRouter();
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const confirmingCandidateRef = useRef<string | null>(null);
   const [identification, setIdentification] = useState<Identification | null>(
     null,
   );
@@ -83,6 +87,7 @@ export function IdentifyFlow() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cameraNotice, setCameraNotice] = useState<string | null>(null);
+  const [confirmingCandidateId, setConfirmingCandidateId] = useState<string | null>(null);
 
   function resetFlow() {
     setIdentification(null);
@@ -91,6 +96,8 @@ export function IdentifyFlow() {
     setIsSubmitting(false);
     setError(null);
     setCameraNotice(null);
+    confirmingCandidateRef.current = null;
+    setConfirmingCandidateId(null);
     if (cameraInputRef.current) cameraInputRef.current.value = "";
     if (uploadInputRef.current) uploadInputRef.current.value = "";
   }
@@ -147,27 +154,29 @@ export function IdentifyFlow() {
   }
 
   async function confirmCandidate(candidate: Candidate) {
-    if (!identification || candidate.validation_status !== "validated") return;
-    const response = await fetch(
-      `/api/identifications/${identification.id}/candidates/${candidate.id}/confirm`,
-      { method: "POST" },
-    );
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(
-        payload.detail ?? "Solo podes confirmar candidatas validadas por GBIF.",
+    if (
+      !identification ||
+      candidate.validation_status !== "validated" ||
+      confirmingCandidateRef.current
+    ) return;
+    confirmingCandidateRef.current = candidate.id;
+    setConfirmingCandidateId(candidate.id);
+    setError(null);
+    try {
+      await apiClient.confirmCandidate(identification.id, candidate.id);
+      router.push(
+        `/profiles/${encodeURIComponent(candidateScientificName(candidate))}?candidateId=${encodeURIComponent(candidate.id)}`,
       );
-      return;
+    } catch (confirmationError) {
+      setError(
+        confirmationError instanceof Error
+          ? confirmationError.message
+          : "Solo podes confirmar candidatas validadas por GBIF.",
+      );
+    } finally {
+      confirmingCandidateRef.current = null;
+      setConfirmingCandidateId(null);
     }
-
-    setIdentification({
-      ...identification,
-      candidates: identification.candidates.map((item) =>
-        item.id === candidate.id
-          ? { ...item, confirmed_at: payload.candidate.confirmed_at }
-          : { ...item, confirmed_at: null },
-      ),
-    });
   }
 
   const showResults = Boolean(identification);
@@ -381,11 +390,18 @@ export function IdentifyFlow() {
                 </Chip>
               </header>
 
+              {confirmingCandidateId ? (
+                <p className={styles.statusCopy} role="status" aria-live="polite">
+                  Confirmando la planta y preparando su perfil...
+                </p>
+              ) : null}
+
               <ul className={styles.resultGrid} role="list">
                 {identification.candidates.map((candidate) => {
                   const isValidated =
                     candidate.validation_status === "validated";
                   const isConfirmed = Boolean(candidate.confirmed_at);
+                  const isConfirming = confirmingCandidateId === candidate.id;
                   return (
                     <li key={candidate.id}>
                       <ImageCard
@@ -414,10 +430,12 @@ export function IdentifyFlow() {
                               type="button"
                               variant={isValidated ? "primary" : "outline"}
                               fullWidth
-                              disabled={!isValidated || isConfirmed}
+                              disabled={!isValidated || isConfirmed || confirmingCandidateId !== null}
                               onClick={() => confirmCandidate(candidate)}
                             >
-                              {isConfirmed
+                              {isConfirming
+                                ? "Confirmando planta..."
+                                : isConfirmed
                                 ? "Planta seleccionada"
                                 : "Seleccionar esta planta"}
                             </Button>

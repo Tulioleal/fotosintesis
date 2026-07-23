@@ -7,17 +7,25 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.tables import application_jobs
+from app.auth.tables import (
+    application_jobs,
+    candidate_enrichment_jobs,
+    identification_candidates,
+    identification_images,
+)
 from app.core.settings import Settings, get_settings
 from app.db.repository import RepositoryBase
 from app.jobs.schemas import (
     ClaimedJob,
+    CandidateEnrichmentStatus,
+    EnrichmentJobResult,
     JobError,
     JobFailureCategory,
+    JobResult,
     JobStatus,
     JobStatusResponse,
     JobType,
@@ -36,6 +44,13 @@ class ReconciliationResult:
 class EnqueueResult:
     job_id: UUID
     created: bool
+
+
+@dataclass(frozen=True)
+class CandidateEnrichmentAssociationResult:
+    job_id: UUID
+    job_created: bool
+    association_created: bool
 
 
 class RepositoryInvariantError(RuntimeError):
@@ -176,6 +191,171 @@ class JobRepository(RepositoryBase):
             "idempotent enqueue conflict completed without a visible winner"
         )
 
+    async def enqueue_active_enrichment(
+        self,
+        *,
+        payload_version: int,
+        payload: dict,
+        idempotency_key: str,
+        active_deduplication_key: str,
+        max_attempts: int = 3,
+    ) -> EnqueueResult:
+        if not active_deduplication_key.strip():
+            raise ValueError("active_deduplication_key must not be blank")
+        existing_run = (
+            await self.session.execute(
+                select(application_jobs.c.id).where(
+                    application_jobs.c.job_type
+                    == JobType.enrich_confirmed_plant.value,
+                    application_jobs.c.idempotency_key == idempotency_key,
+                )
+            )
+        ).first()
+        if existing_run is not None:
+            return EnqueueResult(existing_run._mapping["id"], created=False)
+
+        try:
+            job_id = UUID(str(payload["run_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("active enrichment payload requires a valid run_id") from exc
+        active_predicate = and_(
+            application_jobs.c.active_deduplication_key.is_not(None),
+            application_jobs.c.status.in_(
+                [JobStatus.pending.value, JobStatus.processing.value]
+            ),
+        )
+        statement = (
+            pg_insert(application_jobs)
+            .values(
+                id=job_id,
+                job_type=JobType.enrich_confirmed_plant.value,
+                payload_version=payload_version,
+                payload=payload,
+                status=JobStatus.pending.value,
+                idempotency_key=idempotency_key,
+                active_deduplication_key=active_deduplication_key,
+                max_attempts=max_attempts,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[application_jobs.c.active_deduplication_key],
+                index_where=active_predicate,
+            )
+            .returning(application_jobs.c.id)
+        )
+        inserted = (await self.session.execute(statement)).first()
+        if inserted is not None:
+            return EnqueueResult(inserted._mapping["id"], created=True)
+
+        active = (
+            await self.session.execute(
+                select(application_jobs.c.id).where(
+                    application_jobs.c.active_deduplication_key
+                    == active_deduplication_key,
+                    application_jobs.c.status.in_(
+                        [JobStatus.pending.value, JobStatus.processing.value]
+                    ),
+                )
+            )
+        ).first()
+        if active is not None:
+            return EnqueueResult(active._mapping["id"], created=False)
+        raise RepositoryInvariantError(
+            "active enrichment conflict completed without a visible winner"
+        )
+
+    async def associate_candidate_enrichment(
+        self,
+        *,
+        candidate_id: UUID,
+        user_id: UUID,
+        policy_version: int,
+        payload_version: int,
+        payload: dict,
+        idempotency_key: str,
+        active_deduplication_key: str,
+        max_attempts: int = 3,
+    ) -> CandidateEnrichmentAssociationResult:
+        owned_candidate = await self.session.scalar(
+            select(identification_candidates.c.id)
+            .join(
+                identification_images,
+                identification_images.c.id
+                == identification_candidates.c.identification_id,
+            )
+            .where(
+                identification_candidates.c.id == candidate_id,
+                identification_images.c.user_id == user_id,
+            )
+        )
+        if owned_candidate is None:
+            raise ValueError("candidate is not owned by the requesting user")
+
+        existing = (
+            await self.session.execute(
+                select(candidate_enrichment_jobs.c.job_id).where(
+                    candidate_enrichment_jobs.c.candidate_id == candidate_id,
+                    candidate_enrichment_jobs.c.policy_version == policy_version,
+                )
+            )
+        ).first()
+        if existing is not None:
+            return CandidateEnrichmentAssociationResult(
+                job_id=existing._mapping["job_id"],
+                job_created=False,
+                association_created=False,
+            )
+
+        enqueue = await self.enqueue_active_enrichment(
+            payload_version=payload_version,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            active_deduplication_key=active_deduplication_key,
+            max_attempts=max_attempts,
+        )
+        association_id = uuid4()
+        inserted = (
+            await self.session.execute(
+                pg_insert(candidate_enrichment_jobs)
+                .values(
+                    id=association_id,
+                    user_id=user_id,
+                    candidate_id=candidate_id,
+                    job_id=enqueue.job_id,
+                    policy_version=policy_version,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        candidate_enrichment_jobs.c.candidate_id,
+                        candidate_enrichment_jobs.c.policy_version,
+                    ]
+                )
+                .returning(candidate_enrichment_jobs.c.job_id)
+            )
+        ).first()
+        if inserted is not None:
+            return CandidateEnrichmentAssociationResult(
+                job_id=inserted._mapping["job_id"],
+                job_created=enqueue.created,
+                association_created=True,
+            )
+        winner = (
+            await self.session.execute(
+                select(candidate_enrichment_jobs.c.job_id).where(
+                    candidate_enrichment_jobs.c.candidate_id == candidate_id,
+                    candidate_enrichment_jobs.c.policy_version == policy_version,
+                )
+            )
+        ).first()
+        if winner is None:
+            raise RepositoryInvariantError(
+                "candidate enrichment conflict completed without a visible winner"
+            )
+        return CandidateEnrichmentAssociationResult(
+            job_id=winner._mapping["job_id"],
+            job_created=False,
+            association_created=False,
+        )
+
     async def claim_jobs(
         self, *, owner: str, batch_size: int, lease_duration_seconds: float
     ) -> list[ClaimedJob]:
@@ -221,7 +401,7 @@ class JobRepository(RepositoryBase):
                     aj.id, aj.job_type, aj.payload_version, aj.payload,
                     aj.attempt_count, aj.max_attempts, aj.conversation_id,
                     aj.lease_owner, aj.lease_token, aj.lease_expires_at,
-                    aj.available_at,
+                    aj.available_at, aj.created_at,
                     (claimed.previous_status = 'processing') AS recovered
             )
             SELECT * FROM updated ORDER BY available_at ASC
@@ -295,7 +475,7 @@ class JobRepository(RepositoryBase):
         job_id: UUID,
         owner: str,
         lease_token: str,
-        result: ReadJobResult | None = None,
+        result: JobResult | None = None,
     ) -> bool:
         transition = await self.session.execute(
             update(application_jobs)
@@ -314,6 +494,7 @@ class JobRepository(RepositoryBase):
                 lease_owner=None,
                 lease_token=None,
                 lease_expires_at=None,
+                active_deduplication_key=None,
             )
         )
         return transition.rowcount > 0
@@ -324,7 +505,7 @@ class JobRepository(RepositoryBase):
         job_id: UUID,
         owner: str,
         lease_token: str,
-        result: ReadJobResult | None = None,
+        result: JobResult | None = None,
     ) -> bool:
         transition = await self.session.execute(
             update(application_jobs)
@@ -343,6 +524,7 @@ class JobRepository(RepositoryBase):
                 lease_owner=None,
                 lease_token=None,
                 lease_expires_at=None,
+                active_deduplication_key=None,
             )
         )
         return transition.rowcount > 0
@@ -394,7 +576,7 @@ class JobRepository(RepositoryBase):
         owner: str,
         lease_token: str,
         error: JobError,
-        result: ReadJobResult | None = None,
+        result: JobResult | None = None,
     ) -> bool:
         transition = await self.session.execute(
             update(application_jobs)
@@ -414,6 +596,7 @@ class JobRepository(RepositoryBase):
                 lease_owner=None,
                 lease_token=None,
                 lease_expires_at=None,
+                active_deduplication_key=None,
             )
         )
         return transition.rowcount > 0
@@ -464,6 +647,7 @@ class JobRepository(RepositoryBase):
                         lease_owner=None,
                         lease_token=None,
                         lease_expires_at=None,
+                        active_deduplication_key=None,
                     )
                 )
             else:
@@ -508,6 +692,46 @@ class JobRepository(RepositoryBase):
         if row is None:
             return None
         return self._row_to_status_response(row._mapping)
+
+    async def get_candidate_enrichment_status(
+        self,
+        *,
+        candidate_id: UUID,
+        user_id: UUID,
+        policy_version: int,
+    ) -> CandidateEnrichmentStatus | None:
+        row = (
+            await self.session.execute(
+                select(application_jobs)
+                .join(
+                    candidate_enrichment_jobs,
+                    candidate_enrichment_jobs.c.job_id == application_jobs.c.id,
+                )
+                .join(
+                    identification_candidates,
+                    identification_candidates.c.id
+                    == candidate_enrichment_jobs.c.candidate_id,
+                )
+                .join(
+                    identification_images,
+                    identification_images.c.id
+                    == identification_candidates.c.identification_id,
+                )
+                .where(
+                    candidate_enrichment_jobs.c.candidate_id == candidate_id,
+                    candidate_enrichment_jobs.c.policy_version == policy_version,
+                    candidate_enrichment_jobs.c.user_id == user_id,
+                    identification_images.c.user_id == user_id,
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        return CandidateEnrichmentStatus(
+            candidate_id=candidate_id,
+            policy_version=policy_version,
+            job=self._row_to_status_response(row._mapping),
+        )
 
     async def get_backlog_counts(self) -> dict[tuple[str, str], int]:
         rows = (
@@ -578,13 +802,16 @@ class JobRepository(RepositoryBase):
         result_raw = row.get("result")
         result = None
         if result_raw:
-            result = ReadJobResult(
-                succeeded=result_raw.get("succeeded", 0),
-                skipped=result_raw.get("skipped", 0),
-                failed=result_raw.get("failed", 0),
-                partial=result_raw.get("partial", False),
-                limitations=result_raw.get("limitations", []),
-            )
+            if row["job_type"] == JobType.enrich_confirmed_plant.value:
+                result = EnrichmentJobResult.model_validate(result_raw)
+            else:
+                result = ReadJobResult(
+                    succeeded=result_raw.get("succeeded", 0),
+                    skipped=result_raw.get("skipped", 0),
+                    failed=result_raw.get("failed", 0),
+                    partial=result_raw.get("partial", False),
+                    limitations=result_raw.get("limitations", []),
+                )
         return JobStatusResponse(
             id=row["id"],
             job_type=row["job_type"],

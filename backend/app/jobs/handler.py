@@ -10,9 +10,9 @@ from pydantic import BaseModel
 from app.jobs.schemas import (
     JobError,
     JobFailureCategory,
+    JobResult,
     JobStatus,
     JobType,
-    ReadJobResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class JobHandlerResult:
     status: JobStatus
-    result: ReadJobResult | None = None
+    result: JobResult | None = None
     error: JobError | None = None
     retry_at: float | None = None
 

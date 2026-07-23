@@ -163,7 +163,9 @@ class TestRenderedWorkerContract:
             "JOBS_SHUTDOWN_DRAIN_SECONDS",
             "JOBS_METRICS_HOST",
             "JOBS_METRICS_PORT",
+            "JOBS_REQUIRED_CONTRACTS",
         } <= worker_env.keys()
+        assert worker_env["JOBS_REQUIRED_CONTRACTS"] == "enrich_confirmed_plant:1"
         assert "__" not in (rendered / "30-backend.yaml").read_text(encoding="utf-8")
         assert "__" not in (rendered / "55-worker.yaml").read_text(encoding="utf-8")
 
@@ -186,6 +188,7 @@ class TestRenderedWorkerContract:
             "__JOBS_SHUTDOWN_DRAIN_SECONDS__",
             "__JOBS_METRICS_HOST__",
             "__JOBS_METRICS_PORT__",
+            "__JOBS_REQUIRED_CONTRACTS__",
             "__JOBS_TERMINATION_GRACE_PERIOD_SECONDS__",
         ):
             assert placeholder not in text, f"unresolved placeholder {placeholder}"
@@ -411,7 +414,7 @@ def test_artifact_registry_enforces_immutable_docker_tags() -> None:
 def test_deploy_workflow_waits_for_native_migration_job_completion() -> None:
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     migration_wait = text[
-        text.find("name: Wait for migrations") : text.find("name: Apply backend")
+        text.find("name: Wait for migrations") : text.find("name: Apply worker")
     ]
 
     assert "kubectl wait" in migration_wait
@@ -448,6 +451,9 @@ def test_compose_runs_local_worker_with_postgresql_and_production_entrypoint() -
     assert worker["environment"]["DATABASE_URL"].startswith("postgresql+asyncpg://")
     assert worker["environment"]["JOBS_WORKER_ENABLED"] == (
         "${JOBS_WORKER_ENABLED:-true}"
+    )
+    assert worker["environment"]["JOBS_REQUIRED_CONTRACTS"] == (
+        "enrich_confirmed_plant:1"
     )
     assert ".:/workspace" in worker["volumes"]
 
@@ -532,6 +538,20 @@ def test_deploy_workflow_worker_restart_after_apply() -> None:
     assert restart_index > apply_index
 
 
+def test_deploy_verifies_compatible_worker_before_backend_can_schedule() -> None:
+    text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    worker_apply = text.index("name: Apply worker")
+    compatibility = text.index("name: Confirm compatible enrichment worker readiness")
+    backend_apply = text.index("name: Apply backend")
+
+    assert worker_apply < compatibility < backend_apply
+    step = text[compatibility:backend_apply]
+    assert "enrich_confirmed_plant:1" in step
+    assert "JOBS_REQUIRED_CONTRACTS" in step
+    assert "rollout-deployment.sh" in step
+    assert "--for=condition=Ready" in step
+
+
 def test_deploy_workflow_server_side_dry_run_before_migrations() -> None:
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
     dry_run_step = text[
@@ -566,12 +586,13 @@ def test_deploy_workflow_reports_worker_readiness_separately() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
-    readiness_index = deploy.find("name: Confirm durable worker readiness")
+    readiness_index = deploy.find("name: Confirm compatible enrichment worker readiness")
 
-    assert readiness_index > deploy.find("name: Wait for rollouts")
-    readiness_step = deploy[readiness_index : deploy.find("name: Backend health")]
+    assert readiness_index < deploy.find("name: Apply backend")
+    readiness_step = deploy[readiness_index : deploy.find("name: Apply backend")]
     assert "app.kubernetes.io/name=fotosintesis-worker" in readiness_step
-    assert 'select(.name == "worker")' in readiness_step
+    assert "JOBS_REQUIRED_CONTRACTS" in readiness_step
+    assert "enrich_confirmed_plant:1" in readiness_step
     assert 'echo "result=pass" >> "$GITHUB_OUTPUT"' in readiness_step
     assert 'echo "result=fail" >> "$GITHUB_OUTPUT"' in readiness_step
     assert "worker_readiness_result:" in deploy

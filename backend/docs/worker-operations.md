@@ -17,6 +17,11 @@ The application setting defaults the worker to disabled. Set
 `JOBS_PRODUCER_ENABLED=true` independently in the API process to enable job
 enqueueing; enabling a worker does not enable producers.
 
+Set `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1` on enrichment-capable
+workers. Startup fails before readiness if the closed worker registry does not
+contain that exact job type and payload version. Docker Compose sets this check
+for the local worker.
+
 Docker Compose starts the separate worker service with consumption enabled and
 keeps producers disabled unless explicitly overridden:
 
@@ -98,6 +103,9 @@ metrics listener. Kubernetes scrapes them with
 | `fotosintesis_job_status_count` | `job_type`, `status` | Durable row count across every lifecycle status |
 | `fotosintesis_job_oldest_eligible_age_seconds` | (none) | Age of the oldest eligible pending job |
 | `fotosintesis_worker_last_successful_poll_timestamp_seconds` | (none) | Unix timestamp of the last successful reconciliation or disabled-mode database check |
+| `fotosintesis_enrichment_acquisition_avoided_total` | (none) | Complete or partial enrichment runs that needed no external acquisition |
+| `fotosintesis_enrichment_partial_outcomes_total` | (none) | Durable useful-subset enrichment outcomes |
+| `fotosintesis_enrichment_completion_time_seconds` | (none) | Bounded histogram of enqueue-to-terminal time for complete or partial enrichment |
 
 API and worker metric registries are process-local and reset when pods restart.
 Scheduling counters must be queried from backend targets. Worker lifecycle and
@@ -131,6 +139,39 @@ ownership during execution and intentionally does not finalize the job.
 not finalized by that worker and is recoverable after lease expiry. Scheduling
 logs may include job and conversation UUIDs for correlation, but metrics never
 use either identifier as a label.
+
+The enrichment metrics intentionally have no payload, species, aspect, source,
+job, owner, or content labels. Retry and terminal failure monitoring continues
+to use `fotosintesis_job_retries_total` and `fotosintesis_job_outcomes_total`
+rather than parallel enrichment-specific failure series.
+
+## Confirmed-plant enrichment contract
+
+Enrichment policy version `1` identifies a species with the accepted GBIF key
+and normalized binomial together when both were taxonomy-validated. If GBIF did
+not return an accepted key, the validated normalized binomial is the fallback.
+Display names and unvalidated free-form text are never identity material.
+
+Policy v1 carries four explicit aspect sets through execution:
+
+1. `required_aspects` is the complete policy set: general care; light, soil,
+   climate and humidity; watering amount and trigger; feeding schedule and
+   fertilizer type; pest and disease identification and prevention; and pet,
+   human, child and handling safety.
+2. `local_covered_aspects` is the subset accepted by all-required local semantic
+   judging.
+3. `acquisition_aspects` is exactly required minus local coverage and is the
+   only set sent to bounded external search.
+4. `final_covered_aspects` comes from the normalized local result when nothing
+   is missing, or from combined judging of all required aspects when acquisition
+   runs. Final missing aspects are required minus final coverage.
+
+The durable outcome mapping is fixed: all required aspects becomes `complete`;
+a useful accepted subset becomes `partial`; no accepted support becomes
+`failed` with `insufficient_evidence`; transient provider, judge, database or
+index failures reuse durable retries and eventually fail; invalid contracts and
+invariants fail without retry. Policy v1 permits at most four aspects per search
+group, five searches, and three durable attempts.
 
 After the drain timeout, cancellation cleanup receives one additional bounded
 second. Python cannot safely force a cancellation-resistant coroutine to stop;
@@ -262,6 +303,12 @@ If a handler produces incorrect domain effects:
    **Warning**: This re-runs domain effects. Only use when you have verified
    idempotency or applied compensating data fixes first.
 
+Confirmed-plant confirmation has mandatory scheduling semantics. Never work
+around an unavailable queue by committing confirmation without its enrichment
+job and candidate-policy association. For forward recovery, preserve additive
+jobs, associations, evidence, validation records and taxonomy provenance; ship
+a compatible worker or forward-fix migration, then allow pending work to resume.
+
 ## Rollback procedure
 
 To roll back to a previous release:
@@ -276,6 +323,14 @@ To roll back to a previous release:
 4. Disable `JOBS_PRODUCER_ENABLED` on the new backend if the rollback
    target does not support durable jobs.
 5. Verify the worker Deployment rolls out before reporting success.
+
+For enrichment releases, deploy and verify a worker requiring
+`enrich_confirmed_plant:1` before enabling a backend that schedules confirmation
+work. During rollback, keep a compatible enqueueing backend and worker deployed.
+If the rollback target cannot enqueue and retain that contract, make confirmation
+temporarily unavailable by disabling producers; do not silently confirm without
+scheduling. Worker consumption may be paused while compatible jobs remain
+durable for forward recovery.
 
 Both the API and worker must use the same backend image SHA during rollback.
 Keep handlers for every persisted payload version still in flight. Deploying

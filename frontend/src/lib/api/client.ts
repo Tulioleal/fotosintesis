@@ -27,6 +27,9 @@ export type AssistantReminderSuggestion = components["schemas"]["AssistantRemind
 export type AssistantChatRequest = components["schemas"]["AssistantChatRequest"];
 export type AssistantChatResponse = components["schemas"]["AssistantChatResponse"];
 export type AssistantRetryableError = components["schemas"]["AssistantRetryableError"];
+export type ConfirmationResponse = operations["confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post"]["responses"][200]["content"]["application/json"];
+export type CandidateEnrichmentStatus = operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"]["responses"][200]["content"]["application/json"];
+export type PlantProfileResponse = operations["get_plant_profile_plant_profiles__scientific_name__get"]["responses"][200]["content"]["application/json"];
 
 type ErrorPayload = {
   detail?: string;
@@ -126,6 +129,23 @@ export const apiClient = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+  },
+  confirmCandidate(identificationId: string, candidateId: string) {
+    return frontendRequest<ConfirmationResponse>(
+      `/api/identifications/${encodeURIComponent(identificationId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
+      { method: "POST" },
+    );
+  },
+  getCandidateEnrichment(candidateId: string) {
+    return frontendRequest<CandidateEnrichmentStatus>(
+      `/api/identifications/candidates/${encodeURIComponent(candidateId)}/enrichment`,
+    );
+  },
+  getPlantProfile(scientificName: string, candidateId: string, language: string) {
+    const params = new URLSearchParams({ candidateId, language });
+    return frontendRequest<PlantProfileResponse>(
+      `/api/plant-profiles/${encodeURIComponent(scientificName)}?${params}`,
+    );
   },
   listReminders(gardenPlantId?: string) {
     const params = new URLSearchParams();

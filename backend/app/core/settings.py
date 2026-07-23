@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     jobs_shutdown_drain_seconds: float = Field(default=30.0, gt=0, validation_alias="JOBS_SHUTDOWN_DRAIN_SECONDS")
     jobs_metrics_host: str = Field(default="0.0.0.0", validation_alias="JOBS_METRICS_HOST")
     jobs_metrics_port: int = Field(default=9100, ge=0, lt=65536, validation_alias="JOBS_METRICS_PORT")
+    jobs_required_contracts: str = Field(
+        default="",
+        validation_alias="JOBS_REQUIRED_CONTRACTS",
+    )
 
     @model_validator(mode="after")
     def _validate_job_settings(self) -> "Settings":

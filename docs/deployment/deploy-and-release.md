@@ -121,10 +121,15 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
 6. **Backend, worker, and frontend rollout** - the shared rollout script waits
    up to 600 seconds for each Deployment. On failure it prints Deployment,
    ReplicaSet, Pod, current/previous container, Cloud SQL proxy, and event
-   diagnostics before failing the workflow.
-7. **Backend in-cluster smoke** - a one-off curl pod hits
+    diagnostics before failing the workflow.
+7. **Enrichment worker compatibility** - after migrations, the worker is applied
+   and must become ready with
+   `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1` before the backend is
+   applied. Worker startup verifies that the exact closed job type and payload
+   version are registered, so confirmation scheduling cannot lead the consumer.
+8. **Backend in-cluster smoke** - a one-off curl pod hits
    `http://fotosintesis-backend.<namespace>.svc.cluster.local:8000/health`.
-8. **Frontend public smoke** - 60 retries against the configured
+9. **Frontend public smoke** - 60 retries against the configured
    public URL.
 
 The `release.yml` summary step also includes the per-gate results from
@@ -156,6 +161,27 @@ unsafe for normal operation because backlog grows without a consumer. Local
 application defaults remain disabled until developers opt in. API and worker
 Deployments always use the same immutable backend SHA so their payload contracts
 and registered handlers remain compatible.
+
+Confirmed-plant enrichment adds a stricter rollout invariant. Its canonical
+identity is accepted GBIF key plus taxonomy-validated normalized binomial, with
+the validated binomial alone only when no key exists. Policy version `1` carries
+separate required, locally covered, acquisition-only and final covered aspect
+sets. It maps full coverage to `complete`, useful subset coverage to `partial`,
+no accepted support to `failed/insufficient_evidence`, transient faults through
+the shared retry telemetry, and permanent contract faults directly to `failed`.
+
+Deploy in this order: additive migration, compatible worker and readiness check,
+then the backend that makes enrichment scheduling mandatory for successful
+confirmation. `JOBS_PRODUCER_ENABLED=false` is a rollout pause, not permission
+to confirm without scheduling. If scheduling is unavailable, confirmation must
+remain temporarily unavailable and its transaction must roll back.
+
+Rollback should retain a backend and worker compatible with
+`enrich_confirmed_plant:1` so already durable jobs can drain. If compatible
+enqueueing cannot remain deployed, disable producers and confirmation rather
+than weakening mandatory scheduling. Preserve additive jobs, associations,
+evidence and provenance, then recover forward with a compatible image or
+forward-fix migration; do not reverse migrations or discard queued work.
 
 ## How to find the deployed image tag
 

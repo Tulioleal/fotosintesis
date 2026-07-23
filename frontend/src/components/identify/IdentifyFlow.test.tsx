@@ -1,6 +1,19 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentifyFlow } from "./IdentifyFlow";
+
+const mocks = vi.hoisted(() => ({
+  confirmCandidate: vi.fn(),
+  push: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mocks.push }),
+}));
+
+vi.mock("@/lib/api/client", () => ({
+  apiClient: { confirmCandidate: mocks.confirmCandidate },
+}));
 
 const identificationPayload = {
   id: "identification-1",
@@ -32,6 +45,12 @@ const identificationPayload = {
 describe("IdentifyFlow", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mocks.confirmCandidate.mockReset().mockResolvedValue({
+      candidate: { confirmed_at: "2026-01-01T00:00:00Z" },
+      enrichment: { candidate_id: "candidate-1", policy_version: 1, job: { id: "job-1", status: "pending" } },
+      status: "confirmed",
+    });
+    mocks.push.mockReset();
     URL.createObjectURL = vi.fn(() => "blob:preview");
   });
 
@@ -111,16 +130,12 @@ describe("IdentifyFlow", () => {
     expect(resetButton).toBeInTheDocument();
   });
 
-  it("renders validated candidates and links to the profile after confirmation", async () => {
+  it("uses typed confirmation and navigates to the profile immediately", async () => {
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce({ ok: true, json: async () => identificationPayload })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ candidate: { confirmed_at: "2026-01-01T00:00:00Z" } }),
-        }),
+        .mockResolvedValueOnce({ ok: true, json: async () => identificationPayload }),
     );
     const { container } = render(<IdentifyFlow />);
     const upload = container.querySelector(
@@ -142,20 +157,46 @@ describe("IdentifyFlow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Seleccionar esta planta" }));
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("link", { name: "Ver perfil y agregar a Mi Jardin" }),
-      ).toHaveAttribute(
-        "href",
-        "/profiles/Cotyledon%20tomentosa?candidateId=candidate-1",
-      );
-      expect(
-        screen.getByRole("link", { name: "Preguntar al asistente" }),
-      ).toHaveAttribute(
-        "href",
-        "/assistant?plant=Pata%20de%20oso&binomial=Cotyledon%20tomentosa&scientific=Cotyledon%20tomentosa",
-      );
+    await waitFor(() => expect(mocks.confirmCandidate).toHaveBeenCalledWith("identification-1", "candidate-1"));
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/profiles/Cotyledon%20tomentosa?candidateId=candidate-1",
+    );
+  });
+
+  it("allows only one pending confirmation, shows progress, and does not navigate after a 503", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({ ok: true, json: async () => identificationPayload }),
+    );
+    let rejectConfirmation!: (reason: Error) => void;
+    mocks.confirmCandidate.mockReturnValueOnce(new Promise((_, reject) => {
+      rejectConfirmation = reject;
+    }));
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp"]',
+    ) as HTMLInputElement;
+
+    fireEvent.change(upload, {
+      target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] },
     });
+
+    const confirmButton = await screen.findByRole("button", { name: "Seleccionar esta planta" });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    expect(mocks.confirmCandidate).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Confirmando planta..." })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Confirmando la planta y preparando su perfil...");
+    expect(mocks.push).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectConfirmation(new Error("Servicio temporalmente no disponible (503)."));
+    });
+
+    expect(await screen.findByText("Servicio temporalmente no disponible (503).")).toBeInTheDocument();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Seleccionar esta planta" })).toBeEnabled();
   });
 
   it("renders the binomial name as primary text when common name is absent", async () => {
@@ -177,10 +218,6 @@ describe("IdentifyFlow", () => {
               },
             ],
           }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ candidate: { confirmed_at: "2026-01-01T00:00:00Z" } }),
         }),
     );
     const { container } = render(<IdentifyFlow />);
@@ -197,13 +234,9 @@ describe("IdentifyFlow", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Seleccionar esta planta" }));
-
     await waitFor(() => {
-      expect(
-        screen.getByRole("link", { name: "Preguntar al asistente" }),
-      ).toHaveAttribute(
-        "href",
-        "/assistant?plant=Solanum%20lycopersicum&binomial=Solanum%20lycopersicum&scientific=Solanum%20lycopersicum%20var.%20cerasiforme",
+      expect(mocks.push).toHaveBeenCalledWith(
+        "/profiles/Solanum%20lycopersicum%20var.%20cerasiforme?candidateId=candidate-1",
       );
     });
   });

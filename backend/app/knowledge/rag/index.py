@@ -10,6 +10,7 @@ from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import (
     KnowledgeChunk,
     KnowledgeDocumentInput,
+    EnrichmentEvidenceMetadata,
     KnowledgeRetrievalFilters,
     PersistedKnowledgeDocument,
     ValidatedClaimIndexStatus,
@@ -106,6 +107,30 @@ class KnowledgeVectorIndex:
         await self.repository.session.commit()
         return persisted
 
+    async def persist_enrichment_relational(
+        self,
+        document: KnowledgeDocumentInput,
+        *,
+        ingestion: OrchestratedKnowledgeIngestion,
+        enrichment: EnrichmentEvidenceMetadata,
+        document_id: UUID,
+    ) -> PersistedKnowledgeDocument:
+        persisted = await self.repository.save_document(
+            document,
+            chunks=ingestion.chunks,
+            commit=False,
+            document_id=document_id,
+            enrichment=enrichment,
+        )
+        await self.repository.add_embeddings(
+            chunks=persisted.chunks,
+            embeddings=ingestion.embeddings,
+            provider=ingestion.provider,
+            model=ingestion.model,
+            commit=False,
+        )
+        return persisted
+
     async def ensure_vector_nodes(
         self,
         *,
@@ -160,9 +185,12 @@ class KnowledgeVectorIndex:
         chunk_ids = [node.chunk_id for node in nodes]
         if not chunk_ids:
             return []
-        return list(
-            (await self.repository.get_chunks_by_ids(chunk_ids)).values()
-        )
+        by_id = await self.repository.get_chunks_by_ids(chunk_ids)
+        return [
+            by_id[node.chunk_id].model_copy(update={"score": node.score})
+            for node in nodes
+            if node.chunk_id in by_id
+        ]
 
 
 __all__ = ["KnowledgeVectorIndex"]

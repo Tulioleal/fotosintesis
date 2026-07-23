@@ -155,6 +155,14 @@ def build_metadata_filter_specs(filters: KnowledgeRetrievalFilters) -> list[Meta
         specs.append(
             MetadataFilterSpec("answerability_status", filters.answerability_status)
         )
+    if filters.canonical_species_key:
+        specs.append(
+            MetadataFilterSpec("canonical_species_key", filters.canonical_species_key)
+        )
+    if filters.accepted_gbif_key is not None:
+        specs.append(
+            MetadataFilterSpec("accepted_gbif_key", filters.accepted_gbif_key)
+        )
     if filters.retrieved_after:
         specs.append(
             MetadataFilterSpec("retrieved_at", filters.retrieved_after.isoformat(), operator=">=")

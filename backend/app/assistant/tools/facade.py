@@ -54,6 +54,8 @@ class AssistantTools:
         *,
         scientific_name: str,
         topic: str,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
         required_aspects: list[str] | None = None,
         question: str | None = None,
     ) -> ToolResult:
@@ -64,6 +66,8 @@ class AssistantTools:
             ).retrieve_or_acquire(
                 scientific_name=scientific_name,
                 topic=topic,
+                canonical_species_key=canonical_species_key,
+                accepted_gbif_key=accepted_gbif_key,
                 required_aspects=required_aspects or [],
                 question=question,
                 filters=KnowledgeRetrievalFilters(

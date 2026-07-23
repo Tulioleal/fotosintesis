@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
 from app.db.session import get_async_session
+from app.enrichment import get_current_enrichment_policy
+from app.jobs.repository import JobRepository
 from app.profile_garden.repository import PlantProfileGardenRepository
 from app.profile_garden.schemas import (
     GardenDeleteResponse,
@@ -43,13 +45,19 @@ async def get_plant_profile(
             detail="The confirmed candidate does not match the requested profile.",
         )
 
-    return await repository.get_or_create_profile(
+    profile = await repository.get_or_create_profile(
         scientific_name=candidate_name,
         common_name=candidate.common_name,
         region=region,
         country=country,
         language=language,
     )
+    enrichment = await JobRepository(session).get_candidate_enrichment_status(
+        candidate_id=candidate_id,
+        user_id=user.id,
+        policy_version=get_current_enrichment_policy().version,
+    )
+    return profile.model_copy(update={"enrichment": enrichment})
 
 
 @router.post("/garden", response_model=GardenPlantResponse, status_code=status.HTTP_201_CREATED)

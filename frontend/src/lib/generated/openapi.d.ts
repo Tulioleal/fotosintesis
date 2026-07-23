@@ -210,6 +210,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/identifications/candidates/{candidate_id}/enrichment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Candidate Enrichment */
+        get: operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/identifications/{identification_id}/candidates/{candidate_id}/confirm": {
         parameters: {
             query?: never;
@@ -523,9 +540,21 @@ export interface components {
              */
             file: string;
         };
+        /** CandidateEnrichmentStatus */
+        CandidateEnrichmentStatus: {
+            /**
+             * Candidate Id
+             * Format: uuid
+             */
+            candidate_id: string;
+            job: components["schemas"]["JobStatusResponse"];
+            /** Policy Version */
+            policy_version: number;
+        };
         /** ConfirmationResponse */
         ConfirmationResponse: {
             candidate: components["schemas"]["TaxonomyCandidate"];
+            enrichment: components["schemas"]["CandidateEnrichmentStatus"];
             /** Status */
             status: string;
         };
@@ -550,6 +579,36 @@ export interface components {
             session_token: string;
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** EnrichmentJobResult */
+        EnrichmentJobResult: {
+            /**
+             * Acquisition Avoided
+             * @default false
+             */
+            acquisition_avoided: boolean;
+            /** Covered Aspects */
+            covered_aspects: string[];
+            /** Covered Count */
+            covered_count: number;
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /** Missing Aspects */
+            missing_aspects: string[];
+            /** Missing Count */
+            missing_count: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "partial";
+            /** Policy Version */
+            policy_version: number;
+        };
+        /**
+         * EnrichmentLimitation
+         * @enum {string}
+         */
+        EnrichmentLimitation: "missing_required_aspects" | "safety_evidence_rejected";
         /** GardenDeleteResponse */
         GardenDeleteResponse: {
             /** Status */
@@ -698,7 +757,7 @@ export interface components {
          * JobFailureCategory
          * @enum {string}
          */
-        JobFailureCategory: "invalid_payload" | "unsupported_payload_version" | "unknown_job_type" | "database_transient" | "provider_transient" | "indexing_transient" | "invariant_violation" | "attempts_exhausted" | "unexpected_error" | "lease_expired" | "lease_lost";
+        JobFailureCategory: "invalid_payload" | "unsupported_payload_version" | "unknown_job_type" | "database_transient" | "provider_transient" | "indexing_transient" | "invariant_violation" | "attempts_exhausted" | "unexpected_error" | "lease_expired" | "lease_lost" | "insufficient_evidence";
         /**
          * JobLimitation
          * @enum {string}
@@ -729,7 +788,8 @@ export interface components {
             last_error?: components["schemas"]["ReadJobError"] | null;
             /** Max Attempts */
             max_attempts: number;
-            result?: components["schemas"]["ReadJobResult"] | null;
+            /** Result */
+            result?: components["schemas"]["ReadJobResult"] | components["schemas"]["EnrichmentJobResult"] | null;
             status: components["schemas"]["JobStatus"];
             /**
              * Updated At
@@ -741,7 +801,7 @@ export interface components {
          * JobType
          * @enum {string}
          */
-        JobType: "ingest_validated_claims";
+        JobType: "ingest_validated_claims" | "enrich_confirmed_plant";
         /**
          * LightClassification
          * @enum {string}
@@ -808,6 +868,7 @@ export interface components {
             common_name?: string | null;
             /** Confidence */
             confidence: number;
+            enrichment?: components["schemas"]["CandidateEnrichmentStatus"] | null;
             /**
              * Id
              * Format: uuid
@@ -1580,6 +1641,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IdentificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                candidate_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateEnrichmentStatus"];
                 };
             };
             /** @description Validation Error */

@@ -8,6 +8,7 @@ from app.auth.tables import (
     conversation_messages,
     conversations,
     garden_plants,
+    identification_candidates,
     light_measurements,
     plant_profiles,
     reminders,
@@ -61,22 +62,53 @@ class AssistantRepository(RepositoryBase):
     async def list_garden(self, *, user_id: UUID) -> list[dict]:
         rows = (
             await self.session.execute(
-                select(garden_plants, plant_profiles)
+                select(garden_plants, plant_profiles, identification_candidates)
                 .join(plant_profiles, plant_profiles.c.id == garden_plants.c.profile_id)
+                .outerjoin(
+                    identification_candidates,
+                    identification_candidates.c.id
+                    == garden_plants.c.confirmed_candidate_id,
+                )
                 .where(garden_plants.c.user_id == user_id)
                 .order_by(desc(garden_plants.c.created_at))
             )
         ).all()
-        return [
-            {
-                "id": row._mapping[garden_plants.c.id],
+        result: list[dict] = []
+        for row in rows:
+            garden = row._mapping[garden_plants.c.id]
+            row._mapping[plant_profiles.c.id]
+            candidate = row._mapping.get(identification_candidates.c.id)
+            entry = {
+                "id": garden,
                 "nickname": row._mapping[garden_plants.c.nickname],
                 "location": row._mapping[garden_plants.c.location],
                 "scientific_name": row._mapping[plant_profiles.c.scientific_name],
                 "common_name": row._mapping[plant_profiles.c.common_name],
             }
-            for row in rows
-        ]
+            if (
+                candidate is not None
+                and row._mapping.get(identification_candidates.c.validation_status) == "validated"
+                and row._mapping.get(identification_candidates.c.confirmed_at) is not None
+            ):
+                from app.enrichment.identity import CanonicalSpeciesIdentity
+
+                try:
+                    identity = CanonicalSpeciesIdentity(
+                        accepted_gbif_key=row._mapping.get(
+                            identification_candidates.c.gbif_accepted_key
+                        ),
+                        normalized_binomial=row._mapping.get(
+                            identification_candidates.c.binomial_name
+                        ),
+                        taxonomy_validated=True,
+                    )
+                    entry["accepted_gbif_key"] = identity.accepted_gbif_key
+                    entry["normalized_binomial"] = identity.normalized_binomial
+                    entry["canonical_species_key"] = identity.key
+                except ValueError:
+                    pass
+            result.append(entry)
+        return result
 
     async def create_reminder(
         self,

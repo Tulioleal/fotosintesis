@@ -445,6 +445,9 @@ async def test_expired_persisted_session_is_rejected(
 async def test_identification_upload_validates_taxonomy_and_requires_confirmation(
     session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    get_settings.cache_clear()
+
     async def matched_name(self, scientific_name: str) -> GbifTaxonomy:
         return GbifTaxonomy(
             key=123,

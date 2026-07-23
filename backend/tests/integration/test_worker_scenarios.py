@@ -871,6 +871,7 @@ class TestWorkerPolling:
         get_settings.cache_clear()
         started = asyncio.Event()
         release = asyncio.Event()
+        cancelled = asyncio.Event()
 
         class _LongHandler(JobHandler):
             def payload_model(self, payload_version: int):
@@ -878,7 +879,11 @@ class TestWorkerPolling:
 
             async def handle(self, *, payload, attempt_count, max_attempts):
                 started.set()
-                await release.wait()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
                 return JobHandlerResult(
                     status=JobStatus.complete,
                     result=ReadJobResult(succeeded=1),
@@ -929,8 +934,7 @@ class TestWorkerPolling:
             await task
             pytest.fail("worker did not detect lease loss")
 
-        release.set()
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(cancelled.wait(), timeout=1.0)
         worker.stop()
         await task
 
@@ -953,6 +957,9 @@ class TestWorkerPolling:
         assert metrics.job_outcomes[
             (JobType.ingest_validated_claims.value, "lease_lost")
         ] == 1
+        assert metrics.job_outcomes.get(
+            (JobType.ingest_validated_claims.value, "cancelled"), 0
+        ) == 0
         histogram = metrics.job_duration_histograms[
             (JobType.ingest_validated_claims.value, "lease_lost")
         ]

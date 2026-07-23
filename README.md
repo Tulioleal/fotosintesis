@@ -23,6 +23,16 @@ Start with local object storage:
 docker compose --profile storage up frontend backend postgres minio
 ```
 
+Start with enrichment confirmation and processing:
+
+```bash
+JOBS_PRODUCER_ENABLED=true \
+JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1 \
+docker compose up frontend backend worker postgres
+```
+
+Enrichment mode requires a background worker to process confirmation-triggered evidence jobs. The `JOBS_PRODUCER_ENABLED` flag enables confirmation scheduling, and `JOBS_REQUIRED_CONTRACTS` registers the worker contracts needed before scheduling begins.
+
 Run the backend directly:
 
 ```bash
@@ -59,7 +69,9 @@ pnpm --filter frontend test
 Run Playwright against the local stack:
 
 ```bash
-docker compose up frontend backend postgres
+JOBS_PRODUCER_ENABLED=true \
+JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1 \
+docker compose up frontend backend worker postgres -d
 pnpm --filter frontend test:e2e
 ```
 

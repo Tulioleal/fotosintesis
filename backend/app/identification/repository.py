@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.tables import identification_candidates, identification_images
+from app.auth.tables import (
+    identification_candidates,
+    identification_images,
+    taxonomy_provenance_snapshots,
+)
+from app.enrichment.identity import CanonicalSpeciesIdentity
 from app.db.repository import RepositoryBase
 from app.identification.gbif import GbifTaxonomy
 from app.identification.schemas import IdentificationResponse, TaxonomyCandidate
@@ -77,7 +83,7 @@ class IdentificationRepository(RepositoryBase):
                 genus=taxonomy.genus,
                 family=taxonomy.family,
                 species=taxonomy.species,
-                validation_status="validated" if taxonomy.matched else "no_gbif_match",
+                validation_status="validated" if taxonomy.has_canonical_identity else "no_gbif_match",
             )
         )
         await self.session.commit()
@@ -135,7 +141,7 @@ class IdentificationRepository(RepositoryBase):
                     identification_images.c.id == identification_id,
                     identification_images.c.user_id == user_id,
                     identification_images.c.status == "needs_confirmation",
-                )
+                ).with_for_update()
             )
         ).first()
         if image is None:
@@ -164,11 +170,83 @@ class IdentificationRepository(RepositoryBase):
             .where(identification_candidates.c.id == candidate_id)
             .values(confirmed_at=confirmed_at)
         )
-        await self.session.commit()
-
         row = (
             await self.session.execute(
                 select(identification_candidates).where(identification_candidates.c.id == candidate_id)
             )
         ).first()
         return TaxonomyCandidate.model_validate(row._mapping) if row else None
+
+    async def create_or_reuse_taxonomy_snapshot(
+        self,
+        *,
+        identity: CanonicalSpeciesIdentity,
+        source_version: str,
+        snapshot: dict[str, object],
+        resolved_at: datetime,
+    ) -> UUID:
+        existing = await self.session.scalar(
+            select(taxonomy_provenance_snapshots.c.id).where(
+                taxonomy_provenance_snapshots.c.canonical_species_key == identity.key,
+                taxonomy_provenance_snapshots.c.taxonomy_source == "gbif",
+                taxonomy_provenance_snapshots.c.taxonomy_source_version == source_version,
+            )
+        )
+        if existing is not None:
+            return existing
+
+        predecessor_matches = []
+        if identity.accepted_gbif_key is not None:
+            predecessor_matches.append(
+                taxonomy_provenance_snapshots.c.accepted_gbif_key
+                == identity.accepted_gbif_key
+            )
+        if identity.normalized_binomial is not None:
+            predecessor_matches.append(
+                taxonomy_provenance_snapshots.c.normalized_binomial
+                == identity.normalized_binomial
+            )
+        previous_snapshot_id = await self.session.scalar(
+            select(taxonomy_provenance_snapshots.c.id)
+            .where(
+                taxonomy_provenance_snapshots.c.taxonomy_source == "gbif",
+                or_(*predecessor_matches),
+            )
+            .order_by(taxonomy_provenance_snapshots.c.resolved_at.desc())
+            .limit(1)
+        )
+        snapshot_id = uuid4()
+        inserted = await self.session.scalar(
+            pg_insert(taxonomy_provenance_snapshots)
+            .values(
+                id=snapshot_id,
+                canonical_species_key=identity.key,
+                accepted_gbif_key=identity.accepted_gbif_key,
+                normalized_binomial=identity.normalized_binomial,
+                taxonomy_source="gbif",
+                taxonomy_source_version=source_version,
+                snapshot=snapshot,
+                previous_snapshot_id=previous_snapshot_id,
+                resolved_at=resolved_at,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    taxonomy_provenance_snapshots.c.canonical_species_key,
+                    taxonomy_provenance_snapshots.c.taxonomy_source,
+                    taxonomy_provenance_snapshots.c.taxonomy_source_version,
+                ]
+            )
+            .returning(taxonomy_provenance_snapshots.c.id)
+        )
+        if inserted is not None:
+            return inserted
+        winner = await self.session.scalar(
+            select(taxonomy_provenance_snapshots.c.id).where(
+                taxonomy_provenance_snapshots.c.canonical_species_key == identity.key,
+                taxonomy_provenance_snapshots.c.taxonomy_source == "gbif",
+                taxonomy_provenance_snapshots.c.taxonomy_source_version == source_version,
+            )
+        )
+        if winner is None:
+            raise RuntimeError("taxonomy provenance conflict completed without a visible winner")
+        return winner

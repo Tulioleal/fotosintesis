@@ -122,6 +122,7 @@ env:
   JOBS_SHUTDOWN_DRAIN_SECONDS: ${{ vars.JOBS_SHUTDOWN_DRAIN_SECONDS || '30' }}
   JOBS_METRICS_HOST: ${{ vars.JOBS_METRICS_HOST || '0.0.0.0' }}
   JOBS_METRICS_PORT: ${{ vars.JOBS_METRICS_PORT || '9100' }}
+  JOBS_REQUIRED_CONTRACTS: enrich_confirmed_plant:1
   JOBS_TERMINATION_GRACE_PERIOD_SECONDS: ${{ vars.JOBS_TERMINATION_GRACE_PERIOD_SECONDS || '90' }}
   # Service-account -> namespace service-account allow-list for one-off
   # kubectl runs (e.g. backend smoke check pods). The cluster's IAM
@@ -536,6 +537,7 @@ jobs:
             echo "JOBS_SHUTDOWN_DRAIN_SECONDS=${JOBS_SHUTDOWN_DRAIN_SECONDS}"
             echo "JOBS_METRICS_HOST=${JOBS_METRICS_HOST}"
             echo "JOBS_METRICS_PORT=${JOBS_METRICS_PORT}"
+            echo "JOBS_REQUIRED_CONTRACTS=${JOBS_REQUIRED_CONTRACTS}"
             echo "JOBS_TERMINATION_GRACE_PERIOD_SECONDS=${JOBS_TERMINATION_GRACE_PERIOD_SECONDS}"
           } > "$values_file"
           sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
@@ -800,15 +802,6 @@ jobs:
             exit 1
           fi
           echo "result=pass" >> "$GITHUB_OUTPUT"
-      - name: Apply backend
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
-        run: |
-          set -euo pipefail
-          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
-          kubectl rollout restart deployment/fotosintesis-backend \
-            -n "$TF_OUT_NAMESPACE"
       - name: Apply worker
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -817,6 +810,48 @@ jobs:
           set -euo pipefail
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/55-worker.yaml"
           kubectl rollout restart deployment/fotosintesis-worker \
+            -n "$TF_OUT_NAMESPACE"
+      - id: worker-readiness
+        name: Confirm compatible enrichment worker readiness
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+
+          if ! sh deploy/scripts/rollout-deployment.sh \
+              "$TF_OUT_NAMESPACE" \
+              fotosintesis-worker \
+              worker \
+              600s || ! kubectl wait \
+              --namespace "$TF_OUT_NAMESPACE" \
+              --for=condition=Ready \
+              pod \
+              --selector app.kubernetes.io/name=fotosintesis-worker \
+              --timeout=120s; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          worker_contract="$(
+            kubectl get deployment/fotosintesis-worker \
+              --namespace "$TF_OUT_NAMESPACE" \
+              -o jsonpath='{.spec.template.spec.containers[?(@.name=="worker")].env[?(@.name=="JOBS_REQUIRED_CONTRACTS")].value}'
+          )"
+          if [ "$worker_contract" != "enrich_confirmed_plant:1" ]; then
+            echo "::error::Worker does not require enrich_confirmed_plant payload version 1." >&2
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - name: Apply backend
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/30-backend.yaml"
+          kubectl rollout restart deployment/fotosintesis-backend \
             -n "$TF_OUT_NAMESPACE"
       - name: Apply frontend, ingress, certificate
         env:
@@ -856,49 +891,6 @@ jobs:
           wait_for_rollout fotosintesis-backend backend
           wait_for_rollout fotosintesis-worker worker
           wait_for_rollout fotosintesis-frontend frontend
-
-          echo "result=pass" >> "$GITHUB_OUTPUT"
-      - id: worker-readiness
-        name: Confirm durable worker readiness
-        env:
-          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
-        run: |
-          set -euo pipefail
-
-          if ! kubectl wait \
-            --namespace "$TF_OUT_NAMESPACE" \
-            --for=condition=Ready \
-            pod \
-            --selector app.kubernetes.io/name=fotosintesis-worker \
-            --timeout=120s; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            kubectl get pods \
-              --namespace "$TF_OUT_NAMESPACE" \
-              --selector app.kubernetes.io/name=fotosintesis-worker \
-              -o wide || true
-            exit 1
-          fi
-
-          worker_ready="$(
-            kubectl get pods \
-              --namespace "$TF_OUT_NAMESPACE" \
-              --selector app.kubernetes.io/name=fotosintesis-worker \
-              -o json |
-            jq -r '
-              .items
-              | map(
-                  .status.containerStatuses[]
-                  | select(.name == "worker")
-                  | .ready
-                )
-              | all
-            '
-          )"
-
-          if [ "$worker_ready" != "true" ]; then
-            echo "result=fail" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
 
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: backend-smoke

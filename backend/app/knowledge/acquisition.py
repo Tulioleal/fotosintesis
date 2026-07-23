@@ -58,6 +58,8 @@ class KnowledgeAcquisitionService:
         *,
         scientific_name: str,
         topic: str,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
         required_aspects: list[str] | None = None,
         question: str | None = None,
         filters: KnowledgeRetrievalFilters | None = None,
@@ -76,7 +78,7 @@ class KnowledgeAcquisitionService:
         )
         query_embedding = await self._query_embedding(query_text)
         try:
-            existing = await self.vector_index.retrieve_chunks(
+            ordinary = await self.vector_index.retrieve_chunks(
                 filters,
                 query_text=query_text,
                 query_embedding=query_embedding,
@@ -89,6 +91,46 @@ class KnowledgeAcquisitionService:
                 [],
                 "LlamaIndex pgvector retrieval failed; returning a limited result.",
             )
+
+        enrichment: list = []
+        if canonical_species_key and required_aspects:
+            try:
+                candidates = await self.vector_index.retrieve_chunks(
+                    KnowledgeRetrievalFilters(
+                        canonical_species_key=canonical_species_key,
+                        accepted_gbif_key=accepted_gbif_key,
+                        evidence_type="confirmed_plant_enrichment",
+                        source_provenance="trusted",
+                        review_status=ReviewStatus.auto_ingested,
+                    ),
+                    query_text=query_text,
+                    query_embedding=query_embedding,
+                    limit=24,
+                )
+            except Exception:
+                candidates = []
+            requested = set(required_aspects)
+            enrichment: list = []
+            for chunk in candidates:
+                chunk_aspects = set(chunk.metadata.get("covered_aspects") or [])
+                matching = requested.intersection(chunk_aspects)
+                if not matching:
+                    continue
+                validations = chunk.metadata.get("validation_provenance")
+                if not isinstance(validations, list):
+                    continue
+                if not any(
+                    isinstance(v, dict)
+                    and matching.intersection(
+                        set(v.get("covered_aspects") or [])
+                    )
+                    for v in validations
+                ):
+                    continue
+                enrichment.append(chunk)
+
+        existing = _deduplicate_chunks([*enrichment, *ordinary])[:5]
+
         if len(existing) >= min_existing_chunks:
             return KnowledgeAcquisitionResult(status=AcquisitionStatus.retrieved, chunks=existing)
 
@@ -213,3 +255,14 @@ def _content_from_sources(scientific_name: str, topic: str, sources: list[Search
 
 def _normalize_domain(domain: str) -> str:
     return domain.lower().removeprefix("www.").strip()
+
+
+def _deduplicate_chunks(chunks: list) -> list:
+    seen: set[str] = set()
+    result: list = []
+    for chunk in chunks:
+        key = str(getattr(chunk, "id", None) or chunk.content[:80])
+        if key not in seen:
+            seen.add(key)
+            result.append(chunk)
+    return result

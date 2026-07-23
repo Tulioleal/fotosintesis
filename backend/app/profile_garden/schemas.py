@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.jobs.schemas import CandidateEnrichmentStatus
+
 
 class ProfileAlias(BaseModel):
     name: str
@@ -28,6 +30,7 @@ class PlantProfileResponse(BaseModel):
     sources: list[ProfileSource] = Field(default_factory=list)
     confidence: float
     limitations: list[str] = Field(default_factory=list)
+    enrichment: CandidateEnrichmentStatus | None = None
 
 
 class GardenPlantCreate(BaseModel):
