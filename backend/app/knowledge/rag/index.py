@@ -176,7 +176,7 @@ class KnowledgeVectorIndex:
         query_embedding: list[float],
         limit: int = 5,
     ) -> list[KnowledgeChunk]:
-        nodes = self.runtime.retrieve_nodes(
+        nodes = await self.runtime.retrieve_nodes(
             filters=filters,
             query_text=query_text,
             query_embedding=query_embedding,

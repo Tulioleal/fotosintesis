@@ -28,7 +28,7 @@ from app.knowledge.rag import (
     build_llamaindex_metadata_filters,
     build_metadata_filter_specs,
 )
-from app.knowledge.rag.runtime import _llamaindex_chunk_metadata
+from app.knowledge.rag.runtime import VectorIndexError, _llamaindex_chunk_metadata
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import (
     AcquisitionStatus,
@@ -140,14 +140,14 @@ class FakeLlamaRuntime:
     async def has_all_nodes(self, node_ids) -> bool:
         return set(node_ids) == {chunk.id for chunk in self.indexed_chunks}
 
-    def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
+    async def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
         self.retrieve_calls += 1
         return [FakeRetrievedNode(chunk.id, 1.0) for chunk in self.indexed_chunks[:limit]]
 
 
 class FailingLlamaRuntime(FakeLlamaRuntime):
-    def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
-        raise RuntimeError("pgvector unavailable")
+    async def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
+        raise VectorIndexError("pgvector unavailable")
 
 
 class FailingIngestionRuntime(FakeLlamaRuntime):
@@ -733,7 +733,8 @@ def test_llamaindex_metadata_filters_preserve_closed_claim_filters(
     assert mapped[(metadata_key, None)] == value
 
 
-def test_llamaindex_retrieval_uses_app_configured_embed_model(
+@pytest.mark.asyncio
+async def test_llamaindex_retrieval_uses_app_configured_embed_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -760,6 +761,12 @@ def test_llamaindex_retrieval_uses_app_configured_embed_model(
             self.filters = filters
             self.condition = condition
 
+    async def _noop_initialize(self, store):
+        pass
+
+    monkeypatch.setattr(
+        LlamaIndexRuntime, "_initialize_vector_store", _noop_initialize
+    )
     monkeypatch.setattr(
         "app.knowledge.rag.runtime.create_llamaindex_pgvector_store", lambda settings: object()
     )
@@ -787,7 +794,7 @@ def test_llamaindex_retrieval_uses_app_configured_embed_model(
         )(),
     )
 
-    nodes = LlamaIndexRuntime().retrieve_nodes(
+    nodes = await LlamaIndexRuntime().retrieve_nodes(
         filters=KnowledgeRetrievalFilters(topic="watering"),
         query_text="Cotyledon watering",
         query_embedding=[0.0],

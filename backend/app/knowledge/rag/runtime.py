@@ -481,7 +481,7 @@ class LlamaIndexRuntime:
             node.node_id for node in nodes
         } == expected_ids
 
-    def retrieve_nodes(
+    async def retrieve_nodes(
         self,
         *,
         filters: KnowledgeRetrievalFilters,
@@ -495,16 +495,23 @@ class LlamaIndexRuntime:
         except ImportError as exc:
             raise RuntimeError("Install llama-index-core to retrieve knowledge chunks") from exc
 
-        index = VectorStoreIndex.from_vector_store(
-            vector_store=self._get_vector_store(),
-            embed_model=create_llamaindex_embed_model(self.settings),
-        )
-        retriever = index.as_retriever(
-            similarity_top_k=limit,
-            filters=build_llamaindex_metadata_filters(filters),
-        )
-        bundle = QueryBundle(query_str=query_text, embedding=query_embedding)
-        return [_retrieved_node_from_score_node(node) for node in retriever.retrieve(bundle)]
+        try:
+            store = self._get_vector_store()
+            await self._initialize_vector_store(store)
+            index = VectorStoreIndex.from_vector_store(
+                vector_store=store,
+                embed_model=create_llamaindex_embed_model(self.settings),
+            )
+            retriever = index.as_retriever(
+                similarity_top_k=limit,
+                filters=build_llamaindex_metadata_filters(filters),
+            )
+            bundle = QueryBundle(query_str=query_text, embedding=query_embedding)
+            return [_retrieved_node_from_score_node(node) for node in retriever.retrieve(bundle)]
+        except VectorIndexError:
+            raise
+        except Exception as exc:
+            raise VectorIndexError("Knowledge retrieval failed") from exc
 
 
 __all__ = [
