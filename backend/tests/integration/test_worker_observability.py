@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -85,7 +85,7 @@ async def _request_worker(worker, path: str = "/ready") -> str:
 
 
 def test_histogram_memory_is_bounded() -> None:
-    from app.observability.metrics import Histogram, JOB_DURATION_BUCKETS
+    from app.observability.metrics import JOB_DURATION_BUCKETS, Histogram
 
     histogram = Histogram()
     initial = sum(histogram.counts)  # +Inf bucket is included in counts
@@ -260,7 +260,7 @@ async def _setup_processing_job(pg_session_factory, *, lease_seconds: float = 30
             ),
             {
                 "token": "SECRET_LEASE_TOKEN",
-                "expires": datetime.now(timezone.utc) + timedelta(seconds=lease_seconds),
+                "expires": datetime.now(UTC) + timedelta(seconds=lease_seconds),
                 "id": job_id,
             },
         )
@@ -276,8 +276,8 @@ class TestEventInventory:
         await _setup_processing_job(pg_session_factory, lease_seconds=-10)
 
         # Run a single reconcile tick.
-        from app.jobs.worker import Worker
         from app.core.settings import get_settings
+        from app.jobs.worker import Worker
 
         settings = get_settings()
         worker = Worker(
@@ -532,6 +532,8 @@ class TestTelemetrySafety:
             "lease_lost", "cancelled",
             "lease_expired", "attempts_exhausted", "provider_transient", "created", "reused",
             "0", "1", "0.1", "0.5", "1.0", "2.5", "5.0", "10.0", "30.0", "60.0", "300.0", "+Inf",
+            "true", "false",
+            "0.0", "2", "2.0", "3", "3.0", "4", "4.0", "6", "6.0", "8", "8.0", "12", "12.0", "17", "17.0",
         }
         closed_label_values.update(item.value for item in JobFailureCategory)
         import re
@@ -592,14 +594,14 @@ class TestBacklogCollection:
                     status=JobStatus.processing.value,
                     lease_owner="metrics-worker",
                     lease_token="metrics-token",
-                    lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                    lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
                 )
             )
             for status in (JobStatus.complete, JobStatus.partial, JobStatus.failed):
                 await session.execute(
                     application_jobs.update()
                     .where(application_jobs.c.id == ids[status])
-                    .values(status=status.value, completed_at=datetime.now(timezone.utc))
+                    .values(status=status.value, completed_at=datetime.now(UTC))
                 )
             await session.commit()
 
@@ -664,7 +666,7 @@ class TestBacklogCollection:
                 payload_version=1,
                 payload=_valid_payload(topic="backlog-future"),
                 idempotency_key="bl-collect-future",
-                available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                available_at=datetime.now(UTC) + timedelta(hours=1),
             )
             await session.commit()
 
@@ -789,6 +791,7 @@ class TestComprehensiveSensitiveLog:
         self, pg_session_factory, caplog, monkeypatch
     ):
         import logging
+
         from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
         from app.jobs.repository import JobRepository
         from app.jobs.schemas import (
@@ -908,29 +911,125 @@ class TestWorkerMetricsEndpoint:
 
 
 class TestWorkerReadiness:
-    async def test_local_runtime_uses_production_registry_and_postgresql_contracts(
+    async def test_disabled_default_worker_validates_contracts_without_handlers(
         self, pg_session_factory, monkeypatch
     ):
+        import app.jobs.handlers.register as register_module
+        import app.jobs.worker as worker_module
         from app.core.settings import get_settings
-        from app.jobs.handler import get_handler_registry
-        from app.jobs.schemas import JobType
         from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        registered: list[str] = []
+        constructed: list[str] = []
+
+        def raising_register_handlers(registry=None) -> None:
+            registered.append("global-registration")
+            raise AssertionError("disabled worker must not register handlers")
+
+        monkeypatch.setattr(
+            worker_module, "register_handlers", raising_register_handlers
+        )
+
+        def raising_ingest_constructor(*args, **kwargs):
+            constructed.append("ingest_validated_claims")
+            raise AssertionError("disabled worker must not construct handlers")
+
+        def raising_enrich_constructor(service=None, metrics=None):
+            constructed.append("enrich_confirmed_plant")
+            raise AssertionError("disabled worker must not construct handlers")
+
+        monkeypatch.setattr(
+            register_module,
+            "IngestValidatedClaimsHandler",
+            raising_ingest_constructor,
+        )
+        monkeypatch.setattr(
+            register_module, "EnrichConfirmedPlantHandler", raising_enrich_constructor
+        )
 
         monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        monkeypatch.setenv("JOBS_REQUIRED_CONTRACTS", "enrich_confirmed_plant:1")
         get_settings.cache_clear()
+        metrics = MetricsRegistry()
         worker = Worker(
             session_factory=pg_session_factory,
             settings=get_settings(),
+            metrics=metrics,
         )
+        worker._claim = AsyncMock()
+        worker._reconcile = AsyncMock()
 
         task = asyncio.create_task(worker.start())
         await _wait_for_state(worker._ready_event.is_set)
-        assert get_handler_registry().get_handler(
-            JobType.ingest_validated_claims.value
-        ) is not None
         assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
         worker.stop()
         await task
+
+        assert registered == []
+        assert constructed == []
+        worker._claim.assert_not_awaited()
+        worker._reconcile.assert_not_awaited()
+
+    async def test_disabled_default_worker_stays_unready_for_unsupported_contract(
+        self, pg_session_factory, monkeypatch
+    ):
+        import app.jobs.handlers.register as register_module
+        import app.jobs.worker as worker_module
+        from app.core.settings import get_settings
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        constructed: list[str] = []
+
+        def raising_register_handlers(registry=None) -> None:
+            raise AssertionError("disabled worker must not register handlers")
+
+        monkeypatch.setattr(
+            worker_module, "register_handlers", raising_register_handlers
+        )
+
+        def raising_ingest_constructor(*args, **kwargs):
+            constructed.append("ingest_validated_claims")
+            raise AssertionError("disabled worker must not construct handlers")
+
+        def raising_enrich_constructor(service=None, metrics=None):
+            constructed.append("enrich_confirmed_plant")
+            raise AssertionError("disabled worker must not construct handlers")
+
+        monkeypatch.setattr(
+            register_module,
+            "IngestValidatedClaimsHandler",
+            raising_ingest_constructor,
+        )
+        monkeypatch.setattr(
+            register_module, "EnrichConfirmedPlantHandler", raising_enrich_constructor
+        )
+
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        monkeypatch.setenv("JOBS_REQUIRED_CONTRACTS", "enrich_confirmed_plant:999")
+        get_settings.cache_clear()
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        worker._claim = AsyncMock()
+
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.2)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+        finally:
+            worker.stop()
+            await task
+
+        worker._claim.assert_not_awaited()
+        assert constructed == []
 
     async def test_invalid_embedding_provider_keeps_worker_unready(
         self, pg_session_factory, caplog
@@ -976,6 +1075,259 @@ class TestWorkerReadiness:
         )
         assert_sensitive_values_absent(caplog.records)
         assert sentinel not in " ".join(str(record.__dict__) for record in caplog.records)
+
+    async def test_readiness_listener_is_available_while_dependency_validation_is_slow(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.handlers.ingest_validated_claims import (
+            IngestValidatedClaimsHandler,
+        )
+        from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
+        from app.jobs.worker import Worker
+
+        monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+        get_settings.cache_clear()
+        slow_validation = asyncio.Event()
+
+        async def slow_registry_validation(self):
+            await slow_validation.wait()
+
+        original_validate = HandlerRegistry.validate_dependencies
+        monkeypatch.setattr(
+            HandlerRegistry,
+            "validate_dependencies",
+            slow_registry_validation,
+        )
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            IngestValidatedClaimsHandler(
+                session_factory=pg_session_factory,
+                provider_registry_factory=lambda: type(
+                    "Providers", (), {"embeddings": object()}
+                )(),
+            ),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+
+        task = asyncio.create_task(worker.start())
+        await _wait_for_state(lambda: worker._metrics_server is not None)
+        try:
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+        finally:
+            slow_validation.set()
+            worker.stop()
+            await task
+
+        assert original_validate is not None
+
+    async def test_dependency_validation_recovers_to_available_without_restart(
+        self, pg_session_factory
+    ):
+        import types
+
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.handlers.ingest_validated_claims import (
+            IngestValidatedClaimsHandler,
+        )
+        from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
+        from app.jobs.worker import Worker
+
+        allow = asyncio.Event()
+
+        def flaky_registry():
+            if not allow.is_set():
+                raise ValueError("SECRET_PROVIDER_FAILURE")
+            return types.SimpleNamespace(embeddings=object())
+
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            IngestValidatedClaimsHandler(
+                session_factory=pg_session_factory,
+                provider_registry_factory=flaky_registry,
+            ),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+
+        task = asyncio.create_task(worker.start())
+        await _wait_for_state(lambda: worker._metrics_server is not None)
+        try:
+            await asyncio.sleep(0.15)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            allow.set()
+            await _wait_for_state(worker._ready_event.is_set)
+            assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
+        finally:
+            worker.stop()
+            await task
+
+    async def test_explicit_registry_does_not_register_global_handlers(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.handlers.enrich_confirmed_plant import EnrichConfirmedPlantHandler
+        from app.jobs.handlers.ingest_validated_claims import (
+            IngestValidatedClaimsHandler,
+        )
+        from app.jobs.schemas import (
+            EnrichConfirmedPlantPayload,
+            IngestValidatedClaimsPayload,
+            JobType,
+        )
+        from app.jobs.worker import Worker
+
+        registered: list[str] = []
+        constructed: list[str] = []
+
+        def tracking_register_handlers(registry=None) -> None:
+            registered.append("global-registration")
+
+        import app.jobs.handlers.register as register_module
+        import app.jobs.worker as worker_module
+
+        monkeypatch.setattr(worker_module, "register_handlers", tracking_register_handlers)
+
+        def tracking_ingest_constructor(*args, **kwargs):
+            constructed.append("ingest_validated_claims")
+            return IngestValidatedClaimsHandler(*args, **kwargs)
+
+        def tracking_enrich_constructor(service=None, metrics=None):
+            constructed.append("enrich_confirmed_plant")
+            return EnrichConfirmedPlantHandler(service, metrics)
+
+        monkeypatch.setattr(
+            register_module, "IngestValidatedClaimsHandler", tracking_ingest_constructor
+        )
+        monkeypatch.setattr(
+            register_module, "EnrichConfirmedPlantHandler", tracking_enrich_constructor
+        )
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            IngestValidatedClaimsHandler(
+                session_factory=pg_session_factory,
+                provider_registry_factory=lambda: type(
+                    "Providers", (), {"embeddings": object()}
+                )(),
+            ),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        worker = Worker(session_factory=pg_session_factory, handler_registry=registry)
+
+        task = asyncio.create_task(worker.start())
+        try:
+            await _wait_for_state(worker._ready_event.is_set)
+        finally:
+            worker.stop()
+            await task
+
+        assert registered == []
+        assert constructed == []
+
+    async def test_global_construction_failure_recovers_without_restart(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        import app.jobs.handlers.register as register_module
+        import app.jobs.worker as worker_module
+        from app.jobs.worker import Worker
+
+        attempts = {"n": 0}
+        release = asyncio.Event()
+        original_register = register_module.register_handlers
+
+        def flaky_register(registry=None) -> None:
+            attempts["n"] += 1
+            if not release.is_set():
+                raise ValueError("SECRET_CONSTRUCTION_FAILURE")
+            original_register(registry)
+
+        monkeypatch.setattr(worker_module, "register_handlers", flaky_register)
+        monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        worker = Worker(session_factory=pg_session_factory)
+
+        task = asyncio.create_task(worker.start())
+        await _wait_for_state(lambda: worker._metrics_server is not None)
+        try:
+            await _wait_for_state(lambda: attempts["n"] >= 1)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            assert not task.done()
+            release.set()
+            await _wait_for_state(worker._ready_event.is_set)
+            assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
+        finally:
+            worker.stop()
+            await task
+
+        assert attempts["n"] >= 2
+        assert_sensitive_values_absent(caplog.records)
+        assert "SECRET_CONSTRUCTION_FAILURE" not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+
+    async def test_readiness_stays_available_while_sync_global_construction_is_slow(
+        self, pg_session_factory, monkeypatch
+    ):
+        import threading
+
+        import app.jobs.handlers.register as register_module
+        import app.jobs.worker as worker_module
+        from app.jobs.worker import Worker
+
+        started = threading.Event()
+        release = threading.Event()
+        original_register = register_module.register_handlers
+
+        def blocking_register(registry=None) -> None:
+            started.set()
+            release.wait(timeout=10)
+            original_register(registry)
+
+        monkeypatch.setattr(worker_module, "register_handlers", blocking_register)
+        monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.05")
+        from app.core.settings import get_settings
+
+        get_settings.cache_clear()
+        worker = Worker(session_factory=pg_session_factory)
+
+        task = asyncio.create_task(worker.start())
+        await _wait_for_state(lambda: worker._metrics_server is not None)
+        try:
+            assert started.wait(timeout=5)
+
+            async def probe():
+                return True
+
+            assert await asyncio.wait_for(probe(), timeout=0.5) is True
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            assert worker.active_executions() == []
+            release.set()
+            await _wait_for_state(worker._ready_event.is_set)
+            assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
+        finally:
+            release.set()
+            worker.stop()
+            await task
 
     async def test_dependency_failure_prevents_claims_and_preserves_pending_job(
         self, pg_session_factory, caplog
@@ -1105,14 +1457,14 @@ class TestWorkerReadiness:
     async def test_valid_dependencies_and_reconciliation_set_readiness(
         self, pg_session_factory
     ):
+        import types
+
         from app.jobs.handler import HandlerRegistry
         from app.jobs.handlers.ingest_validated_claims import (
             IngestValidatedClaimsHandler,
         )
         from app.jobs.schemas import IngestValidatedClaimsPayload, JobType
         from app.jobs.worker import Worker
-
-        import types
 
         def valid_registry():
             return types.SimpleNamespace(embeddings=object())
@@ -1402,3 +1754,215 @@ class TestWorkerReadiness:
             assert (await request()).startswith("HTTP/1.1 200 OK")
         finally:
             await stop_metrics_server(server)
+
+    async def test_enabled_worker_stays_unready_when_telemetry_query_fails(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import (
+            IngestValidatedClaimsPayload,
+            JobStatus,
+            JobType,
+            ReadJobResult,
+        )
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        sentinel = "SECRET_TELEMETRY_SCHEMA_FAILURE"
+
+        class _CompletingHandler(JobHandler):
+            def payload_model(self, payload_version: int):
+                return IngestValidatedClaimsPayload
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                return JobHandlerResult(
+                    status=JobStatus.complete,
+                    result=ReadJobResult(succeeded=1),
+                )
+
+        async with pg_session_factory() as session:
+            job_id = await JobRepository(session).enqueue(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=1,
+                payload=_valid_payload(),
+                idempotency_key="enabled-telemetry-unready",
+            )
+            await session.commit()
+
+        async def fail_observations(_repository):
+            raise RuntimeError(sentinel)
+
+        monkeypatch.setattr(
+            JobRepository, "get_enrichment_efficacy_totals", fail_observations
+        )
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _CompletingHandler(),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.2)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            assert metrics.job_claims_total == 0
+        finally:
+            worker.stop()
+            await task
+
+        async with pg_session_factory() as session:
+            status = await session.scalar(
+                select(application_jobs.c.status).where(
+                    application_jobs.c.id == job_id
+                )
+            )
+        assert status == JobStatus.pending.value
+        assert sentinel not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+        assert any(
+            record.message == "worker_efficacy_metrics_refresh_failed"
+            for record in caplog.records
+        )
+
+    async def test_disabled_worker_stays_unready_when_telemetry_query_fails(
+        self, pg_session_factory, monkeypatch, caplog
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.repository import JobRepository
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        sentinel = "SECRET_TELEMETRY_SCHEMA_FAILURE"
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        get_settings.cache_clear()
+
+        async def fail_observations(_repository):
+            raise RuntimeError(sentinel)
+
+        monkeypatch.setattr(
+            JobRepository, "get_enrichment_efficacy_totals", fail_observations
+        )
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        worker._claim = AsyncMock()
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.2)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            assert metrics.worker_last_successful_poll_timestamp_seconds is None
+        finally:
+            worker.stop()
+            await task
+
+        worker._claim.assert_not_awaited()
+        assert sentinel not in " ".join(
+            str(record.__dict__) for record in caplog.records
+        )
+
+    async def test_telemetry_query_failure_recovers_to_ready(
+        self, pg_session_factory, monkeypatch
+    ):
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
+        from app.jobs.repository import JobRepository
+        from app.jobs.schemas import (
+            IngestValidatedClaimsPayload,
+            JobStatus,
+            JobType,
+            ReadJobResult,
+        )
+        from app.jobs.worker import Worker
+        from app.observability.metrics import MetricsRegistry
+
+        original_get_observations = JobRepository.get_enrichment_efficacy_totals
+        calls = 0
+
+        async def fail_once(repository):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("SECRET_TELEMETRY_SCHEMA_FAILURE")
+            return await original_get_observations(repository)
+
+        monkeypatch.setattr(JobRepository, "get_enrichment_efficacy_totals", fail_once)
+
+        class _CompletingHandler(JobHandler):
+            def payload_model(self, payload_version: int):
+                return IngestValidatedClaimsPayload
+
+            async def handle(self, *, payload, attempt_count, max_attempts):
+                return JobHandlerResult(
+                    status=JobStatus.complete,
+                    result=ReadJobResult(succeeded=1),
+                )
+
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.ingest_validated_claims.value,
+            _CompletingHandler(),
+            payload_models={1: IngestValidatedClaimsPayload},
+        )
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=get_settings(),
+            metrics=metrics,
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.sleep(0.05)
+            assert not worker._ready_event.is_set()
+            assert (await _request_worker(worker)).startswith(
+                "HTTP/1.1 503 Service Unavailable"
+            )
+            await _wait_for_state(worker._ready_event.is_set)
+            assert (await _request_worker(worker)).startswith("HTTP/1.1 200 OK")
+        finally:
+            worker.stop()
+            await task
+
+        assert calls >= 2
+
+        # The disabled worker also recovers to ready once the telemetry query
+        # succeeds.
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "false")
+        get_settings.cache_clear()
+        disabled = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=HandlerRegistry(),
+            settings=get_settings(),
+            metrics=MetricsRegistry(),
+        )
+        disabled._claim = AsyncMock()
+        disabled_task = asyncio.create_task(disabled.start())
+        try:
+            await _wait_for_state(disabled._ready_event.is_set)
+            assert (await _request_worker(disabled)).startswith("HTTP/1.1 200 OK")
+        finally:
+            disabled.stop()
+            await disabled_task

@@ -11,7 +11,12 @@ from app.assistant.graph.helpers import logger
 from app.assistant.graph.plant_resolution import _display_name_for_answer
 from app.assistant.graph.types import AnswerabilityResult, AssistantState
 from app.assistant.graph_shared import _shorten
-from app.assistant.semantic_coverage import CoverageThresholds, SemanticEvidence, semantic_coverage_service
+from app.assistant.semantic_coverage import (
+    CoverageThresholds,
+    SemanticEvidence,
+    SemanticSourceEvidence,
+    semantic_coverage_service,
+)
 from app.assistant.tools import AssistantTools
 from app.knowledge.schemas import KnowledgeChunk
 from app.observability.tracing import get_trace_id
@@ -40,6 +45,7 @@ async def _judge_answerability(
     source_metadata: list[dict],
     required_aspects: list[str] | None = None,
     extra_payload: dict[str, object] | None = None,
+    evidence_sources: list[dict[str, object]] | None = None,
     timeout_seconds: float | None = None,
 ) -> AnswerabilityResult:
     judge = getattr(getattr(tools, "providers", None), "judge", None)
@@ -55,6 +61,8 @@ async def _judge_answerability(
         "evidence": _shorten(evidence, 1800),
         "source_metadata": source_metadata[:5],
     }
+    if evidence_sources is not None:
+        payload["evidence_sources"] = evidence_sources
     if extra_payload:
         payload.update(extra_payload)
     rubric = {
@@ -69,7 +77,7 @@ async def _judge_answerability(
             "Do not use general model knowledge outside the supplied evidence.",
             "Use aspect_validation_guidance when deciding whether evidence directly covers a required aspect.",
             "Evaluate coverage independently for each requested domain-qualified aspect.",
-            "Each source_support item intended for durable ingestion must contain exactly one source URL and an evidence quote taken from that source. Use separate support items when different sources support the same claim.",
+            "Each source_support item intended for durable ingestion must contain exactly one supplied source URL and an evidence quote taken from that source. Use separate support items when different sources support the same claim.",
         ],
         "expected_output": {
             "status": "one of full, partial, insufficient, contradictory",
@@ -103,7 +111,7 @@ async def _judge_answerability(
             )
         else:
             result = await judge.judge_response(payload, rubric)
-    except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         return AnswerabilityResult(
             status="insufficient",
             answerable=False,
@@ -138,8 +146,16 @@ def _validated_answerability(
     result: AnswerabilityResult,
     *,
     requested_aspects: list[str],
-    source_metadata: list[dict] | None = None,
+    evidence: SemanticEvidence | None = None,
+    thresholds: CoverageThresholds | None = None,
 ) -> AnswerabilityResult:
+    if evidence is not None:
+        return semantic_coverage_service.normalized_coverage(
+            result,
+            required_aspects=requested_aspects,
+            thresholds=thresholds,
+            evidence=evidence,
+        )
     return semantic_coverage_service.normalize_answerability(
         result,
         requested_aspects=requested_aspects,
@@ -299,8 +315,23 @@ async def evaluate_sufficiency(owner, state: AssistantState) -> dict:
         timeout_seconds=owner.settings.assistant_judge_timeout_seconds,
     )
     evidence = SemanticEvidence(
-        text=_evidence_from_chunks(chunks),
-        source_metadata=tuple(state.get("sources", [])),
+        sources=tuple(
+            SemanticSourceEvidence(
+                text=_shorten(chunk.content, 500),
+                metadata={
+                    "url": chunk.source_url,
+                    "domain": chunk.source_domain,
+                    "confidence": chunk.confidence,
+                    "validation_status": (
+                        chunk.metadata.get("validation_status")
+                        if isinstance(chunk.metadata, dict)
+                        else None
+                    ),
+                },
+            )
+            for chunk in chunks[:4]
+        ),
+        eligible_validation_statuses=frozenset({"trusted"}),
     )
     normalized = semantic_coverage_service.normalized_coverage(
         result,

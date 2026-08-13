@@ -94,40 +94,14 @@ class KnowledgeAcquisitionService:
 
         enrichment: list = []
         if canonical_species_key and required_aspects:
-            try:
-                candidates = await self.vector_index.retrieve_chunks(
-                    KnowledgeRetrievalFilters(
-                        canonical_species_key=canonical_species_key,
-                        accepted_gbif_key=accepted_gbif_key,
-                        evidence_type="confirmed_plant_enrichment",
-                        source_provenance="trusted",
-                        review_status=ReviewStatus.auto_ingested,
-                    ),
-                    query_text=query_text,
-                    query_embedding=query_embedding,
-                    limit=24,
-                )
-            except Exception:
-                candidates = []
-            requested = set(required_aspects)
-            enrichment: list = []
-            for chunk in candidates:
-                chunk_aspects = set(chunk.metadata.get("covered_aspects") or [])
-                matching = requested.intersection(chunk_aspects)
-                if not matching:
-                    continue
-                validations = chunk.metadata.get("validation_provenance")
-                if not isinstance(validations, list):
-                    continue
-                if not any(
-                    isinstance(v, dict)
-                    and matching.intersection(
-                        set(v.get("covered_aspects") or [])
-                    )
-                    for v in validations
-                ):
-                    continue
-                enrichment.append(chunk)
+            enrichment = await self._retrieve_enrichment_chunks(
+                scientific_name=scientific_name,
+                topic=topic,
+                canonical_species_key=canonical_species_key,
+                accepted_gbif_key=accepted_gbif_key,
+                required_aspects=required_aspects,
+                question=question,
+            )
 
         existing = _deduplicate_chunks([*enrichment, *ordinary])[:5]
 
@@ -177,6 +151,80 @@ class KnowledgeAcquisitionService:
     async def _query_embedding(self, query_text: str) -> list[float]:
         result = await self.providers.embeddings.create_embeddings([query_text])
         return result.embeddings[0] if result.embeddings else []
+
+    async def _retrieve_enrichment_chunks(
+        self,
+        *,
+        scientific_name: str,
+        topic: str,
+        canonical_species_key: str,
+        accepted_gbif_key: int | None,
+        required_aspects: list[str],
+        question: str | None,
+    ) -> list:
+        """Retrieve enrichment evidence with one aspect-filtered pgvector query
+        per distinct requested aspect, so unrelated higher-scoring chunks can
+        never displace requested-aspect coverage before the top-k limit."""
+        distinct_aspects = list(dict.fromkeys(aspect for aspect in required_aspects if aspect))
+        if not distinct_aspects:
+            return []
+        query_text = _retrieval_query_text(
+            scientific_name=scientific_name,
+            topic=topic,
+            required_aspects=required_aspects,
+            question=question,
+        )
+        query_embedding = await self._query_embedding(query_text)
+        requested = set(distinct_aspects)
+        enrichment_by_id: dict[str, object] = {}
+        aspect_hits: dict[str, set[str]] = {}
+        for aspect in distinct_aspects:
+            try:
+                candidates = await self.vector_index.retrieve_chunks(
+                    KnowledgeRetrievalFilters(
+                        canonical_species_key=canonical_species_key,
+                        accepted_gbif_key=accepted_gbif_key,
+                        evidence_type="confirmed_plant_enrichment",
+                        source_provenance="trusted",
+                        review_status=ReviewStatus.auto_ingested,
+                        covered_aspect=aspect,
+                    ),
+                    query_text=query_text,
+                    query_embedding=query_embedding,
+                    limit=5,
+                )
+            except Exception:
+                continue
+            for chunk in candidates:
+                validations = chunk.metadata.get("validation_provenance")
+                if not isinstance(validations, list):
+                    continue
+                covered = set(chunk.metadata.get("covered_aspects") or [])
+                matching = requested.intersection(covered)
+                if not matching:
+                    continue
+                if not any(
+                    isinstance(v, dict)
+                    and matching.intersection(set(v.get("covered_aspects") or []))
+                    for v in validations
+                ):
+                    continue
+                if chunk.id is None:
+                    continue
+                enrichment_by_id.setdefault(str(chunk.id), chunk)
+                aspect_hits.setdefault(str(chunk.id), set()).update(matching)
+
+        ordered: list = []
+        ordered_ids: set[str] = set()
+        for aspect in distinct_aspects:
+            for chunk_id, chunk in enrichment_by_id.items():
+                if (
+                    aspect in aspect_hits.get(chunk_id, set())
+                    and chunk_id not in ordered_ids
+                ):
+                    ordered.append(chunk)
+                    ordered_ids.add(chunk_id)
+        return ordered
 
     async def _generate_document(
         self, scientific_name: str, topic: str, sources: list[SearchResult]

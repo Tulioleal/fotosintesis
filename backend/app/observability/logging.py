@@ -19,7 +19,10 @@ class JsonFormatter(logging.Formatter):
                 payload[key.removeprefix("ctx_")] = value
 
         if record.exc_info:
-            payload["error"] = self.formatException(record.exc_info)
+            # Never serialize the exception message or traceback: they can
+            # contain provider prompts, payloads, evidence bodies, or source
+            # identity. Only the closed exception type name is emitted.
+            payload["error_type"] = type(record.exc_info[1]).__name__
 
         return json.dumps(payload, default=str, ensure_ascii=False)
 

@@ -19,19 +19,42 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class EnrichmentEfficacySnapshot:
+    """Bounded efficacy facts attached to an enrichment handler result.
+
+    The worker emits telemetry from this snapshot only after the durable
+    finalization transition commits, never from handler intentions.
+    """
+
+    policy_version: int
+    acquisition_avoided: bool
+    local_covered_count: int
+    final_covered_count: int
+    coverage_gain: int
+    accepted_aspect_count: int
+    search_count: int
+
+
+@dataclass(frozen=True)
 class JobHandlerResult:
     status: JobStatus
     result: JobResult | None = None
     error: JobError | None = None
     retry_at: float | None = None
+    efficacy: EnrichmentEfficacySnapshot | None = None
 
     @classmethod
     def failed(
-        cls, *, category: JobFailureCategory, retryable: bool
-    ) -> "JobHandlerResult":
+        cls,
+        *,
+        category: JobFailureCategory,
+        retryable: bool,
+        efficacy: EnrichmentEfficacySnapshot | None = None,
+    ) -> JobHandlerResult:
         return cls(
             status=JobStatus.failed,
             error=JobError(category=category, retryable=retryable),
+            efficacy=efficacy,
         )
 
 

@@ -278,6 +278,38 @@ class KnowledgeRepository(RepositoryBase):
         )
         if document_id is None:
             return None
+        return await self.get_enrichment_evidence_state_by_document_id(document_id)
+
+    async def get_enrichment_evidence_state_by_document_id(
+        self,
+        document_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> EnrichmentEvidenceState | None:
+        """Load authoritative enrichment state for a stable document identity.
+
+        When ``for_update`` is set the knowledge document row is locked with
+        ``SELECT ... FOR UPDATE`` so concurrent aspect mutation and vector
+        refresh serialize on the same stable content. The chunk ``covered_aspects``
+        metadata is always recomputed from the relational aspect-support table
+        and never taken from cached chunk JSON.
+        """
+        document_statement = select(knowledge_documents.c.id).where(
+            knowledge_documents.c.id == document_id
+        )
+        if for_update:
+            document_statement = document_statement.with_for_update()
+        found = (await self.session.execute(document_statement)).first()
+        if found is None:
+            return None
+        aspect_rows = (
+            await self.session.execute(
+                select(knowledge_document_aspect_supports.c.aspect).where(
+                    knowledge_document_aspect_supports.c.document_id == document_id
+                )
+            )
+        ).scalars().all()
+        aspects = list(dict.fromkeys(aspect_rows))
         rows = (
             await self.session.execute(
                 select(
@@ -296,9 +328,22 @@ class KnowledgeRepository(RepositoryBase):
         ).mappings().all()
         if not rows:
             raise ValueError("enrichment evidence has no persisted chunks and embeddings")
+        chunks = []
+        for row in rows:
+            chunk = _row_to_chunk(row)
+            chunks.append(
+                chunk.model_copy(
+                    update={
+                        "metadata": {
+                            **(chunk.metadata or {}),
+                            "covered_aspects": aspects,
+                        }
+                    }
+                )
+            )
         return EnrichmentEvidenceState(
             document_id=document_id,
-            chunks=[_row_to_chunk(row) for row in rows],
+            chunks=chunks,
             embeddings=[list(row["stored_embedding"]) for row in rows],
             embedding_provider=rows[0]["embedding_provider"],
             embedding_model=rows[0]["embedding_model"],
@@ -312,6 +357,19 @@ class KnowledgeRepository(RepositoryBase):
         confidence: float,
         review_status: ReviewStatus,
     ) -> None:
+        # Serialize aspect mutation on the stable document row so concurrent
+        # validations for different aspects cannot interleave support writes
+        # or the chunk JSON recomputation. The lock is held until the caller
+        # commits.
+        locked = (
+            await self.session.execute(
+                select(knowledge_documents.c.id)
+                .where(knowledge_documents.c.id == document_id)
+                .with_for_update()
+            )
+        ).first()
+        if locked is None:
+            raise ValueError("enrichment evidence document is not available for association")
         normalized_aspects = list(dict.fromkeys(aspects))
         for aspect in normalized_aspects:
             await self.session.execute(
@@ -330,6 +388,14 @@ class KnowledgeRepository(RepositoryBase):
                     ]
                 )
             )
+        committed_rows = (
+            await self.session.execute(
+                select(knowledge_document_aspect_supports.c.aspect).where(
+                    knowledge_document_aspect_supports.c.document_id == document_id
+                )
+            )
+        ).scalars().all()
+        committed_aspects = list(dict.fromkeys(committed_rows))
         chunk_rows = (
             await self.session.execute(
                 select(knowledge_chunks.c.id, knowledge_chunks.c.metadata).where(
@@ -339,14 +405,7 @@ class KnowledgeRepository(RepositoryBase):
         ).mappings().all()
         for row in chunk_rows:
             metadata = dict(row["metadata"] or {})
-            metadata["covered_aspects"] = list(
-                dict.fromkeys(
-                    [
-                        *(metadata.get("covered_aspects") or []),
-                        *normalized_aspects,
-                    ]
-                )
-            )
+            metadata["covered_aspects"] = committed_aspects
             await self.session.execute(
                 update(knowledge_chunks)
                 .where(knowledge_chunks.c.id == row["id"])
@@ -366,8 +425,13 @@ class KnowledgeRepository(RepositoryBase):
         answerability_status: str,
         judge_confidence: float,
         validation_metadata: dict[str, object],
-        document_ids: list[UUID] | None = None,
     ) -> None:
+        """Create the validation run without associating documents.
+
+        Document associations are inserted separately by
+        ``add_enrichment_validation_evidence`` under the Phase B document
+        lock. Repository methods never commit; the caller owns the commit.
+        """
         await self.session.execute(
             pg_insert(enrichment_validation_runs)
             .values(
@@ -385,22 +449,32 @@ class KnowledgeRepository(RepositoryBase):
             .on_conflict_do_nothing(index_elements=[enrichment_validation_runs.c.id])
         )
 
-        if document_ids:
-            for document_id in dict.fromkeys(document_ids):
-                await self.session.execute(
-                    pg_insert(enrichment_validation_evidence)
-                    .values(
-                        id=uuid4(),
-                        validation_run_id=validation_id,
-                        document_id=document_id,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=[
-                            enrichment_validation_evidence.c.validation_run_id,
-                            enrichment_validation_evidence.c.document_id,
-                        ]
-                    )
-                )
+    async def add_enrichment_validation_evidence(
+        self,
+        *,
+        validation_id: UUID,
+        document_id: UUID,
+    ) -> None:
+        """Insert one idempotent validation-document association.
+
+        Uses the existing unique constraint so a replayed Phase B never
+        duplicates the row. Repository methods never commit; the caller owns
+        the commit.
+        """
+        await self.session.execute(
+            pg_insert(enrichment_validation_evidence)
+            .values(
+                id=uuid4(),
+                validation_run_id=validation_id,
+                document_id=document_id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    enrichment_validation_evidence.c.validation_run_id,
+                    enrichment_validation_evidence.c.document_id,
+                ]
+            )
+        )
 
     async def mark_validated_claim_index_complete(self, document_id: UUID) -> None:
         result = await self.session.execute(
@@ -442,6 +516,33 @@ class KnowledgeRepository(RepositoryBase):
         chunks: dict[UUID, KnowledgeChunk] = {
             row.id: _row_to_chunk(row._mapping) for row in rows
         }
+        source_ids = {
+            chunk.source_id for chunk in chunks.values() if chunk.source_id is not None
+        }
+        validation_status_by_source: dict[UUID, str] = {}
+        if source_ids:
+            source_rows = (
+                await self.session.execute(
+                    select(
+                        knowledge_sources.c.id,
+                        knowledge_sources.c.validation_status,
+                    ).where(knowledge_sources.c.id.in_(source_ids))
+                )
+            ).mappings().all()
+            validation_status_by_source = {
+                row["id"]: row["validation_status"] for row in source_rows
+            }
+        for chunk in chunks.values():
+            if chunk.source_id in validation_status_by_source:
+                chunk = chunk.model_copy(
+                    update={
+                        "metadata": {
+                            **chunk.metadata,
+                            "validation_status": validation_status_by_source[chunk.source_id],
+                        }
+                    }
+                )
+                chunks[chunk.id] = chunk
         enrichment_doc_ids: set[UUID] = set()
         enrichment_chunk_ids: list[UUID] = []
         for chunk_id, chunk in chunks.items():

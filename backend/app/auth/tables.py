@@ -564,6 +564,64 @@ sa.Index(
     enrichment_validation_evidence.c.validation_run_id,
 )
 
+enrichment_telemetry_observations = sa.Table(
+    "enrichment_telemetry_observations",
+    metadata,
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("policy_label", sa.String(length=40), nullable=False),
+    sa.Column("lifecycle_outcome", sa.String(length=20), nullable=False),
+    sa.Column("acquisition_avoided", sa.Boolean(), nullable=False),
+    sa.Column("local_covered_count", sa.Integer(), nullable=False),
+    sa.Column("final_covered_count", sa.Integer(), nullable=False),
+    sa.Column("coverage_gain", sa.Integer(), nullable=False),
+    sa.Column("accepted_aspect_count", sa.Integer(), nullable=False),
+    sa.Column("search_count", sa.Integer(), nullable=False),
+    sa.Column("duration_seconds", sa.Float(), nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+    ),
+    sa.CheckConstraint(
+        "policy_label IN ('1', 'unsupported')",
+        name="ck_enrichment_telemetry_policy_label",
+    ),
+    sa.CheckConstraint(
+        "lifecycle_outcome IN ('complete', 'partial', 'failed')",
+        name="ck_enrichment_telemetry_lifecycle_outcome",
+    ),
+    sa.CheckConstraint(
+        "local_covered_count >= 0 AND local_covered_count <= 100",
+        name="ck_enrichment_telemetry_local_covered_count",
+    ),
+    sa.CheckConstraint(
+        "final_covered_count >= 0 AND final_covered_count <= 100",
+        name="ck_enrichment_telemetry_final_covered_count",
+    ),
+    sa.CheckConstraint(
+        "coverage_gain >= -100 AND coverage_gain <= 100",
+        name="ck_enrichment_telemetry_coverage_gain",
+    ),
+    sa.CheckConstraint(
+        "accepted_aspect_count >= 0 AND accepted_aspect_count <= 100",
+        name="ck_enrichment_telemetry_accepted_aspect_count",
+    ),
+    sa.CheckConstraint(
+        "search_count >= 0 AND search_count <= 100",
+        name="ck_enrichment_telemetry_search_count",
+    ),
+    sa.CheckConstraint(
+        "duration_seconds >= 0 AND duration_seconds < 1.7976931348623157e308",
+        name="ck_enrichment_telemetry_duration_seconds",
+    ),
+)
+
 sa.Index(
     "ix_application_jobs_processing_lease_expires",
     application_jobs.c.status,

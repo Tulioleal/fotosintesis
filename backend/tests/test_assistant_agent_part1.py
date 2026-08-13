@@ -115,6 +115,12 @@ def test_answerability_mapping_preserves_explicit_judge_contract() -> None:
     assert result.confidence == 0.64
 
 def test_validated_answerability_requires_explicit_source_support() -> None:
+    from app.assistant.semantic_coverage import (
+        CoverageThresholds,
+        SemanticEvidence,
+        SemanticSourceEvidence,
+    )
+
     result = _validated_answerability(
         AnswerabilityResult(
             status="full",
@@ -124,14 +130,19 @@ def test_validated_answerability_requires_explicit_source_support() -> None:
             confidence=0.9,
         ),
         requested_aspects=["watering_frequency_or_trigger"],
-        source_metadata=[
-            {
-                "title": "Trusted watering guide",
-                "url": "https://example.org/watering",
-                "domain": "example.org",
-                "evidence_type": "live_web",
-            }
-        ],
+        evidence=SemanticEvidence(
+            sources=(
+                SemanticSourceEvidence(
+                    text="Water when the top inch of soil feels dry.",
+                    metadata={
+                        "url": "https://example.org/watering",
+                        "domain": "example.org",
+                        "validation_status": "trusted",
+                    },
+                ),
+            ),
+        ),
+        thresholds=CoverageThresholds(default=0.75, safety=0.85, strong_full=0.30),
     )
 
     assert result.status == "insufficient"

@@ -145,11 +145,26 @@ def get_current_enrichment_policy() -> EnrichmentPolicy:
     )
 
 
+def enrichment_policy_label(version: object) -> str:
+    """Return the closed telemetry label for a policy version.
+
+    Released policy 1 renders as ``"1"``; unknown, malformed, or boolean
+    values render as ``"unsupported"``. When future policies are released,
+    their labels and the migration check constraint on
+    ``enrichment_telemetry_observations.policy_label`` must be updated
+    together.
+    """
+    if type(version) is int and version in RELEASED_POLICY_FINGERPRINTS:
+        return str(version)
+    return "unsupported"
+
+
 __all__ = [
     "CURRENT_ENRICHMENT_POLICY_VERSION",
     "ENRICHMENT_POLICIES",
     "ENRICHMENT_POLICY_V1",
     "EnrichmentPolicy",
+    "enrichment_policy_label",
     "get_current_enrichment_policy",
     "get_enrichment_policy",
     "policy_change_requires_version_bump",

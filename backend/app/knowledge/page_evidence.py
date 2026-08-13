@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 from dataclasses import dataclass
@@ -245,13 +244,10 @@ def _log_page_fetch(
     elapsed_seconds: float,
     error_type: str | None = None,
 ) -> None:
-    result = evidence.result
     logger.info(
         "trusted page evidence fetch completed",
         extra={
             "ctx_trace_id": get_trace_id(),
-            "ctx_source_domain": result.source_domain,
-            "ctx_url_hash": hashlib.sha256(result.url.encode("utf-8")).hexdigest()[:16],
             "ctx_fetch_status": evidence.fetch_status,
             "ctx_fetch_error_category": evidence.fetch_error_category,
             "ctx_error_type": error_type,

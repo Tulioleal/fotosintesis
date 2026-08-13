@@ -10,13 +10,27 @@ from app.assistant.semantic_coverage import (
     CoverageThresholds,
     SemanticCoverageService,
     SemanticEvidence,
+    SemanticSourceEvidence,
 )
-
 
 THRESHOLDS = CoverageThresholds(default=0.75, safety=0.85, strong_full=0.30)
 WATERING = RequiredAspect.watering_frequency_or_trigger
 LIGHT = RequiredAspect.light_exposure
 PET_SAFETY = RequiredAspect.toxicity_pet_safety
+
+
+def _packaged(
+    text: str,
+    metadata: tuple[dict[str, object], ...],
+    *,
+    eligible: frozenset[str] = frozenset({"trusted"}),
+) -> SemanticEvidence:
+    return SemanticEvidence(
+        sources=tuple(
+            SemanticSourceEvidence(text=text, metadata=dict(item)) for item in metadata
+        ),
+        eligible_validation_statuses=frozenset(eligible),
+    )
 
 
 def _support(aspect: RequiredAspect, quote: str = "Direct source evidence.") -> dict[str, object]:
@@ -30,12 +44,18 @@ def _support(aspect: RequiredAspect, quote: str = "Direct source evidence.") -> 
 
 
 def _evidence(
-    aspects: list[RequiredAspect], text: str = "Direct source evidence."
+    aspects: list[RequiredAspect],
+    text: str = "Direct source evidence.",
+    *,
+    validation_status: str | None = "trusted",
 ) -> SemanticEvidence:
-    return SemanticEvidence(
-        text,
-        tuple({"url": f"https://example.org/{aspect.value}"} for aspect in aspects),
-    )
+    metadata: list[dict[str, object]] = []
+    for aspect in aspects:
+        item: dict[str, object] = {"url": f"https://example.org/{aspect.value}"}
+        if validation_status is not None:
+            item["validation_status"] = validation_status
+        metadata.append(item)
+    return  _packaged(text, tuple(metadata))
 
 
 def _result(
@@ -282,7 +302,7 @@ async def test_semantic_wording_reaches_judge_without_deterministic_gate(
         return _evidence([WATERING], evidence)
 
     async def judge(request):
-        assert request.local_evidence.text == evidence
+        assert request.local_evidence.combined_text == evidence
         result = _result("full", [WATERING])
         return AnswerabilityResult(
             status=result.status,
@@ -307,29 +327,63 @@ async def test_semantic_wording_reaches_judge_without_deterministic_gate(
     ("evidence", "support", "expected"),
     [
         (
-            SemanticEvidence(
+             _packaged(
                 "Direct source evidence.",
-                ({"url": "https://example.org/watering_frequency_or_trigger"},),
+                (
+                    {
+                        "url": "https://example.org/watering_frequency_or_trigger",
+                        "validation_status": "trusted",
+                    },
+                ),
             ),
             _support(WATERING, "Not in the supplied evidence."),
-            frozenset(),
+            frozenset({WATERING}),
         ),
         (
-            SemanticEvidence(
+             _packaged(
                 "Direct source evidence.",
-                ({"url": "https://different.example/source"},),
+                (
+                    {
+                        "url": "https://different.example/source",
+                        "validation_status": "trusted",
+                    },
+                ),
             ),
             _support(WATERING),
             frozenset(),
         ),
         (
-            SemanticEvidence(
+             _packaged(
                 "Direct   source\n evidence.",
-                ({"url": "https://example.org/watering_frequency_or_trigger"},),
+                (
+                    {
+                        "url": "https://example.org/watering_frequency_or_trigger",
+                        "validation_status": "trusted",
+                    },
+                ),
             ),
             _support(WATERING, "Direct source evidence."),
             frozenset({WATERING}),
         ),
+        (
+             _packaged(
+                "Direct source evidence.",
+                (
+                    {
+                        "url": "https://example.org/watering_frequency_or_trigger",
+                        "validation_status": "untrusted",
+                    },
+                ),
+            ),
+            _support(WATERING, "Direct source evidence."),
+            frozenset(),
+        ),
+    ],
+    ids=[
+        "paraphrased-quote",
+        "unknown-source",
+        "normalized-whitespace",
+        "untrusted-source",
     ],
 )
 async def test_enrichment_coverage_binds_support_to_supplied_evidence(
@@ -361,6 +415,216 @@ async def test_enrichment_coverage_binds_support_to_supplied_evidence(
     assert local.local_covered_aspects == expected
 
 
+@pytest.mark.parametrize(
+    ("evidence_text", "quote"),
+    [
+        (
+            "Riegue cuando el sustrato se haya secado por completo en la superficie.",
+            "Esperar a que el sustrato esté seco antes de regar.",
+        ),
+        (
+            "Keep the soil evenly moist and never let the plant sit in standing water.",
+            "Water only when the top layer of soil feels dry to the touch.",
+        ),
+        (
+            "Brûlez les feuilles en plein soleil direct; préférez une lumière vive filtrée.",
+            "La luz solar directa puede dañar las hojas.",
+        ),
+    ],
+    ids=["spanish-paraphrase", "english-synonym-phrasing", "cross-language-summary"],
+)
+async def test_enrichment_binds_paraphrased_and_multilingual_judge_support(
+    evidence_text: str, quote: str
+) -> None:
+    """Final judge support stays source-bound even when the quote is not an exact
+    substring of the supplied evidence text (no lexical coverage gate)."""
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        evidence_text,
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+
+    async def retrieve(required):
+        return evidence
+
+    async def judge(request):
+        return AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=[WATERING.value],
+            source_support=[_support(WATERING, quote)],
+            confidence=0.95,
+        )
+
+    local = await service.evaluate_local(
+        required_aspects=[WATERING],
+        retrieve=retrieve,
+        judge=judge,
+        thresholds=THRESHOLDS,
+    )
+
+    assert local.local_covered_aspects == frozenset({WATERING})
+    assert local.answerability.source_support[0]["evidence_quote"] == quote
+
+
+@pytest.mark.parametrize(
+    ("support", "expected"),
+    [
+        (
+            {"claim": "", "source_urls": ["https://example.org/watering_frequency_or_trigger"], "covered_aspects": [WATERING.value], "evidence_quote": "quote", "confidence": 0.95},
+            frozenset(),
+        ),
+        (
+            {"claim": "Claim.", "source_urls": ["https://example.org/watering_frequency_or_trigger"], "covered_aspects": [WATERING.value], "evidence_quote": "   ", "confidence": 0.95},
+            frozenset(),
+        ),
+        (
+            {"claim": "Claim.", "source_urls": "not-a-list", "covered_aspects": [WATERING.value], "evidence_quote": "quote", "confidence": 0.95},
+            frozenset(),
+        ),
+        (
+            {"claim": "Claim.", "source_urls": ["https://example.org/watering_frequency_or_trigger"], "covered_aspects": "not-a-list", "evidence_quote": "quote", "confidence": 0.95},
+            frozenset(),
+        ),
+        (
+            {"claim": "Claim.", "source_urls": ["https://example.org/watering_frequency_or_trigger"], "covered_aspects": ["unknown_aspect"], "evidence_quote": "quote", "confidence": 0.95},
+            frozenset(),
+        ),
+        (
+            {"claim": "Claim.", "source_urls": ["https://example.org/watering_frequency_or_trigger"], "covered_aspects": [WATERING.value], "evidence_quote": "quote", "confidence": 0.95},
+            frozenset({WATERING}),
+        ),
+    ],
+    ids=["empty-claim", "blank-quote", "malformed-urls", "malformed-aspects", "non-canonical-aspect", "valid"],
+)
+async def test_enrichment_binding_rejects_malformed_or_off_registry_support(
+    support: dict[str, object], expected: frozenset[RequiredAspect]
+) -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+
+    async def retrieve(required):
+        return evidence
+
+    async def judge(request):
+        return AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=[WATERING.value],
+            source_support=[support],
+            confidence=0.95,
+        )
+
+    local = await service.evaluate_local(
+        required_aspects=[WATERING],
+        retrieve=retrieve,
+        judge=judge,
+        thresholds=THRESHOLDS,
+    )
+
+    assert local.local_covered_aspects == expected
+
+
+async def test_enrichment_binding_excludes_unrequested_aspects_from_persistence_eligibility() -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+            {
+                "url": "https://example.org/light_exposure",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+    support = [
+        {
+            "claim": "Source supports watering.",
+            "source_urls": ["https://example.org/watering_frequency_or_trigger"],
+            "covered_aspects": [WATERING.value, LIGHT.value],
+            "evidence_quote": "Direct source evidence.",
+            "confidence": 0.95,
+        }
+    ]
+
+    async def retrieve(required):
+        return evidence
+
+    async def judge(request):
+        return AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=[WATERING.value],
+            source_support=support,
+            confidence=0.95,
+        )
+
+    local = await service.evaluate_local(
+        required_aspects=[WATERING],
+        retrieve=retrieve,
+        judge=judge,
+        thresholds=THRESHOLDS,
+    )
+
+    assert local.local_covered_aspects == frozenset({WATERING})
+    bound = local.answerability.source_support
+    assert len(bound) == 1
+    assert bound[0]["covered_aspects"] == [WATERING.value]
+    assert LIGHT.value not in bound[0]["covered_aspects"]
+
+
+async def test_enrichment_binding_requires_safety_confidence_even_when_quote_matches() -> None:
+    service = SemanticCoverageService()
+    support = _support(PET_SAFETY)
+    support["confidence"] = 0.84
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/toxicity_pet_safety",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+
+    async def retrieve(required):
+        return evidence
+
+    async def judge(request):
+        return AnswerabilityResult(
+            status="full",
+            answerable=True,
+            covered_aspects=[PET_SAFETY.value],
+            source_support=[support],
+            confidence=0.95,
+        )
+
+    local = await service.evaluate_local(
+        required_aspects=[PET_SAFETY],
+        retrieve=retrieve,
+        judge=judge,
+        thresholds=THRESHOLDS,
+    )
+
+    assert local.local_covered_aspects == frozenset()
+
+
 async def test_enrichment_safety_requires_bound_support_confidence() -> None:
     service = SemanticCoverageService()
     support = _support(PET_SAFETY)
@@ -386,3 +650,235 @@ async def test_enrichment_safety_requires_bound_support_confidence() -> None:
     )
 
     assert local.local_covered_aspects == frozenset()
+
+
+def _run_binding_evaluation(service, evidence: SemanticEvidence, support=None):
+    """Evaluate a single support item against the evidence and return covered aspects."""
+    async def _run():
+        async def retrieve(required):
+            return evidence
+
+        async def judge(request):
+            return AnswerabilityResult(
+                status="full",
+                answerable=True,
+                covered_aspects=[WATERING.value],
+                source_support=[support or _support(WATERING)],
+                confidence=0.95,
+            )
+
+        local = await service.evaluate_local(
+            required_aspects=[WATERING],
+            retrieve=retrieve,
+            judge=judge,
+            thresholds=THRESHOLDS,
+        )
+        return local.local_covered_aspects
+
+    import asyncio
+    return asyncio.run(_run())
+
+
+def test_source_binding_rejects_missing_validation_status() -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        ({"url": "https://example.org/watering_frequency_or_trigger"},),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_source_binding_rejects_blank_validation_status() -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "   ",
+            },
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_source_binding_rejects_unknown_validation_status() -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "review_pending",
+            },
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_source_binding_rejects_mixed_trusted_and_missing_status() -> None:
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+            {"url": "https://example.org/watering_frequency_or_trigger"},
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def _run_binding_with_support(service, support: dict[str, object]) -> frozenset[RequiredAspect]:
+    return _run_binding_evaluation(service, _evidence([WATERING]), support=support)
+
+
+def test_source_binding_rejects_multi_url_support() -> None:
+    service = SemanticCoverageService()
+    support = _support(WATERING)
+    support["source_urls"] = [
+        "https://example.org/watering_frequency_or_trigger",
+        "https://example.org/light_exposure",
+    ]
+
+    assert _run_binding_with_support(service, support) == frozenset()
+
+
+def test_source_binding_rejects_blank_url_in_multi_url_support() -> None:
+    service = SemanticCoverageService()
+    support = _support(WATERING)
+    support["source_urls"] = ["", "https://example.org/watering_frequency_or_trigger"]
+
+    assert _run_binding_with_support(service, support) == frozenset()
+
+
+def test_source_binding_rejects_duplicate_package_with_unknown_status() -> None:
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "review_pending",
+            },
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_source_binding_single_support_cannot_cite_two_sources() -> None:
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+            {
+                "url": "https://example.org/light_exposure",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+    support = _support(WATERING)
+    support["source_urls"] = [
+        "https://example.org/watering_frequency_or_trigger",
+        "https://example.org/light_exposure",
+    ]
+
+    assert _run_binding_evaluation(service, evidence, support=support) == frozenset()
+
+
+def test_source_binding_accepts_external_fallback_in_permitted_assistant_flow() -> None:
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "external_fallback",
+            },
+        ),
+        eligible=frozenset({"trusted", "external_fallback"}),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset({WATERING})
+
+
+def test_default_semantic_evidence_rejects_external_fallback() -> None:
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "external_fallback",
+            },
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_normal_rag_rejects_external_fallback() -> None:
+    """Normal assistant RAG evidence is eligible only for ``trusted``; an
+    ``external_fallback`` package must be rejected by the binding layer."""
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "external_fallback",
+            },
+        ),
+        eligible=frozenset({"trusted"}),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+
+
+def test_production_enrichment_rejects_external_fallback() -> None:
+    """Production enrichment constructs evidence eligible only for ``trusted``,
+    so an ``external_fallback`` package must never be accepted downstream."""
+    service = SemanticCoverageService()
+    evidence = _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "external_fallback",
+            },
+        ),
+        eligible=frozenset({"trusted"}),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset()
+    assert _run_binding_evaluation(service, evidence) != frozenset({WATERING})
+
+
+def test_source_binding_accepts_trusted_status() -> None:
+    service = SemanticCoverageService()
+    evidence =  _packaged(
+        "Direct source evidence.",
+        (
+            {
+                "url": "https://example.org/watering_frequency_or_trigger",
+                "validation_status": "trusted",
+            },
+        ),
+    )
+
+    assert _run_binding_evaluation(service, evidence) == frozenset({WATERING})

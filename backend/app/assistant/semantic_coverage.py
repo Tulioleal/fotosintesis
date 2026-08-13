@@ -9,7 +9,6 @@ from app.assistant.care_contracts import EvidenceValidationResult, RequiredAspec
 from app.assistant.graph_shared import AnswerabilityResult
 from app.enrichment.workflow import EnrichmentWorkflowAspects
 
-
 AnswerabilityStatus = Literal["full", "partial", "insufficient", "contradictory"]
 
 
@@ -21,9 +20,37 @@ class CoverageThresholds:
 
 
 @dataclass(frozen=True)
-class SemanticEvidence:
+class SemanticSourceEvidence:
+    """One supplied evidence package keeping source text bound to its metadata.
+
+    ``metadata`` must carry a ``url`` key; the binding layer uses that URL to
+    attach judge support to exactly one supplied source so a support item can
+    never cite an undifferentiated concatenated text blob.
+    """
+
     text: str
-    source_metadata: tuple[Mapping[str, object], ...] = ()
+    metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class SemanticEvidence:
+    """Source-separated evidence with caller-scoped trust eligibility.
+
+    ``eligible_validation_statuses`` is a closed per-caller set: production
+    enrichment and normal assistant RAG construct evidence eligible only for
+    ``trusted``, and only the assistant trusted-first fallback path may
+    construct evidence eligible for ``{"trusted", "external_fallback"}``.
+    ``external_fallback`` is never globally treated as trusted.
+    """
+
+    sources: tuple[SemanticSourceEvidence, ...]
+    eligible_validation_statuses: frozenset[str] = frozenset({"trusted"})
+
+    @property
+    def combined_text(self) -> str:
+        return " ".join(
+            source.text for source in self.sources if source.text.strip()
+        )
 
 
 @dataclass(frozen=True)
@@ -501,13 +528,19 @@ class SemanticCoverageService:
         urls = item.get("source_urls")
         aspects = item.get("covered_aspects")
         quote = item.get("evidence_quote")
+        non_empty_urls = (
+            [url for url in urls if isinstance(url, str) and url.strip()]
+            if isinstance(urls, list)
+            else []
+        )
         return (
             isinstance(item.get("claim"), str)
             and bool(str(item.get("claim")).strip())
             and isinstance(quote, str)
             and bool(quote.strip())
             and isinstance(urls, list)
-            and any(isinstance(url, str) and url.strip() for url in urls)
+            and len(urls) == 1
+            and len(non_empty_urls) == 1
             and isinstance(aspects, list)
             and any(isinstance(aspect, str) and aspect in requested_aspects for aspect in aspects)
         )
@@ -548,26 +581,37 @@ class SemanticCoverageService:
         evidence: SemanticEvidence,
         thresholds: CoverageThresholds,
     ) -> AnswerabilityResult:
-        known_urls = {
-            str(metadata.get("url")).strip()
-            for metadata in evidence.source_metadata
-            if isinstance(metadata.get("url"), str) and str(metadata.get("url")).strip()
-        }
-        evidence_text = cls._normalized_whitespace(evidence.text)
+        packages_by_url: dict[str, list[SemanticSourceEvidence]] = {}
+        for package in evidence.sources:
+            url = str(package.metadata.get("url") or "").strip()
+            if url:
+                packages_by_url.setdefault(url, []).append(package)
+
         bound: list[dict[str, object]] = []
         for item in result.source_support:
             urls = item.get("source_urls")
             quote = item.get("evidence_quote")
             aspects = item.get("covered_aspects")
-            if not isinstance(urls, list) or not isinstance(quote, str) or not isinstance(aspects, list):
+            claim = item.get("claim")
+            if (
+                not isinstance(urls, list)
+                or not isinstance(quote, str)
+                or not quote.strip()
+                or not isinstance(aspects, list)
+                or not isinstance(claim, str)
+                or not claim.strip()
+            ):
                 continue
             matched_urls = [
-                url.strip()
-                for url in urls
-                if isinstance(url, str) and url.strip() in known_urls
+                url.strip() for url in urls if isinstance(url, str) and url.strip()
             ]
-            normalized_quote = cls._normalized_whitespace(quote)
-            if not matched_urls or not normalized_quote or normalized_quote not in evidence_text:
+            if len(urls) != 1 or len(matched_urls) != 1:
+                continue
+            url = matched_urls[0]
+            packages = packages_by_url.get(url)
+            if packages is None or not cls._sources_are_eligible(
+                packages, evidence.eligible_validation_statuses
+            ):
                 continue
             confidence = cls._float_or_zero(item.get("confidence"))
             supported_aspects: list[str] = []
@@ -587,7 +631,7 @@ class SemanticCoverageService:
             if not supported_aspects:
                 continue
             normalized_item = dict(item)
-            normalized_item["source_urls"] = list(dict.fromkeys(matched_urls))
+            normalized_item["source_urls"] = [url]
             normalized_item["covered_aspects"] = list(dict.fromkeys(supported_aspects))
             bound.append(normalized_item)
         return AnswerabilityResult(
@@ -602,19 +646,36 @@ class SemanticCoverageService:
         )
 
     @staticmethod
+    def _sources_are_eligible(
+        packages: Sequence[SemanticSourceEvidence],
+        eligible: frozenset[str],
+    ) -> bool:
+        """Fail closed: every package matching the URL must carry an explicit
+        validation status inside the caller's closed eligibility set. Missing,
+        blank, unknown, or caller-ineligible statuses reject the URL."""
+        if not packages:
+            return False
+        for package in packages:
+            status = package.metadata.get("validation_status")
+            if not isinstance(status, str) or not status.strip():
+                return False
+            if status.strip().casefold() not in eligible:
+                return False
+        return True
+
+    @staticmethod
     def _combined_evidence(
         local: SemanticEvidence, acquired: SemanticEvidence | None
     ) -> SemanticEvidence:
         if acquired is None:
             return local
         return SemanticEvidence(
-            text=" ".join(part for part in (local.text, acquired.text) if part.strip()),
-            source_metadata=local.source_metadata + acquired.source_metadata,
+            sources=local.sources + acquired.sources,
+            eligible_validation_statuses=(
+                local.eligible_validation_statuses
+                & acquired.eligible_validation_statuses
+            ),
         )
-
-    @staticmethod
-    def _normalized_whitespace(value: str) -> str:
-        return " ".join(value.split())
 
     @staticmethod
     def _is_safety_sensitive(aspect: RequiredAspect) -> bool:
@@ -674,5 +735,6 @@ __all__ = [
     "SemanticEvidence",
     "SemanticJudge",
     "SemanticJudgeRequest",
+    "SemanticSourceEvidence",
     "semantic_coverage_service",
 ]

@@ -79,6 +79,24 @@ not recoverable by image rollback. Two options:
    migration. This is the only path that does not require a database
    restore but it requires a code change.
 
+## Migration 0012: durable enrichment telemetry
+
+Migration `0012_durable_enrichment_telemetry` performs no historical
+backfill. Routine application rollback must not downgrade migration 0012;
+roll back with a telemetry-compatible prior application image or a forward-fix
+migration instead.
+
+The Alembic downgrade for 0012 exists for controlled development/test
+teardown only. Downgrading deletes durable telemetry history and any durable
+metrics created after deployment, so any such downgrade requires explicit
+operator approval. The 0012 downgrade never removes knowledge documents,
+chunks, aspect supports, embeddings, or vector nodes.
+
+After migration 0012 is installed, PostgreSQL enforces observation validity,
+uniqueness, immutability, and existence for every new terminal enrichment
+transition: a terminal enrichment job cannot commit without exactly one
+matching observation, and historical jobs are neither backfilled nor rejected.
+
 The deploy workflow does not attempt to undo a migration. It always
 runs `alembic upgrade head`. Operators must pick restore or forward-fix
 based on the data loss tolerance for the affected environment.

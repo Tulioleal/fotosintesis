@@ -1,14 +1,14 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
+from typing import Literal
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
-from pydantic import BaseModel, ConfigDict
-from typing import Literal
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.settings import Settings
+from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
 from app.jobs.repository import JobRepository, canonical_idempotency_key
 from app.jobs.schemas import (
     LEGACY_V1_INGESTION_POLICY_VERSION,
@@ -17,11 +17,10 @@ from app.jobs.schemas import (
     IngestValidatedClaimsPayload,
     JobFailureCategory,
     JobStatus,
-    ReadJobResult,
     JobType,
+    ReadJobResult,
 )
 from app.observability.metrics import MetricsRegistry
-from app.jobs.handler import HandlerRegistry, JobHandler, JobHandlerResult
 
 
 class _PayloadV1(BaseModel):
@@ -80,9 +79,9 @@ def test_status_deserialization_rejects_corrupt_persisted_metadata() -> None:
         "status": JobStatus.failed.value,
         "attempt_count": 1,
         "max_attempts": 3,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-        "completed_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
+        "updated_at": datetime.now(UTC),
+        "completed_at": datetime.now(UTC),
         "last_error": {"category": "malformed-category", "retryable": False},
         "result": None,
     }
@@ -166,6 +165,7 @@ async def test_false_lease_renewal_immediately_cancels_active_handler(monkeypatc
     from app.jobs.worker import Worker, _ExecutionState
 
     cancelled = asyncio.Event()
+    started = asyncio.Event()
 
     class _Session:
         async def __aenter__(self):
@@ -192,6 +192,7 @@ async def test_false_lease_renewal_immediately_cancels_active_handler(monkeypatc
             raise TimeoutError
 
     async def active_handler():
+        started.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -215,6 +216,7 @@ async def test_false_lease_renewal_immediately_cancels_active_handler(monkeypatc
     state.completed = _RenewalDue()
     handler_task = asyncio.create_task(active_handler())
     worker._handler_tasks[state.job_id] = handler_task
+    await asyncio.wait_for(started.wait(), timeout=1)
 
     await asyncio.wait_for(worker._renew_lease_loop(state=state), timeout=1)
     await asyncio.wait_for(cancelled.wait(), timeout=1)
@@ -272,14 +274,46 @@ def test_required_enrichment_worker_contract_is_registered() -> None:
     )
 
     _validate_required_contracts(
-        registry=registry,
+        get_payload_model=registry.get_payload_model,
         configured="enrich_confirmed_plant:1",
     )
     with pytest.raises(RuntimeError, match="not registered"):
         _validate_required_contracts(
-            registry=registry,
+            get_payload_model=registry.get_payload_model,
             configured="enrich_confirmed_plant:2",
         )
+
+
+def test_production_payload_catalog_resolves_without_handlers() -> None:
+    from app.jobs.handlers.register import (
+        PRODUCTION_PAYLOAD_MODELS,
+        get_production_payload_model,
+    )
+    from app.jobs.schemas import (
+        EnrichConfirmedPlantPayload,
+        IngestValidatedClaimsPayload,
+        JobPayloadVersion,
+        JobType,
+    )
+
+    assert get_production_payload_model(
+        JobType.enrich_confirmed_plant.value,
+        JobPayloadVersion.ENRICH_CONFIRMED_PLANT_V1,
+    ) is EnrichConfirmedPlantPayload
+    assert get_production_payload_model(
+        JobType.ingest_validated_claims.value,
+        JobPayloadVersion.INGEST_VALIDATED_CLAIMS_V1,
+    ) is IngestValidatedClaimsPayload
+    assert get_production_payload_model(JobType.enrich_confirmed_plant.value, 2) is None
+    assert get_production_payload_model("unknown_job_type", 1) is None
+    assert (
+        JobPayloadVersion.ENRICH_CONFIRMED_PLANT_V1
+        in PRODUCTION_PAYLOAD_MODELS[JobType.enrich_confirmed_plant.value]
+    )
+    assert (
+        JobPayloadVersion.INGEST_VALIDATED_CLAIMS_V1
+        in PRODUCTION_PAYLOAD_MODELS[JobType.ingest_validated_claims.value]
+    )
 
 
 def _valid_payload_data() -> dict:

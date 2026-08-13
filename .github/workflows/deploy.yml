@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: manual
+      paused_deployment:
+        description: "Approved paused deployment: producer and worker both disabled for read-only pause health."
+        required: false
+        type: boolean
+        default: false
     outputs:
       backend_smoke_result:
         description: "Result of the in-cluster backend health check."
@@ -61,6 +66,11 @@ on:
         description: "Full 40-character Git commit SHA of the frontend image. Must be a 40-character Git commit SHA, never `latest`."
         required: true
         type: string
+      paused_deployment:
+        description: "Approved paused deployment: producer and worker both disabled for read-only pause health."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -765,6 +775,17 @@ jobs:
               --dry-run=server \
               -f ".generated/k8s/$ENVIRONMENT/rendered/$manifest"
           done
+      - name: Validate durable job switch combination
+        env:
+          JOBS_PRODUCER_ENABLED: ${{ env.JOBS_PRODUCER_ENABLED }}
+          JOBS_WORKER_ENABLED: ${{ env.JOBS_WORKER_ENABLED }}
+          PAUSED_DEPLOYMENT: ${{ inputs.paused_deployment }}
+        run: |
+          set -euo pipefail
+          sh deploy/scripts/validate-job-switches.sh \
+            "$JOBS_PRODUCER_ENABLED" \
+            "$JOBS_WORKER_ENABLED" \
+            "$PAUSED_DEPLOYMENT"
       - name: Apply migrations before backend/worker rollout
         env:
           ENVIRONMENT: ${{ inputs.environment }}
@@ -813,6 +834,7 @@ jobs:
             -n "$TF_OUT_NAMESPACE"
       - id: worker-readiness
         name: Confirm compatible enrichment worker readiness
+        if: ${{ !inputs.paused_deployment }}
         env:
           TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
         run: |
@@ -839,6 +861,17 @@ jobs:
           )"
           if [ "$worker_contract" != "enrich_confirmed_plant:1" ]; then
             echo "::error::Worker does not require enrich_confirmed_plant payload version 1." >&2
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          worker_enabled="$(
+            kubectl get deployment/fotosintesis-worker \
+              --namespace "$TF_OUT_NAMESPACE" \
+              -o jsonpath='{.spec.template.spec.containers[?(@.name=="worker")].env[?(@.name=="JOBS_WORKER_ENABLED")].value}'
+          )"
+          if [ "$worker_enabled" != "true" ]; then
+            echo "::error::Worker JOBS_WORKER_ENABLED must be true for an active deployment." >&2
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit 1
           fi

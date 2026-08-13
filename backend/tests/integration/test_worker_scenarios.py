@@ -14,7 +14,7 @@ import signal
 import socket
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -42,6 +42,15 @@ from app.jobs.schemas import (
     ReadJobResult,
 )
 from app.jobs.worker import Worker
+
+from ._enrichment_helpers import (
+    PAGE_URL,
+    REQUIRED,
+    WATERING,
+    provider_environment,
+    vector_index_factory,
+    vector_store,
+)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -149,6 +158,7 @@ async def _job_status(pg_session_factory, job_id: UUID) -> dict:
                     application_jobs.c.status,
                     application_jobs.c.attempt_count,
                     application_jobs.c.last_error,
+                    application_jobs.c.result,
                     application_jobs.c.lease_owner,
                     application_jobs.c.lease_token,
                     application_jobs.c.lease_expires_at,
@@ -605,9 +615,9 @@ class TestWorkerPolling:
                     status=JobStatus.pending.value,
                     idempotency_key=f"unsupp-{uuid4()}",
                     max_attempts=3,
-                    available_at=datetime.now(timezone.utc),
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
+                    available_at=datetime.now(UTC),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
                 )
             )
             await s.commit()
@@ -918,23 +928,16 @@ class TestWorkerPolling:
                 .values(
                     lease_owner="replacement-worker",
                     lease_token=replacement_token,
-                    lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+                    lease_expires_at=datetime.now(UTC) + timedelta(seconds=5),
                 )
             )
             await session.commit()
 
-        for _ in range(40):
-            state = worker._executions.get(str(job_id))
-            if state is not None and state.lease_lost:
-                break
-            await asyncio.sleep(0.05)
-        else:
-            release.set()
-            worker.stop()
-            await task
-            pytest.fail("worker did not detect lease loss")
-
-        await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+        # Lease loss is detected through the durable lease token within one
+        # renewal interval, cancelling the stale execution. The private
+        # execution state must not be required for verification.
+        await asyncio.wait_for(cancelled.wait(), timeout=3.0)
+        await asyncio.sleep(0)
         worker.stop()
         await task
 
@@ -942,15 +945,17 @@ class TestWorkerPolling:
         assert row["status"] == JobStatus.processing.value
         assert row["lease_owner"] == "replacement-worker"
         assert row["lease_token"] == replacement_token
-        lost_record = next(
+        assert row["result"] is None
+        lost_records = [
             record
             for record in caplog.records
-            if record.message in {"job_lease_lost", "worker_lease_lost"}
-        )
-        assert lost_record.__dict__["ctx_job_type"] == JobType.ingest_validated_claims.value
-        assert lost_record.__dict__["ctx_attempt"] == 1
-        assert lost_record.__dict__["ctx_worker_identity"] == worker.owner
-        assert lost_record.__dict__["ctx_operation"] in {"renewal", "execution"}
+            if record.message == "worker_lease_lost"
+        ]
+        assert len(lost_records) == 1
+        assert lost_records[0].__dict__["ctx_job_type"] == JobType.ingest_validated_claims.value
+        assert lost_records[0].__dict__["ctx_attempt"] == 1
+        assert lost_records[0].__dict__["ctx_worker_identity"] == worker.owner
+        assert lost_records[0].__dict__["ctx_operation"] == "renewal"
         assert "SECRET_LEASE_TOKEN" not in " ".join(
             str(record.__dict__) for record in caplog.records
         )
@@ -960,11 +965,23 @@ class TestWorkerPolling:
         assert metrics.job_outcomes.get(
             (JobType.ingest_validated_claims.value, "cancelled"), 0
         ) == 0
+        for status in (
+            JobStatus.complete.value,
+            JobStatus.partial.value,
+            JobStatus.failed.value,
+            "retry_scheduled",
+        ):
+            assert metrics.job_outcomes.get(
+                (JobType.ingest_validated_claims.value, status), 0
+            ) == 0
         histogram = metrics.job_duration_histograms[
             (JobType.ingest_validated_claims.value, "lease_lost")
         ]
         assert histogram.total_count == 1
         assert histogram.total_sum >= 0
+        # Cleanup is prompt: no private execution state is retained solely
+        # for observability after the stale execution is cancelled.
+        assert worker.active_executions() == []
 
     async def test_finalization_lease_loss_records_one_bounded_outcome(
         self, pg_session_factory, caplog
@@ -990,7 +1007,7 @@ class TestWorkerPolling:
                         .values(
                             lease_owner="replacement-worker",
                             lease_token=replacement_token,
-                            lease_expires_at=datetime.now(timezone.utc)
+                            lease_expires_at=datetime.now(UTC)
                             + timedelta(seconds=30),
                         )
                     )
@@ -1125,6 +1142,7 @@ class TestShutdownDuringClaim:
     ):
         import logging
         from unittest.mock import patch
+
         from sqlalchemy.ext.asyncio import AsyncSession
 
         monkeypatch.setenv("JOBS_BATCH_SIZE", "10")
@@ -1503,7 +1521,7 @@ class TestWorkerShutdown:
 
         lease_wait = max(
             0.0,
-            (row["lease_expires_at"] - datetime.now(timezone.utc)).total_seconds(),
+            (row["lease_expires_at"] - datetime.now(UTC)).total_seconds(),
         )
         await asyncio.sleep(lease_wait + 0.05)
         _FakeHandler._SCRIPT = [
@@ -1536,3 +1554,169 @@ class TestWorkerShutdown:
         assert recovered_row["status"] == JobStatus.complete.value
         assert recovered_row["attempt_count"] == 2
         assert len(completing_handler.calls) == 1
+
+
+class TestRenewalFinalizationRace:
+    @pytest.mark.parametrize(
+        ("outcome", "pages"),
+        [
+            ("complete", {PAGE_URL: tuple(REQUIRED)}),
+            ("partial", {PAGE_URL: (WATERING,)}),
+            ("failed", {}),
+        ],
+        ids=["complete", "partial", "failed"],
+    )
+    async def test_terminal_finalization_never_emits_lease_loss(
+        self,
+        pg_session_factory,
+        vector_store,
+        vector_index_factory,
+        provider_environment,
+        monkeypatch,
+        caplog,
+        outcome,
+        pages,
+    ):
+        """Force the renewal/finalization race: finalization holds the
+        transition lock and commits, then renewal acquires the lock afterward.
+        A successfully finalized handler must never emit lease loss."""
+        import logging
+
+        from app.core.settings import get_settings
+        from app.jobs.handler import HandlerRegistry
+        from app.jobs.handlers.enrich_confirmed_plant import (
+            EnrichConfirmedPlantHandler,
+        )
+        from app.jobs.schemas import EnrichConfirmedPlantPayload, JobType
+        from app.observability.metrics import MetricsRegistry
+
+        from ._enrichment_helpers import (
+            _confirmed_payload,
+            _page,
+            _production_service,
+            _providers,
+            DeterministicJudgeProvider,
+            DeterministicSearchProvider,
+        )
+        from app.auth.tables import enrichment_telemetry_observations
+
+        monkeypatch.setenv("JOBS_WORKER_ENABLED", "true")
+        monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "false")
+        monkeypatch.setenv("JOBS_POLL_INTERVAL_SECONDS", "0.02")
+        monkeypatch.setenv("JOBS_LEASE_DURATION_SECONDS", "300")
+        monkeypatch.setenv("JOBS_LEASE_RENEWAL_INTERVAL_SECONDS", "0.05")
+        monkeypatch.setenv("JOBS_BACKOFF_BASE_SECONDS", "0.05")
+        monkeypatch.setenv("JOBS_METRICS_PORT", "0")
+        get_settings.cache_clear()
+        settings = get_settings()
+
+        payload = await _confirmed_payload(pg_session_factory)
+        # The worker dispatches from the job's stored payload, so it must be
+        # the complete payload; the fixture's job row only holds the run id.
+        async with pg_session_factory() as session:
+            await session.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id == payload.run_id)
+                .values(
+                    status="pending",
+                    attempt_count=0,
+                    payload=payload.model_dump(mode="json"),
+                )
+            )
+            await session.commit()
+        providers = _providers(
+            judge=DeterministicJudgeProvider(pages=pages),
+            search=DeterministicSearchProvider(page=_page()),
+        )
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.enrich_confirmed_plant.value,
+            EnrichConfirmedPlantHandler(
+                _production_service(
+                    pg_session_factory, providers, settings=settings
+                )
+            ),
+            payload_models={1: EnrichConfirmedPlantPayload},
+        )
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+            settings=settings,
+            metrics=metrics,
+        )
+
+        original = Worker._finalize_job_locked
+        finalization_entered = asyncio.Event()
+        finalization_release = asyncio.Event()
+
+        async def gated_finalize(
+            worker_self,
+            *,
+            state,
+            result,
+            attempt_count,
+            max_attempts,
+            duration,
+        ):
+            finalization_entered.set()
+            await finalization_release.wait()
+            return await original(
+                worker_self,
+                state=state,
+                result=result,
+                attempt_count=attempt_count,
+                max_attempts=max_attempts,
+                duration=duration,
+            )
+
+        worker._finalize_job_locked = gated_finalize.__get__(worker)  # type: ignore[method-assign]
+        caplog.set_level(logging.INFO, logger="app.jobs.worker")
+
+        task = asyncio.create_task(worker.start())
+        try:
+            await asyncio.wait_for(finalization_entered.wait(), timeout=15)
+            # The renewal timeout elapses while finalization holds the lock.
+            await asyncio.sleep(0.15)
+            # Finalization commits and sets the terminal flags.
+            finalization_release.set()
+            async with asyncio.timeout(15):
+                while True:
+                    async with pg_session_factory() as session:
+                        status = await session.scalar(
+                            select(application_jobs.c.status).where(
+                                application_jobs.c.id == payload.run_id
+                            )
+                        )
+                    if status == outcome:
+                        break
+                    await asyncio.sleep(0.02)
+        finally:
+            worker.stop()
+            await task
+
+        row = await _job_status(pg_session_factory, payload.run_id)
+        assert row["status"] == outcome
+        assert row["lease_owner"] is None
+
+        lost_records = [
+            record
+            for record in caplog.records
+            if record.message == "worker_lease_lost"
+        ]
+        assert lost_records == []
+        assert metrics.job_outcomes.get(
+            (JobType.enrich_confirmed_plant.value, "lease_lost"), 0
+        ) == 0
+        assert metrics.job_outcomes[(JobType.enrich_confirmed_plant.value, outcome)] == 1
+        assert metrics.job_outcomes.get(
+            (JobType.enrich_confirmed_plant.value, "cancelled"), 0
+        ) == 0
+
+        async with pg_session_factory() as session:
+            observations = (
+                await session.execute(
+                    select(enrichment_telemetry_observations.c.lifecycle_outcome)
+                )
+            ).scalars().all()
+        assert list(observations) == [outcome]

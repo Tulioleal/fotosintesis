@@ -49,7 +49,6 @@ The worker emits JSON structured logs with these event names:
 | `worker_cancellation_cleanup_timeout` | A cancellation-resistant handler exceeded the one-second cleanup allowance |
 | `worker_signal_handlers_registered` | Signal handlers installed |
 | `worker_handler_exception` | Handler raised an unexpected exception |
-| `worker_lease_lost_during_execution` | Lease lost during handler execution |
 | `worker_lease_lost` | Lease ownership lost (operation in `ctx_operation`: `renewal`, `complete`, `partial`, `retry`, `fail`) |
 | `worker_lease_renewal_error` | Lease renewal failed due to a database transient |
 | `worker_dependency_validation_failed` | An enabled worker cannot initialize a registered handler dependency |
@@ -58,7 +57,7 @@ The worker emits JSON structured logs with these event names:
 | `worker_disabled_by_configuration` | Consumption is disabled; the process remains alive and checks database connectivity |
 | `worker_entrypoint_starting` | Worker entrypoint initializing |
 | `job_claimed` | A job attempt was claimed, including attempt, worker identity, and bounded recovery status |
-| `job_lease_renewed` / `job_lease_lost` | Lease renewal succeeded or ownership was lost |
+| `job_lease_renewed` / `worker_lease_lost` | Lease renewal succeeded or ownership was lost |
 | `job_stale_recovered` | An expired lease was recovered as `lease_expired` or `attempts_exhausted` |
 | `job_completed` / `job_partial` | An attempt completed, including duration and bounded outcome metadata |
 | `job_retry_scheduled` | A retry was scheduled with category and retry delay |
@@ -111,6 +110,12 @@ API and worker metric registries are process-local and reset when pods restart.
 Scheduling counters must be queried from backend targets. Worker lifecycle and
 backlog metrics must be queried from worker targets.
 
+Generic process-local metrics (claims, outcomes, retries, stale recoveries,
+backlog snapshots) reset when a worker pod restarts. Durable enrichment
+efficacy, in contrast, is reconstructed from PostgreSQL on every worker
+restart, so multiple replicas expose identical database-derived totals and
+monitoring must aggregate them with `max`, never `sum`.
+
 ```promql
 sum by (job_type, outcome) (
   rate(fotosintesis_job_schedules_total[5m])
@@ -120,6 +125,12 @@ sum by (job_type, outcome) (
 ```promql
 max by (job_type, status) (
   fotosintesis_job_backlog_count
+)
+```
+
+```promql
+max by (policy_version, lifecycle_outcome, acquisition_avoided) (
+  fotosintesis_enrichment_efficacy_total
 )
 ```
 
@@ -143,7 +154,10 @@ use either identifier as a label.
 The enrichment metrics intentionally have no payload, species, aspect, source,
 job, owner, or content labels. Retry and terminal failure monitoring continues
 to use `fotosintesis_job_retries_total` and `fotosintesis_job_outcomes_total`
-rather than parallel enrichment-specific failure series.
+rather than parallel enrichment-specific failure series. Lease loss is a
+generic job outcome and is never an enrichment lifecycle outcome: the durable
+enrichment lifecycle is closed to `complete`, `partial`, and `failed`, and
+`worker_lease_lost` does not produce an enrichment efficacy observation.
 
 ## Confirmed-plant enrichment contract
 
@@ -179,15 +193,30 @@ the Kubernetes termination grace period and eventual SIGKILL remain the final
 process-level bound. Unfinished jobs retain their leases and recover after expiry.
 
 The Kubernetes worker exposes `/ready` on its private metrics port. An enabled
-worker reports ready only after registered handler dependencies validate and a
-database reconciliation succeeds. A disabled worker never claims jobs and
-becomes ready only after PostgreSQL connectivity and read-only durable-job queue
-queries succeed. Missing migrations or an incompatible `application_jobs` schema
+worker reports ready only after registered handler dependencies validate, a
+database reconciliation succeeds, and the durable efficacy telemetry refresh
+succeeds. A disabled worker never claims, reconciles, or finalizes jobs and
+reports ready only after required handler contracts validate, PostgreSQL
+connectivity succeeds, and read-only queue and durable efficacy telemetry
+queries succeed. Disabled readiness is read-only pause health, not
+active-consumer readiness: a failing telemetry query keeps a disabled worker
+unready. Missing migrations or an incompatible `application_jobs` schema
 therefore keep a disabled worker unready. Either mode clears readiness after a
-poll or health-check failure and retries at the configured poll interval. Failure
-to start the private metrics listener is a terminal startup error. GKE Managed
-Prometheus scrapes `/metrics` through the worker `PodMonitoring`; no Service is
-created.
+poll or health-check failure and retries at the configured poll interval.
+Failure to start the private metrics listener is a terminal startup error. GKE
+Managed Prometheus scrapes `/metrics` through the worker `PodMonitoring`; no
+Service is created.
+
+## Deployment switch policy
+
+A normal deployment requires the worker enabled and ready. The deploy workflow
+rejects a producer-enabled/worker-disabled combination because it schedules
+jobs nobody consumes. Both switches disabled is allowed only as an explicitly
+approved paused deployment (`paused_deployment=true`); that mode is read-only
+pause health and is not active consumption. The worker readiness gate verifies
+the deployed `JOBS_WORKER_ENABLED=true` plus the required
+`enrich_confirmed_plant:1` contract, and skips active-consumer readiness only
+for an approved paused deployment.
 
 ## Ingestion policy compatibility
 

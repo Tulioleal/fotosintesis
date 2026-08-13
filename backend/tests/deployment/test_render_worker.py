@@ -29,6 +29,9 @@ PROD_VALUES = REPO_ROOT / "deploy" / "k8s" / "prod" / "values.env.example"
 ARTIFACT_REGISTRY_MODULE = (
     REPO_ROOT / "infra" / "opentofu" / "modules" / "artifact-registry" / "main.tf"
 )
+VALIDATE_JOB_SWITCHES_SCRIPT = (
+    REPO_ROOT / "deploy" / "scripts" / "validate-job-switches.sh"
+)
 
 
 def _load_yaml(path: Path) -> list[dict]:
@@ -709,3 +712,114 @@ def test_backend_podmonitoring_emitted_for_all_envs(
     assert monitor["spec"]["selector"]["matchLabels"] == {
         "app.kubernetes.io/name": "fotosintesis-backend"
     }
+
+
+class TestDeploymentSwitchPolicy:
+    @pytest.mark.skipif(
+        not VALIDATE_JOB_SWITCHES_SCRIPT.exists(),
+        reason="validate-job-switches.sh missing",
+    )
+    @pytest.mark.parametrize(
+        ("producer", "worker", "paused", "expected"),
+        [
+            ("true", "false", "false", 1),
+            ("true", "false", "true", 1),
+            ("false", "false", "false", 1),
+            ("false", "false", "true", 0),
+            ("false", "true", "false", 0),
+            ("true", "true", "false", 0),
+            ("false", "true", "true", 1),
+            ("true", "true", "true", 1),
+            ("TRUE", "true", "false", 1),
+            ("false", "1", "false", 1),
+            ("false", "false", "yes", 1),
+        ],
+        ids=[
+            "producer-true-worker-false",
+            "producer-true-worker-false-paused",
+            "both-disabled-unapproved",
+            "both-disabled-paused-approved",
+            "worker-true-producer-false",
+            "normal-worker-true",
+            "worker-true-paused",
+            "both-true-paused",
+            "uppercase-producer",
+            "numeric-worker",
+            "word-paused",
+        ],
+    )
+    def test_job_switch_combinations_are_validated(
+        self, producer: str, worker: str, paused: str, expected: int
+    ) -> None:
+        if shutil.which("sh") is None:
+            pytest.skip("sh not available")
+        result = subprocess.run(
+            [
+                "sh",
+                str(VALIDATE_JOB_SWITCHES_SCRIPT),
+                producer,
+                worker,
+                paused,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+        assert result.returncode == expected, result.stderr
+        if expected != 0:
+            assert result.stderr.strip()
+
+    def test_deploy_workflow_validates_switches_before_migrations_and_rollout(
+        self,
+    ) -> None:
+        text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        validation = text.index("name: Validate durable job switch combination")
+        apply_migrations = text.index(
+            "name: Apply migrations before backend/worker rollout"
+        )
+        apply_worker = text.index("name: Apply worker")
+        apply_readiness = text.index(
+            "name: Confirm compatible enrichment worker readiness"
+        )
+        apply_backend = text.index("name: Apply backend")
+        assert validation < apply_migrations
+        assert apply_migrations < apply_worker
+        assert apply_worker < apply_readiness
+        assert apply_readiness < apply_backend
+        step = text[validation:apply_worker]
+        assert "validate-job-switches.sh" in step
+        assert "JOBS_PRODUCER_ENABLED" in step
+        assert "JOBS_WORKER_ENABLED" in step
+        assert "paused_deployment" in step
+
+    def test_deploy_workflow_paused_deployment_input_declared(self) -> None:
+        text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        assert "paused_deployment:" in text
+        assert "type: boolean" in text
+
+    def test_worker_readiness_requires_worker_enabled_env(self) -> None:
+        text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        readiness = text[
+            text.index("name: Confirm compatible enrichment worker readiness") :
+        ]
+        assert "JOBS_WORKER_ENABLED" in readiness
+        assert '"$worker_enabled" != "true"' in readiness
+        assert "JOBS_REQUIRED_CONTRACTS" in readiness
+        assert "enrich_confirmed_plant:1" in readiness
+        # Active-consumer readiness can be skipped only for an approved paused
+        # deployment, because the preceding switch validator proves paused=true
+        # implies both producer and worker are disabled. GitHub Actions
+        # preserves the Boolean input type, so the condition negates it rather
+        # than comparing it with a string.
+        assert "if: ${{ !inputs.paused_deployment }}" in readiness
+        assert "inputs.paused_deployment != 'true'" not in readiness
+
+    def test_normal_deployment_checks_contract_and_worker_enabled(self) -> None:
+        text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        readiness = text[
+            text.index("name: Confirm compatible enrichment worker readiness") :
+        ]
+        assert "enrich_confirmed_plant:1" in readiness
+        assert "JOBS_REQUIRED_CONTRACTS" in readiness
+        assert "rollout-deployment.sh" in readiness
+        assert "JOBS_WORKER_ENABLED" in readiness

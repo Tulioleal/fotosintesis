@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -14,14 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.tables import (
     application_jobs,
     candidate_enrichment_jobs,
+    enrichment_telemetry_observations,
     identification_candidates,
     identification_images,
 )
 from app.core.settings import Settings, get_settings
 from app.db.repository import RepositoryBase
 from app.jobs.schemas import (
-    ClaimedJob,
     CandidateEnrichmentStatus,
+    ClaimedJob,
     EnrichmentJobResult,
     JobError,
     JobFailureCategory,
@@ -38,6 +39,62 @@ from app.jobs.schemas import (
 class ReconciliationResult:
     recovered_by_type: dict[str, int]
     exhausted_by_type: dict[str, int]
+    exhausted_enrichment_jobs: list[tuple[UUID, object]] = field(default_factory=list)
+    exhausted_enrichment_job_created_at: dict[UUID, datetime] = field(default_factory=dict)
+
+
+ENRICHMENT_TELEMETRY_POLICY_LABELS = frozenset({"1", "unsupported"})
+ENRICHMENT_TELEMETRY_LIFECYCLE_OUTCOMES = frozenset({"complete", "partial", "failed"})
+ENRICHMENT_TELEMETRY_COUNT_BOUNDS = {
+    "local_covered_count": (0, 100),
+    "final_covered_count": (0, 100),
+    "accepted_aspect_count": (0, 100),
+    "search_count": (0, 100),
+}
+ENRICHMENT_TELEMETRY_GAIN_BOUNDS = (-100, 100)
+
+
+def validate_enrichment_observation_values(
+    *,
+    local_covered_count: object,
+    final_covered_count: object,
+    coverage_gain: object,
+    accepted_aspect_count: object,
+    search_count: object,
+    duration_seconds: object,
+) -> None:
+    """Validate observation values against the database constraints.
+
+    A malformed handler snapshot must never be silently rewritten to fit the
+    database: counts must be integers (never booleans) within their bounds,
+    and the duration must be finite and non-negative. Raises ``ValueError``
+    before any SQL is issued.
+    """
+    counts = {
+        "local_covered_count": local_covered_count,
+        "final_covered_count": final_covered_count,
+        "accepted_aspect_count": accepted_aspect_count,
+        "search_count": search_count,
+    }
+    for name, value in counts.items():
+        if type(value) is not int:
+            raise ValueError(
+                f"{name} must be an integer, not {type(value).__name__}"
+            )
+        lower, upper = ENRICHMENT_TELEMETRY_COUNT_BOUNDS[name]
+        if not lower <= value <= upper:
+            raise ValueError(f"{name} must be within {lower}..{upper}")
+    if type(coverage_gain) is not int:
+        raise ValueError(
+            f"coverage_gain must be an integer, not {type(coverage_gain).__name__}"
+        )
+    lower, upper = ENRICHMENT_TELEMETRY_GAIN_BOUNDS
+    if not lower <= coverage_gain <= upper:
+        raise ValueError(f"coverage_gain must be within {lower}..{upper}")
+    if not math.isfinite(float(duration_seconds)):
+        raise ValueError("duration_seconds must be finite")
+    if duration_seconds < 0:
+        raise ValueError("duration_seconds must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -613,6 +670,8 @@ class JobRepository(RepositoryBase):
                     application_jobs.c.attempt_count,
                     application_jobs.c.max_attempts,
                     application_jobs.c.lease_expires_at,
+                    application_jobs.c.payload,
+                    application_jobs.c.created_at,
                 )
                 .where(
                     application_jobs.c.status == JobStatus.processing.value,
@@ -627,12 +686,23 @@ class JobRepository(RepositoryBase):
 
         recovered: dict[str, int] = {}
         exhausted: dict[str, int] = {}
+        exhausted_enrichment_jobs: list[tuple[UUID, object]] = []
+        exhausted_enrichment_job_created_at: dict[UUID, datetime] = {}
         for row in rows:
             job_type = row["job_type"]
             attempt_count = row["attempt_count"]
             max_attempts = row["max_attempts"]
             if attempt_count >= max_attempts:
                 exhausted[job_type] = exhausted.get(job_type, 0) + 1
+                if job_type == JobType.enrich_confirmed_plant.value:
+                    raw_payload = row["payload"]
+                    raw_policy = (
+                        raw_payload.get("policy_version")
+                        if isinstance(raw_payload, dict)
+                        else None
+                    )
+                    exhausted_enrichment_jobs.append((row["id"], raw_policy))
+                    exhausted_enrichment_job_created_at[row["id"]] = row["created_at"]
                 await self.session.execute(
                     update(application_jobs)
                     .where(application_jobs.c.id == row["id"])
@@ -678,7 +748,192 @@ class JobRepository(RepositoryBase):
         return ReconciliationResult(
             recovered_by_type=recovered,
             exhausted_by_type=exhausted,
+            exhausted_enrichment_jobs=exhausted_enrichment_jobs,
+            exhausted_enrichment_job_created_at=exhausted_enrichment_job_created_at,
         )
+
+    async def record_terminal_enrichment_observation(
+        self,
+        *,
+        job_id: UUID,
+        policy_label: str,
+        lifecycle_outcome: str,
+        acquisition_avoided: bool,
+        local_covered_count: int,
+        final_covered_count: int,
+        coverage_gain: int,
+        accepted_aspect_count: int,
+        search_count: int,
+        duration_seconds: float,
+    ) -> None:
+        """Insert one immutable enrichment observation.
+
+        Runs in the same transaction as the terminal job transition. A
+        replayed identical insert is harmless; a differing existing row is an
+        invariant violation because immutable observations can never change.
+        Retries and non-enrichment jobs must never call this.
+        """
+        if policy_label not in ENRICHMENT_TELEMETRY_POLICY_LABELS:
+            raise ValueError(
+                f"unsupported enrichment telemetry policy label: {policy_label!r}"
+            )
+        if lifecycle_outcome not in ENRICHMENT_TELEMETRY_LIFECYCLE_OUTCOMES:
+            raise ValueError(
+                f"unsupported enrichment telemetry outcome: {lifecycle_outcome!r}"
+            )
+        validate_enrichment_observation_values(
+            local_covered_count=local_covered_count,
+            final_covered_count=final_covered_count,
+            coverage_gain=coverage_gain,
+            accepted_aspect_count=accepted_aspect_count,
+            search_count=search_count,
+            duration_seconds=duration_seconds,
+        )
+        values = {
+            "job_id": job_id,
+            "policy_label": policy_label,
+            "lifecycle_outcome": lifecycle_outcome,
+            "acquisition_avoided": bool(acquisition_avoided),
+            "local_covered_count": local_covered_count,
+            "final_covered_count": final_covered_count,
+            "coverage_gain": coverage_gain,
+            "accepted_aspect_count": accepted_aspect_count,
+            "search_count": search_count,
+            "duration_seconds": float(duration_seconds),
+        }
+        await self.session.execute(
+            pg_insert(enrichment_telemetry_observations)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=[enrichment_telemetry_observations.c.job_id]
+            )
+        )
+        existing = (
+            await self.session.execute(
+                select(enrichment_telemetry_observations).where(
+                    enrichment_telemetry_observations.c.job_id == job_id
+                )
+            )
+        ).mappings().first()
+        if existing is None:
+            return
+        comparable = {
+            "job_id": existing["job_id"],
+            "policy_label": existing["policy_label"],
+            "lifecycle_outcome": existing["lifecycle_outcome"],
+            "acquisition_avoided": bool(existing["acquisition_avoided"]),
+            "local_covered_count": existing["local_covered_count"],
+            "final_covered_count": existing["final_covered_count"],
+            "coverage_gain": existing["coverage_gain"],
+            "accepted_aspect_count": existing["accepted_aspect_count"],
+            "search_count": existing["search_count"],
+            "duration_seconds": float(existing["duration_seconds"]),
+        }
+        if comparable != values:
+            raise RepositoryInvariantError(
+                f"immutable enrichment observation already exists for job {job_id}"
+            )
+
+    async def get_enrichment_efficacy_totals(self):
+        """Aggregate durable efficacy telemetry in PostgreSQL.
+
+        Returns grouped counts (by policy label, lifecycle outcome, and
+        acquisition avoidance) plus per-histogram value counts, sums, and
+        fixed-boundary bucket counts, instead of loading every historical
+        observation into Python. The result shape mirrors
+        ``EnrichmentEfficacyTotals`` from ``app.observability.metrics``.
+        """
+        from app.observability.metrics import (
+            ENRICHMENT_COUNT_BUCKETS,
+            JOB_DURATION_BUCKETS,
+            EnrichmentEfficacyTotals,
+            Histogram,
+        )
+
+        count_rows = (
+            await self.session.execute(
+                select(
+                    enrichment_telemetry_observations.c.policy_label,
+                    enrichment_telemetry_observations.c.lifecycle_outcome,
+                    enrichment_telemetry_observations.c.acquisition_avoided,
+                    func.count().label("count"),
+                ).group_by(
+                    enrichment_telemetry_observations.c.policy_label,
+                    enrichment_telemetry_observations.c.lifecycle_outcome,
+                    enrichment_telemetry_observations.c.acquisition_avoided,
+                )
+            )
+        ).all()
+        counts: dict[tuple[str, str, bool], int] = {
+            (
+                row.policy_label,
+                row.lifecycle_outcome,
+                bool(row.acquisition_avoided),
+            ): row.count
+            for row in count_rows
+        }
+
+        histograms: dict[tuple[str, str, str], Histogram] = {}
+        column_buckets = {
+            "local_covered_count": ("local_covered_count", ENRICHMENT_COUNT_BUCKETS),
+            "final_covered_count": ("final_covered_count", ENRICHMENT_COUNT_BUCKETS),
+            "coverage_gain": ("coverage_gain", ENRICHMENT_COUNT_BUCKETS),
+            "accepted_aspect_count": (
+                "accepted_aspect_count",
+                ENRICHMENT_COUNT_BUCKETS,
+            ),
+            "search_count": ("search_count", ENRICHMENT_COUNT_BUCKETS),
+            "completion_duration_seconds": (
+                "duration_seconds",
+                JOB_DURATION_BUCKETS,
+            ),
+        }
+        for histogram_name, (column_name, buckets) in column_buckets.items():
+            column = getattr(
+                enrichment_telemetry_observations.c, column_name
+            )
+            aggregate_rows = (
+                await self.session.execute(
+                    select(
+                        enrichment_telemetry_observations.c.policy_label,
+                        enrichment_telemetry_observations.c.lifecycle_outcome,
+                        func.count().label("count"),
+                        func.coalesce(func.sum(column), 0.0).label("sum"),
+                    ).group_by(
+                        enrichment_telemetry_observations.c.policy_label,
+                        enrichment_telemetry_observations.c.lifecycle_outcome,
+                    )
+                )
+            ).all()
+            grouped: dict[tuple[str, str], Histogram] = {}
+            for row in aggregate_rows:
+                histogram = Histogram(buckets=buckets)
+                histogram.total_count = row.count
+                histogram.total_sum = float(row.sum)
+                grouped[(row.policy_label, row.lifecycle_outcome)] = histogram
+                histograms[
+                    (histogram_name, row.policy_label, row.lifecycle_outcome)
+                ] = histogram
+            for boundary_index, boundary in enumerate(buckets):
+                bucket_rows = (
+                    await self.session.execute(
+                        select(
+                            enrichment_telemetry_observations.c.policy_label,
+                            enrichment_telemetry_observations.c.lifecycle_outcome,
+                            func.count().label("count"),
+                        )
+                        .where(column <= boundary)
+                        .group_by(
+                            enrichment_telemetry_observations.c.policy_label,
+                            enrichment_telemetry_observations.c.lifecycle_outcome,
+                        )
+                    )
+                ).all()
+                for row in bucket_rows:
+                    grouped[(row.policy_label, row.lifecycle_outcome)].counts[
+                        boundary_index
+                    ] = row.count
+        return EnrichmentEfficacyTotals(counts=counts, histograms=histograms)
 
     async def get_job_status(self, *, job_id: UUID, user_id: UUID) -> JobStatusResponse | None:
         row = (

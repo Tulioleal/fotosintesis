@@ -3,10 +3,19 @@ from dataclasses import dataclass, field
 
 from app.jobs.schemas import JobFailureCategory, JobStatus, JobType
 
-
 JOB_DURATION_BUCKETS: tuple[float, ...] = (
     0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0,
 )
+
+ENRICHMENT_COUNT_BUCKETS: tuple[float, ...] = (
+    0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 17.0,
+)
+
+ENRICHMENT_LIFECYCLE_OUTCOMES = frozenset(
+    {"complete", "partial", "failed"}
+)
+
+ENRICHMENT_POLICY_LABELS = frozenset({"1", "unsupported"})
 
 _JOB_TYPES = frozenset(item.value for item in JobType)
 _OUTCOME_STATUSES = frozenset(item.value for item in JobStatus) | {
@@ -83,6 +92,20 @@ def _escape_prometheus_label_value(value: str) -> str:
 _escape = _escape_prometheus_label_value
 
 
+@dataclass(frozen=True)
+class EnrichmentEfficacyTotals:
+    """Database-derived snapshot of durable enrichment efficacy telemetry.
+
+    ``counts`` keys are ``(policy_label, lifecycle_outcome, acquisition_avoided)``
+    and ``histograms`` keys are ``(observation_name, policy_label, lifecycle_outcome)``.
+    Multiple replicas expose identical database-derived totals, so monitoring
+    must aggregate with max, not sum.
+    """
+
+    counts: dict[tuple[str, str, bool], int]
+    histograms: dict[tuple[str, str, str], Histogram]
+
+
 @dataclass
 class MetricsRegistry:
     requests_total: int = 0
@@ -111,6 +134,12 @@ class MetricsRegistry:
     enrichment_acquisition_avoided_total: int = 0
     enrichment_partial_outcomes_total: int = 0
     enrichment_completion_time: Histogram = field(default_factory=Histogram)
+    enrichment_efficacy_counts: dict[tuple[str, str, bool], int] = field(
+        default_factory=dict
+    )
+    enrichment_efficacy_histograms: dict[tuple[str, str, str], Histogram] = field(
+        default_factory=dict
+    )
     job_oldest_eligible_age_seconds: float | None = None
     worker_last_successful_poll_timestamp_seconds: float | None = None
     request_latency_seconds_max_samples: int = 10_000
@@ -189,6 +218,72 @@ class MetricsRegistry:
             self.enrichment_acquisition_avoided_total += 1
         if partial:
             self.enrichment_partial_outcomes_total += 1
+
+    def record_enrichment_efficacy(
+        self,
+        *,
+        policy_label: str,
+        lifecycle_outcome: str,
+        acquisition_avoided: bool,
+        local_covered_count: int,
+        final_covered_count: int,
+        coverage_gain: int,
+        accepted_aspect_count: int,
+        search_count: int,
+        duration_seconds: float,
+    ) -> None:
+        """Record bounded terminal enrichment efficacy telemetry.
+
+        Only closed enums, booleans, bounded count buckets, and the closed
+        policy label are used; no taxonomy, source, claim, quote, or arbitrary
+        policy value is accepted as a label.
+        """
+        _require_closed_label(
+            name="policy_label",
+            value=policy_label,
+            allowed=ENRICHMENT_POLICY_LABELS,
+        )
+        _require_closed_label(
+            name="lifecycle_outcome",
+            value=lifecycle_outcome,
+            allowed=ENRICHMENT_LIFECYCLE_OUTCOMES,
+        )
+        key = (policy_label, lifecycle_outcome, bool(acquisition_avoided))
+        self.enrichment_efficacy_counts[key] = self.enrichment_efficacy_counts.get(key, 0) + 1
+        observations = {
+            "local_covered_count": float(max(0, local_covered_count)),
+            "final_covered_count": float(max(0, final_covered_count)),
+            "coverage_gain": float(coverage_gain),
+            "accepted_aspect_count": float(max(0, accepted_aspect_count)),
+            "search_count": float(max(0, search_count)),
+            "completion_duration_seconds": max(duration_seconds, 0.0),
+        }
+        for name, value in observations.items():
+            histogram_key = (name, policy_label, lifecycle_outcome)
+            histogram = self.enrichment_efficacy_histograms.get(histogram_key)
+            if histogram is None:
+                histogram = Histogram(
+                    buckets=(
+                        ENRICHMENT_COUNT_BUCKETS
+                        if name != "completion_duration_seconds"
+                        else JOB_DURATION_BUCKETS
+                    )
+                )
+                self.enrichment_efficacy_histograms[histogram_key] = histogram
+            histogram.observe(value)
+
+    def replace_enrichment_efficacy(self, totals: EnrichmentEfficacyTotals) -> None:
+        """Replace the current efficacy snapshot with database-derived totals.
+
+        This is a replacement, not an increment: repeated refreshes and worker
+        restarts render the same totals because the durable observations are
+        the single source of truth.
+        """
+        self.enrichment_efficacy_counts = dict(totals.counts)
+        self.enrichment_efficacy_histograms = {
+            key: Histogram(buckets=histogram.buckets, counts=list(histogram.counts), total_count=histogram.total_count, total_sum=histogram.total_sum)
+            for key, histogram in totals.histograms.items()
+        }
 
     def reset_job_backlog(self) -> None:
         self.job_backlog_by_type_status.clear()
@@ -313,6 +408,41 @@ class MetricsRegistry:
             label_pairs=(),
         )
 
+        efficacy_count_lines = [
+            (
+                "fotosintesis_enrichment_efficacy_total"
+                f'{{policy_version="{_escape(str(policy_version))}",'
+                f'lifecycle_outcome="{_escape(outcome)}",'
+                f'acquisition_avoided="{str(avoided).lower()}"}} {count}'
+            )
+            for (policy_version, outcome, avoided), count in sorted(
+                self.enrichment_efficacy_counts.items(),
+                key=lambda item: (item[0][0], item[0][1], item[0][2]),
+            )
+        ]
+        efficacy_histogram_lines = []
+        histogram_names = sorted(
+            {name for (name, _, _) in self.enrichment_efficacy_histograms}
+        )
+        for name in histogram_names:
+            efficacy_histogram_lines.append(
+                f"# TYPE fotosintesis_enrichment_efficacy_{name} histogram"
+            )
+            for (entry_name, policy_version, outcome), histogram in sorted(
+                self.enrichment_efficacy_histograms.items()
+            ):
+                if entry_name != name:
+                    continue
+                efficacy_histogram_lines.append(
+                    histogram.render(
+                        name=f"fotosintesis_enrichment_efficacy_{name}",
+                        label_pairs=(
+                            ("policy_version", str(policy_version)),
+                            ("lifecycle_outcome", outcome),
+                        ),
+                    )
+                )
+
         age_line = (
             f"fotosintesis_job_oldest_eligible_age_seconds "
             f"{self.job_oldest_eligible_age_seconds:.6f}"
@@ -407,6 +537,11 @@ class MetricsRegistry:
                 "# HELP fotosintesis_enrichment_completion_time_seconds End-to-end time from durable enqueue to complete or partial enrichment.",
                 "# TYPE fotosintesis_enrichment_completion_time_seconds histogram",
                 enrichment_completion_lines,
+                "# HELP fotosintesis_enrichment_efficacy_total Terminal enrichment runs by bounded outcome labels.",
+                "# TYPE fotosintesis_enrichment_efficacy_total counter",
+                *efficacy_count_lines,
+                "# HELP fotosintesis_enrichment_efficacy_* Bounded coverage and search-count distributions per terminal enrichment outcome.",
+                *efficacy_histogram_lines,
                 "",
             ]
         )

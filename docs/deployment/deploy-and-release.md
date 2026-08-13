@@ -150,17 +150,25 @@ variables. Normal deployment defaults enable both roles:
 - `JOBS_PRODUCER_ENABLED=true` allows the API to create durable ingestion jobs.
 - `JOBS_WORKER_ENABLED=true` allows the worker to consume eligible persisted
   jobs.
-- `JOBS_WORKER_ENABLED=false` keeps the worker process deployed and ready after
-  PostgreSQL connectivity and read-only durable-job queue queries, but it does
-  not claim work.
+- `JOBS_WORKER_ENABLED=false` keeps the worker process deployed and its
+  readiness listener reporting read-only pause health after PostgreSQL
+  connectivity, required handler contracts, queue metrics, and durable
+  efficacy telemetry queries succeed. Disabled readiness is read-only pause
+  health, not active-consumer readiness: a disabled worker never claims,
+  reconciles, or finalizes jobs.
 
 Use `JOBS_PRODUCER_ENABLED=false` with the worker enabled to drain existing
 backlog without creating more work, or set both switches to `false` for a full
-pause. `true` producer with a disabled worker is technically supported but
-unsafe for normal operation because backlog grows without a consumer. Local
-application defaults remain disabled until developers opt in. API and worker
-Deployments always use the same immutable backend SHA so their payload contracts
-and registered handlers remain compatible.
+pause. A `true` producer with a disabled worker is always rejected by the
+deploy workflow because it schedules jobs nobody consumes. Both switches
+disabled is allowed only as an explicitly approved paused deployment
+(`paused_deployment=true`); without that approval the deploy fails. An active
+deployment requires the worker enabled and ready, and the worker readiness
+gate verifies the deployed `JOBS_WORKER_ENABLED=true` plus the required
+`enrich_confirmed_plant:1` contract. Local application defaults remain disabled
+until developers opt in. API and worker Deployments always use the same
+immutable backend SHA so their payload contracts and registered handlers remain
+compatible.
 
 Confirmed-plant enrichment adds a stricter rollout invariant. Its canonical
 identity is accepted GBIF key plus taxonomy-validated normalized binomial, with

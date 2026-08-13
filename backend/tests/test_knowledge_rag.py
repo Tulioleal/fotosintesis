@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -9,14 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.assistant.tools.ingestion import build_validated_claim_document
+from app.assistant.tools.types import EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
 from app.auth.tables import (
     knowledge_chunks,
     knowledge_documents,
     knowledge_embeddings,
     knowledge_sources,
 )
-from app.assistant.tools.ingestion import build_validated_claim_document
-from app.assistant.tools.types import EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE
 from app.knowledge.acquisition import KnowledgeAcquisitionService, TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
 from app.knowledge.rag import (
@@ -198,7 +198,7 @@ def test_validated_claim_document_caps_external_fallback_confidence() -> None:
 
 
 def test_llamaindex_chunk_metadata_preserves_validated_claim_fields() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     chunk = KnowledgeChunk(
         id=UUID("0d10f30c-7859-4f3c-b7d3-1c5999f640c8"),
         chunk_index=0,
@@ -484,6 +484,348 @@ async def test_acquisition_uses_trusted_sources_embeds_and_retrieves(
 
 
 @pytest.mark.asyncio
+async def test_enrichment_retrieval_orders_chunks_by_requested_aspects(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """`_retrieve_enrichment_chunks` issues one vector query per distinct
+    requested aspect and orders the deduplicated result by the requested order,
+    not by retrieval score."""
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.knowledge.schemas import KnowledgeRetrievalFilters
+
+    aspect_a = "watering_frequency_or_trigger"
+    aspect_b = "light_exposure"
+    async with session_factory() as session:
+        repository = KnowledgeRepository(session)
+        _, chunk_a_id = await _persist_enrichment_chunk(
+            session, aspect=aspect_a, content="Aspect A evidence content."
+        )
+        _, chunk_b_id = await _persist_enrichment_chunk(
+            session, aspect=aspect_b, content="Aspect B evidence content."
+        )
+        await session.commit()
+
+        class AspectOrderedRuntime(FakeLlamaRuntime):
+            def __init__(self) -> None:
+                super().__init__()
+                self.aspect_queries: list[str] = []
+
+            async def retrieve_nodes(
+                self, *, filters, query_text, query_embedding, limit
+            ):
+                self.retrieve_calls += 1
+                self.aspect_queries.append(filters.covered_aspect)
+                if filters.covered_aspect == aspect_a:
+                    return [FakeRetrievedNode(chunk_a_id, 0.5)]
+                if filters.covered_aspect == aspect_b:
+                    return [FakeRetrievedNode(chunk_b_id, 0.4)]
+                return []
+
+        runtime = AspectOrderedRuntime()
+        identity = CanonicalSpeciesIdentity(
+            accepted_gbif_key=1,
+            normalized_binomial="Cotyledon tomentosa",
+            taxonomy_validated=True,
+        )
+        service = KnowledgeAcquisitionService(
+            repository,
+            providers=SimpleNamespace(
+                model=RecordingJsonModelProvider(),
+                search=FakeSearchProvider([]),
+                embeddings=RecordingEmbeddingProvider(),
+            ),
+            trusted_sources=TrustedSourceValidator(["example.org"]),
+            vector_index=KnowledgeVectorIndex(repository, runtime=runtime),
+        )
+        result = await service._retrieve_enrichment_chunks(
+            scientific_name=identity.normalized_binomial,
+            topic="confirmed_plant_enrichment",
+            canonical_species_key=identity.key,
+            accepted_gbif_key=1,
+            required_aspects=[aspect_b, aspect_a],
+            question="care",
+        )
+
+    assert [chunk.id for chunk in result] == [chunk_b_id, chunk_a_id]
+    assert runtime.retrieve_calls == 2
+    assert runtime.aspect_queries == [aspect_b, aspect_a]
+
+
+async def _persist_enrichment_chunk(
+    session: AsyncSession, *, aspect: str, content: str
+) -> tuple[UUID, UUID]:
+    """Persist one enrichment chunk supporting a single aspect with a full
+    validation run so `get_chunks_by_ids` attaches `validation_provenance`.
+    Returns (document_id, chunk_id)."""
+    from uuid import uuid4
+
+    import hashlib
+
+    from app.enrichment.evidence import stable_enrichment_document_id
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.knowledge.schemas import EnrichmentEvidenceMetadata, ReviewStatus
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=1,
+        normalized_binomial="Cotyledon tomentosa",
+        taxonomy_validated=True,
+    )
+    now = datetime.now(UTC)
+    taxonomy_id = uuid4()
+    job_id = uuid4()
+    doc_id = stable_enrichment_document_id(f"fixture-{aspect}-content-key")
+    chunk_id = uuid4()
+    validation_run_id = uuid4()
+    metadata = EnrichmentEvidenceMetadata(
+        canonical_species_key=identity.key,
+        accepted_gbif_key=identity.accepted_gbif_key,
+        normalized_binomial=identity.normalized_binomial,
+        canonical_source_url="https://example.org/care",
+        canonical_source_domain="example.org",
+        source_version="etag-v1",
+        normalized_content_hash=hashlib.sha256(aspect.encode()).hexdigest(),
+        source_retrieved_at=now,
+        enrichment_provenance={"kind": "confirmed_plant_enrichment", "version": 1},
+        taxonomy_provenance_id=taxonomy_id,
+    )
+    document = KnowledgeDocumentInput(
+        scientific_name=identity.normalized_binomial,
+        topic="confirmed_plant_enrichment",
+        title="Care evidence",
+        content=content,
+        confidence=0.9,
+        review_status=ReviewStatus.auto_ingested,
+        sources=[
+            KnowledgeSourceInput(
+                title="Care evidence",
+                url="https://example.org/care",
+                source_domain="example.org",
+                retrieved_at=now,
+                validation_status="trusted",
+            )
+        ],
+        metadata={
+            "covered_aspects": [aspect],
+            "evidence_type": "confirmed_plant_enrichment",
+            "source_provenance": "trusted",
+            "canonical_species_key": identity.key,
+        },
+    )
+    chunk = KnowledgeChunk(
+        id=chunk_id,
+        document_id=doc_id,
+        chunk_index=0,
+        content=content,
+        metadata=document.metadata,
+        scientific_name=identity.normalized_binomial,
+        topic=document.topic,
+        source_domain="example.org",
+        source_url="https://example.org/care",
+        confidence=0.9,
+        review_status=ReviewStatus.auto_ingested,
+        retrieved_at=now,
+    )
+    repository = KnowledgeRepository(session)
+    await repository.save_document(
+        document,
+        chunks=[chunk],
+        commit=False,
+        document_id=doc_id,
+        enrichment=metadata,
+    )
+    await repository.add_enrichment_aspect_supports(
+        document_id=doc_id,
+        aspects=[aspect],
+        confidence=0.9,
+        review_status=ReviewStatus.auto_ingested,
+    )
+    await repository.add_enrichment_validation_run(
+        validation_id=validation_run_id,
+        job_id=job_id,
+        taxonomy_provenance_id=taxonomy_id,
+        policy_version=1,
+        required_aspects=[aspect],
+        covered_aspects=[aspect],
+        missing_aspects=[],
+        answerability_status="full",
+        judge_confidence=0.9,
+        validation_metadata={"acquisition_avoided": False},
+    )
+    await repository.add_enrichment_validation_evidence(
+        validation_id=validation_run_id,
+        document_id=doc_id,
+    )
+    return doc_id, chunk_id
+
+
+@pytest.mark.asyncio
+async def test_enrichment_retrieval_filters_aspect_before_pgvector_top_k(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A requested-aspect chunk must not be displaced by 24 higher-scoring
+    unrelated chunks: aspect filtering happens before the pgvector top-k."""
+    from uuid import uuid4
+
+    from app.auth.tables import knowledge_document_aspect_supports
+    from app.enrichment.evidence import enrichment_content_key, stable_enrichment_document_id
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.knowledge.schemas import (
+        EnrichmentEvidenceMetadata,
+        ReviewStatus,
+    )
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=1,
+        normalized_binomial="Cotyledon tomentosa",
+        taxonomy_validated=True,
+    )
+    now = datetime.now(UTC)
+    taxonomy_id = uuid4()
+    job_id = uuid4()
+    doc_id = stable_enrichment_document_id("fixture-content-key")
+    chunk_id = uuid4()
+    aspect_watering = "watering_frequency_or_trigger"
+    aspect_light = "light_exposure"
+
+    async with session_factory() as session:
+        repository = KnowledgeRepository(session)
+        validation_run_id = uuid4()
+        metadata = EnrichmentEvidenceMetadata(
+            canonical_species_key=identity.key,
+            accepted_gbif_key=identity.accepted_gbif_key,
+            normalized_binomial=identity.normalized_binomial,
+            canonical_source_url="https://example.org/care",
+            canonical_source_domain="example.org",
+            source_version="etag-v1",
+            normalized_content_hash="a" * 64,
+            source_retrieved_at=now,
+            enrichment_provenance={"kind": "confirmed_plant_enrichment", "version": 1},
+            taxonomy_provenance_id=taxonomy_id,
+        )
+        document = KnowledgeDocumentInput(
+            scientific_name=identity.normalized_binomial,
+            topic="confirmed_plant_enrichment",
+            title="Care evidence",
+            content="Requested aspect evidence content.",
+            confidence=0.9,
+            review_status=ReviewStatus.auto_ingested,
+            sources=[
+                KnowledgeSourceInput(
+                    title="Care evidence",
+                    url="https://example.org/care",
+                    source_domain="example.org",
+                    retrieved_at=now,
+                    validation_status="trusted",
+                )
+            ],
+            metadata={
+                "covered_aspects": [aspect_watering, aspect_light],
+                "evidence_type": "confirmed_plant_enrichment",
+                "source_provenance": "trusted",
+                "canonical_species_key": identity.key,
+            },
+        )
+        chunk = KnowledgeChunk(
+            id=chunk_id,
+            document_id=doc_id,
+            chunk_index=0,
+            content="Requested aspect evidence content.",
+            metadata=document.metadata,
+            scientific_name=identity.normalized_binomial,
+            topic=document.topic,
+            source_domain="example.org",
+            source_url="https://example.org/care",
+            confidence=0.9,
+            review_status=ReviewStatus.auto_ingested,
+            retrieved_at=now,
+        )
+        await repository.save_document(
+            document,
+            chunks=[chunk],
+            commit=False,
+            document_id=doc_id,
+            enrichment=metadata,
+        )
+        await repository.add_enrichment_aspect_supports(
+            document_id=doc_id,
+            aspects=[aspect_watering, aspect_light],
+            confidence=0.9,
+            review_status=ReviewStatus.auto_ingested,
+        )
+        await repository.add_enrichment_validation_run(
+            validation_id=validation_run_id,
+            job_id=job_id,
+            taxonomy_provenance_id=taxonomy_id,
+            policy_version=1,
+            required_aspects=[aspect_watering, aspect_light],
+            covered_aspects=[aspect_watering, aspect_light],
+            missing_aspects=[],
+            answerability_status="full",
+            judge_confidence=0.9,
+            validation_metadata={"acquisition_avoided": False},
+        )
+        await repository.add_enrichment_validation_evidence(
+            validation_id=validation_run_id,
+            document_id=doc_id,
+        )
+        await session.commit()
+
+        class AspectFilteredRuntime(FakeLlamaRuntime):
+            def __init__(self) -> None:
+                super().__init__()
+                self.seen_filters: list[KnowledgeRetrievalFilters] = []
+                self.unrelated_ids = [uuid4() for _ in range(24)]
+
+            async def retrieve_nodes(self, *, filters, query_text, query_embedding, limit):
+                self.retrieve_calls += 1
+                self.seen_filters.append(filters)
+                if filters.covered_aspect:
+                    return [FakeRetrievedNode(chunk_id, 0.3)]
+                return [FakeRetrievedNode(nid, 0.9) for nid in self.unrelated_ids]
+
+        class CountingSearchProvider(FakeSearchProvider):
+            def __init__(self) -> None:
+                super().__init__([])
+                self.calls = 0
+
+            async def search(self, query: str, **kwargs) -> list[SearchResult]:
+                self.calls += 1
+                return []
+
+        runtime = AspectFilteredRuntime()
+        search = CountingSearchProvider()
+        service = KnowledgeAcquisitionService(
+            repository,
+            providers=SimpleNamespace(
+                model=RecordingJsonModelProvider(),
+                search=search,
+                embeddings=RecordingEmbeddingProvider(),
+            ),
+            trusted_sources=TrustedSourceValidator(["example.org"]),
+            vector_index=KnowledgeVectorIndex(repository, runtime=runtime),
+        )
+        result = await service.retrieve_or_acquire(
+            scientific_name=identity.normalized_binomial,
+            topic="confirmed_plant_enrichment",
+            canonical_species_key=identity.key,
+            accepted_gbif_key=1,
+            required_aspects=[aspect_watering, aspect_light],
+            question="watering",
+        )
+
+    assert result.status == AcquisitionStatus.retrieved
+    assert [chunk.id for chunk in result.chunks] == [chunk_id]
+    assert search.calls == 0
+    aspect_queries = [filters for filters in runtime.seen_filters if filters.covered_aspect]
+    assert len(aspect_queries) == 2
+    assert {filters.covered_aspect for filters in aspect_queries} == {
+        aspect_watering,
+        aspect_light,
+    }
+    assert all(filters.evidence_type == "confirmed_plant_enrichment" for filters in aspect_queries)
+
+
+@pytest.mark.asyncio
 async def test_acquisition_generate_json_prompt_explicitly_requests_json(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -622,8 +964,8 @@ async def test_acquisition_uses_llamaindex_ingestion_instead_of_custom_chunking(
 
 
 def test_llamaindex_metadata_filter_mapping_supports_all_retrieval_fields() -> None:
-    retrieved_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
-    created_at = datetime(2026, 5, 2, tzinfo=timezone.utc)
+    retrieved_at = datetime(2026, 5, 1, tzinfo=UTC)
+    created_at = datetime(2026, 5, 2, tzinfo=UTC)
     filters = KnowledgeRetrievalFilters(
         species_id=UUID("00000000-0000-0000-0000-000000000001"),
         scientific_name="Cotyledon tomentosa",
@@ -650,7 +992,7 @@ def test_llamaindex_metadata_filter_mapping_supports_all_retrieval_fields() -> N
     assert mapped[("source_url", None)] == "https://example.org/cotyledon-tomentosa"
     assert mapped[("confidence", ">=")] == 0.8
     assert mapped[("review_status", None)] == "auto_ingested"
-    assert mapped[("covered_aspects", None)] == "watering_frequency_or_trigger"
+    assert mapped[("covered_aspects", "contains")] == "watering_frequency_or_trigger"
     assert mapped[("evidence_type", None)] == "validated_web_claim"
     assert mapped[("source_provenance", None)] == "trusted"
     assert mapped[("answerability_status", None)] == "full"
@@ -729,7 +1071,7 @@ def test_llamaindex_metadata_filters_preserve_closed_claim_filters(
     mapped = {(spec.key, spec.operator): spec.value for spec in build_metadata_filter_specs(filters)}
 
     assert mapped[("topic", None)] == "watering"
-    assert mapped[("covered_aspects", None)] == "watering_frequency_or_trigger"
+    assert mapped[("covered_aspects", "contains")] == "watering_frequency_or_trigger"
     assert mapped[(metadata_key, None)] == value
 
 
@@ -1050,7 +1392,7 @@ def _document(topic: str = "care") -> KnowledgeDocumentInput:
                 title="Trusted botanical source",
                 url="https://example.org/cotyledon-tomentosa",
                 source_domain="example.org",
-                retrieved_at=datetime.now(timezone.utc),
+                retrieved_at=datetime.now(UTC),
             )
         ],
     )

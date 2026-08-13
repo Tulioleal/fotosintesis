@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from datetime import datetime, timezone
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -141,7 +141,7 @@ def build_metadata_filter_specs(filters: KnowledgeRetrievalFilters) -> list[Meta
         )
     if filters.covered_aspect:
         specs.append(
-            MetadataFilterSpec("covered_aspects", filters.covered_aspect)
+            MetadataFilterSpec("covered_aspects", filters.covered_aspect, operator="contains")
         )
     if filters.evidence_type:
         specs.append(
@@ -191,7 +191,7 @@ def build_llamaindex_metadata_filters(
     *,
     metadata_filter_cls: type | None = None,
     metadata_filters_cls: type | None = None,
-) -> "Any | None":
+) -> Any | None:
     if metadata_filter_cls is None or metadata_filters_cls is None:
         try:
             from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
@@ -264,7 +264,7 @@ class LlamaIndexRuntime:
         metadata = getattr(node, "metadata", {}) or {}
         created_at = metadata.get("created_at")
         if not isinstance(created_at, datetime):
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
         return KnowledgeChunk(
             id=UUID(str(node.id_)),
             document_id=None,
@@ -303,7 +303,7 @@ class LlamaIndexRuntime:
             raise ValueError("Knowledge documents require at least one trusted source")
 
         source = document.sources[0]
-        created_at = datetime.now(timezone.utc)
+        created_at = datetime.now(UTC)
         base_metadata = build_chunk_metadata(
             species_id=document.species_id,
             scientific_name=document.scientific_name,

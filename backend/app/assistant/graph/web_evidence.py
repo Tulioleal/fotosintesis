@@ -17,11 +17,73 @@ from app.assistant.graph.plant_resolution import (
 )
 from app.assistant.graph.types import AnswerabilityResult, AssistantState
 from app.assistant.graph_shared import _shorten
+from app.assistant.semantic_coverage import (
+    CoverageThresholds,
+    SemanticEvidence,
+    SemanticSourceEvidence,
+)
 from app.assistant.tools import AssistantTools
 from app.core.settings import Settings
 from app.knowledge.page_evidence import TrustedPageEvidence
 from app.observability.tracing import get_trace_id
 from app.providers.types import SearchResult
+
+
+def _combined_evidence_packages(
+    rag_chunks: list,
+    web_results: list[TrustedPageEvidence],
+) -> tuple[list[dict[str, object]], SemanticEvidence]:
+    """Build source-separated judge input and bound evidence for the combined
+    RAG-plus-web fallback path.
+
+    One package is created for every RAG chunk and every trusted web result,
+    each keeping its own text bound to its canonical URL and explicit
+    validation status. This trusted-first fallback may explicitly accept
+    ``external_fallback`` packages in addition to ``trusted``; it is the only
+    caller allowed to do so.
+    """
+    packages: list[SemanticSourceEvidence] = []
+    for chunk in rag_chunks[:4]:
+        packages.append(
+            SemanticSourceEvidence(
+                text=_shorten(chunk.content, 500),
+                metadata={
+                    "url": chunk.source_url,
+                    "domain": chunk.source_domain,
+                    "confidence": chunk.confidence,
+                    "validation_status": (
+                        chunk.metadata.get("validation_status")
+                        if isinstance(chunk.metadata, dict)
+                        else None
+                    ),
+                },
+            )
+        )
+    for result in web_results[:3]:
+        packages.append(
+            SemanticSourceEvidence(
+                text=_shorten(result.evidence_text, 700),
+                metadata={
+                    "url": result.result.url,
+                    "domain": result.result.source_domain,
+                    "validation_status": result.validation_status,
+                },
+            )
+        )
+    sources = [
+        {
+            "source_package_id": f"source-{index}",
+            **dict(package.metadata),
+            "url": str(package.metadata.get("url") or "").strip(),
+            "validation_status": package.metadata.get("validation_status"),
+            "text": package.text,
+        }
+        for index, package in enumerate(packages)
+    ]
+    return sources, SemanticEvidence(
+        sources=tuple(packages),
+        eligible_validation_statuses=frozenset({"trusted", "external_fallback"}),
+    )
 
 
 async def _judge_combined_evidence(
@@ -36,6 +98,7 @@ async def _judge_combined_evidence(
     web_evidence = " ".join(_shorten(result.evidence_text, 700) for result in results[:3])
     combined = " ".join(part for part in (answerability._evidence_from_chunks(rag_chunks), web_evidence) if part.strip())
     source_metadata = state.get("sources", []) + _sources_from_web_results(results[:3])
+    evidence_sources, evidence = _combined_evidence_packages(rag_chunks, results)
     _log_combined_judge_evidence(
         evidence_type="combined_rag_web",
         results=results,
@@ -51,6 +114,7 @@ async def _judge_combined_evidence(
         required_aspects=requested_values,
         evidence=combined,
         source_metadata=source_metadata,
+        evidence_sources=evidence_sources,
         extra_payload={"rag_answerability": state.get("answerability", {})},
         timeout_seconds=settings.assistant_judge_timeout_seconds,
     )
@@ -69,7 +133,12 @@ async def _judge_combined_evidence(
     validated = answerability._validated_answerability(
         semantic,
         requested_aspects=requested_values,
-        source_metadata=source_metadata,
+        evidence=evidence,
+        thresholds=CoverageThresholds(
+            default=settings.assistant_evidence_validation_threshold,
+            safety=settings.assistant_safety_validation_threshold,
+            strong_full=settings.assistant_strong_answer_validation_threshold,
+        ),
     )
     if (
         validated.status in {"full", "partial"}
@@ -338,16 +407,12 @@ def _validated_claim_payloads(
         if not evidence_quote:
             continue
 
-        valid_urls = list(
-            dict.fromkeys(
-                url.strip()
-                for url in urls
-                if isinstance(url, str) and url.strip()
-            )
-        )
-        if len(valid_urls) != 1:
+        if len(urls) != 1:
             continue
-        url = valid_urls[0]
+        raw_url = urls[0]
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            continue
+        url = raw_url.strip()
         source = sources_by_url.get(url, {})
         source_provenance = source.get("source_provenance")
         if source_provenance not in {"trusted", "external_fallback"}:
@@ -455,6 +520,7 @@ async def fallback_web_search(owner, state: AssistantState) -> dict:
 __all__ = [
     "_candidate_results_from_web_data",
     "_combined_answer_evidence",
+    "_combined_evidence_packages",
     "_final_required_aspect_values",
     "_judge_combined_evidence",
     "_log_combined_judge_evidence",

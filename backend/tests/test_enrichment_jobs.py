@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -28,8 +28,8 @@ from app.jobs.schemas import (
 )
 from app.knowledge.acquisition import TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence
-from app.knowledge.schemas import EnrichmentEvidenceMetadata
 from app.knowledge.schemas import (
+    EnrichmentEvidenceMetadata,
     EnrichmentEvidenceState,
     KnowledgeChunk,
     PersistedKnowledgeDocument,
@@ -129,6 +129,53 @@ async def test_handler_maps_covered_partial_complete_and_insufficient_outcomes()
     assert insufficient.status is JobStatus.failed
     assert insufficient.result is None
     assert insufficient.error and insufficient.error.category is JobFailureCategory.insufficient_evidence
+
+    assert complete.efficacy is not None
+    assert complete.efficacy.acquisition_avoided is True
+    assert complete.efficacy.final_covered_count == len(required)
+    assert complete.efficacy.coverage_gain == len(required)
+    assert partial.efficacy is not None
+    assert partial.efficacy.final_covered_count == 1
+    assert partial.efficacy.accepted_aspect_count == 0
+    assert insufficient.efficacy is not None
+    assert insufficient.efficacy.final_covered_count == 0
+    assert insufficient.efficacy.coverage_gain == 0
+
+
+@pytest.mark.asyncio
+async def test_handler_attaches_bounded_snapshot_to_execution_failures() -> None:
+    for error in (
+        TimeoutError(),
+        IntegrityError("insert", {}, Exception("constraint")),
+        ValueError("invariant"),
+    ):
+        result = await EnrichConfirmedPlantHandler(FakeExecutionService(error)).handle(
+            payload=_payload(), attempt_count=1, max_attempts=3
+        )
+        assert result.status is JobStatus.failed
+        assert result.efficacy is not None
+        assert result.efficacy.policy_version == 1
+        assert result.efficacy.local_covered_count == 0
+        assert result.efficacy.final_covered_count == 0
+        assert result.efficacy.coverage_gain == 0
+        assert result.efficacy.accepted_aspect_count == 0
+        assert result.efficacy.search_count == 0
+        assert result.efficacy.acquisition_avoided is False
+
+
+@pytest.mark.asyncio
+async def test_handler_does_not_emit_runtime_metrics() -> None:
+    from app.observability.metrics import MetricsRegistry
+
+    metrics = MetricsRegistry()
+    handler = EnrichConfirmedPlantHandler(
+        FakeExecutionService(
+            _execution(covered=(RequiredAspect.light_exposure,))
+        )
+    )
+    await handler.handle(payload=_payload(), attempt_count=1, max_attempts=3)
+    assert metrics.enrichment_efficacy_counts == {}
+    assert metrics.enrichment_efficacy_histograms == {}
 
 
 @pytest.mark.asyncio
@@ -255,6 +302,26 @@ def test_only_final_supported_trusted_acquired_claims_are_selected() -> None:
         ),
         content="Bright indirect light is suitable.",
     )
+    untrusted_page = TrustedPageEvidence(
+        result=SearchResult(
+            title="Rejected",
+            url="https://example.org/rejected",
+            snippet="Snippet text.",
+            source_domain="example.org",
+        ),
+        content="Snippet text.",
+        validation_status="rejected",
+    )
+    blank_status_page = TrustedPageEvidence(
+        result=SearchResult(
+            title="Blank",
+            url="https://example.org/blank",
+            snippet="Snippet text.",
+            source_domain="example.org",
+        ),
+        content="Snippet text.",
+        validation_status="",
+    )
     support = [
         {
             "claim": "Use bright indirect light.",
@@ -264,8 +331,8 @@ def test_only_final_supported_trusted_acquired_claims_are_selected() -> None:
             "confidence": 0.9,
         },
         {
-            "claim": "Fabricated quote",
-            "evidence_quote": "This text is absent from the trusted page.",
+            "claim": "Semantically bound paraphrase",
+            "evidence_quote": "This paraphrased quote is not literally present on the page.",
             "source_urls": ["https://example.org/light"],
             "covered_aspects": [RequiredAspect.light_exposure.value],
             "confidence": 0.9,
@@ -276,16 +343,328 @@ def test_only_final_supported_trusted_acquired_claims_are_selected() -> None:
             "source_urls": ["https://untrusted.invalid/post"],
             "covered_aspects": [RequiredAspect.light_exposure.value],
         },
+        {
+            "claim": "Rejected source",
+            "evidence_quote": "Snippet text.",
+            "source_urls": ["https://example.org/rejected"],
+            "covered_aspects": [RequiredAspect.light_exposure.value],
+            "confidence": 0.9,
+        },
+        {
+            "claim": "Blank status source",
+            "evidence_quote": "Snippet text.",
+            "source_urls": ["https://example.org/blank"],
+            "covered_aspects": [RequiredAspect.light_exposure.value],
+            "confidence": 0.9,
+        },
     ]
 
     accepted = _accepted_acquired_claims(
         support,
-        pages_by_url={trusted_page.result.url: trusted_page},
+        pages_by_url={
+            trusted_page.result.url: trusted_page,
+            untrusted_page.result.url: untrusted_page,
+            blank_status_page.result.url: blank_status_page,
+        },
         allowed_aspects={RequiredAspect.light_exposure.value},
     )
 
-    assert len(accepted) == 1
+    assert len(accepted) == 2
+    assert all(claim.source_url == "https://example.org/light" for claim in accepted)
     assert accepted[0].supported_aspects == (RequiredAspect.light_exposure.value,)
+    assert accepted[1].evidence_quote.startswith("This paraphrased quote")
+
+
+def test_absent_or_invalid_source_status_never_enters_accepted_persistence_claims() -> None:
+    for status in ("", "rejected", "pending_review", "untrusted"):
+        page = TrustedPageEvidence(
+            result=SearchResult(
+                title="Strict",
+                url="https://example.org/strict",
+                snippet="Snippet text.",
+                source_domain="example.org",
+            ),
+            content="Snippet text.",
+            validation_status=status,
+        )
+        accepted = _accepted_acquired_claims(
+            [
+                {
+                    "claim": "Claim",
+                    "evidence_quote": "Snippet text.",
+                    "source_urls": ["https://example.org/strict"],
+                    "covered_aspects": [RequiredAspect.light_exposure.value],
+                    "confidence": 0.9,
+                }
+            ],
+            pages_by_url={page.result.url: page},
+            allowed_aspects={RequiredAspect.light_exposure.value},
+        )
+        assert accepted == [], status
+
+
+def test_bounded_evidence_sources_keep_two_supplied_sources_separate_in_judge_input() -> None:
+    from app.assistant.semantic_coverage import SemanticEvidence, SemanticSourceEvidence
+    from app.enrichment.service import _bounded_evidence_sources
+
+    local = SemanticEvidence(
+        sources=(
+            SemanticSourceEvidence(
+                text="Local watering guidance text.",
+                metadata={
+                    "url": "https://example.org/watering",
+                    "validation_status": "trusted",
+                },
+            ),
+            SemanticSourceEvidence(
+                text="Local light guidance text.",
+                metadata={
+                    "url": "https://example.org/light",
+                    "validation_status": "trusted",
+                },
+            ),
+        )
+    )
+
+    sources = _bounded_evidence_sources(local, None)
+
+    assert [entry["url"] for entry in sources] == [
+        "https://example.org/watering",
+        "https://example.org/light",
+    ]
+    assert sources[0]["text"] == "Local watering guidance text."
+    assert sources[1]["text"] == "Local light guidance text."
+    assert sources[0]["validation_status"] == "trusted"
+    assert sources[1]["validation_status"] == "trusted"
+    assert sources[0]["source_package_id"] == "source-0"
+    assert sources[1]["source_package_id"] == "source-1"
+
+
+def test_bounded_evidence_sources_keep_two_same_url_packages_in_judge_input() -> None:
+    from app.assistant.semantic_coverage import SemanticEvidence, SemanticSourceEvidence
+    from app.enrichment.service import _bounded_evidence_sources
+
+    local = SemanticEvidence(
+        sources=(
+            SemanticSourceEvidence(
+                text="First package text.",
+                metadata={
+                    "url": "https://example.org/shared",
+                    "validation_status": "trusted",
+                },
+            ),
+            SemanticSourceEvidence(
+                text="Second package text.",
+                metadata={
+                    "url": "https://example.org/shared",
+                    "validation_status": "trusted",
+                },
+            ),
+        )
+    )
+
+    sources = _bounded_evidence_sources(local, None)
+
+    assert len(sources) == 2
+    assert [entry["url"] for entry in sources] == [
+        "https://example.org/shared",
+        "https://example.org/shared",
+    ]
+    assert sources[0]["text"] == "First package text."
+    assert sources[1]["text"] == "Second package text."
+    assert sources[0]["source_package_id"] == "source-0"
+    assert sources[1]["source_package_id"] == "source-1"
+
+
+@pytest.mark.parametrize(
+    ("urls", "id_suffix"),
+    [
+        (["", "https://example.org/light"], "blank-then-valid"),
+        (["https://example.org/light", "https://example.org/light"], "duplicate"),
+        (["https://example.org/light", "https://example.org/other"], "two-distinct"),
+        ([], "empty"),
+    ],
+    ids=["blank-then-valid", "duplicate", "two-distinct", "empty"],
+)
+def test_accepted_acquired_claims_reject_non_singleton_raw_url_lists(
+    urls: list[str], id_suffix: str
+) -> None:
+    page = TrustedPageEvidence(
+        result=SearchResult(
+            title="Light",
+            url="https://example.org/light",
+            snippet="Snippet text.",
+            source_domain="example.org",
+        ),
+        content="Snippet text.",
+        validation_status="trusted",
+    )
+    accepted = _accepted_acquired_claims(
+        [
+            {
+                "claim": "Claim",
+                "evidence_quote": "Snippet text.",
+                "source_urls": urls,
+                "covered_aspects": [RequiredAspect.light_exposure.value],
+                "confidence": 0.9,
+            }
+        ],
+        pages_by_url={page.result.url: page},
+        allowed_aspects={RequiredAspect.light_exposure.value},
+    )
+    assert accepted == [], id_suffix
+
+
+def test_accepted_acquired_claims_accept_only_a_singleton_raw_url_list() -> None:
+    page = TrustedPageEvidence(
+        result=SearchResult(
+            title="Light",
+            url="https://example.org/light",
+            snippet="Bright indirect light is suitable.",
+            source_domain="example.org",
+        ),
+        content="Bright indirect light is suitable.",
+        validation_status="trusted",
+    )
+    accepted = _accepted_acquired_claims(
+        [
+            {
+                "claim": "Use bright indirect light.",
+                "evidence_quote": "Bright indirect light is suitable.",
+                "source_urls": ["https://example.org/light"],
+                "covered_aspects": [RequiredAspect.light_exposure.value],
+                "confidence": 0.9,
+            }
+        ],
+        pages_by_url={page.result.url: page},
+        allowed_aspects={RequiredAspect.light_exposure.value},
+    )
+    assert len(accepted) == 1
+    assert accepted[0].source_url == "https://example.org/light"
+
+
+
+def test_bounded_evidence_sources_truncate_per_source_within_total_budget() -> None:
+    from app.assistant.semantic_coverage import SemanticEvidence, SemanticSourceEvidence
+    from app.enrichment.service import (
+        MAX_JUDGE_EVIDENCE_CHARS,
+        MAX_JUDGE_SOURCES,
+        _bounded_evidence_sources,
+    )
+
+    long_text = "x" * (MAX_JUDGE_EVIDENCE_CHARS * 2)
+    local = SemanticEvidence(
+        sources=tuple(
+            SemanticSourceEvidence(
+                text=long_text,
+                metadata={"url": f"https://example.org/source-{index}"},
+            )
+            for index in range(MAX_JUDGE_SOURCES + 5)
+        )
+    )
+
+    sources = _bounded_evidence_sources(local, None)
+
+    assert len(sources) == MAX_JUDGE_SOURCES
+    assert all(len(entry["text"]) <= MAX_JUDGE_EVIDENCE_CHARS for entry in sources)
+    assert sum(len(entry["text"]) for entry in sources) <= MAX_JUDGE_EVIDENCE_CHARS
+    assert [entry["url"] for entry in sources] == [
+        f"https://example.org/source-{index}" for index in range(MAX_JUDGE_SOURCES)
+    ]
+
+
+def test_support_citing_source_a_persists_only_source_a() -> None:
+    page_a = TrustedPageEvidence(
+        result=SearchResult(
+            title="Source A",
+            url="https://example.org/a",
+            snippet="Snippet A.",
+            source_domain="example.org",
+        ),
+        content="Snippet A.",
+        validation_status="trusted",
+    )
+    page_b = TrustedPageEvidence(
+        result=SearchResult(
+            title="Source B",
+            url="https://example.org/b",
+            snippet="Snippet B.",
+            source_domain="example.org",
+        ),
+        content="Snippet B.",
+        validation_status="trusted",
+    )
+    accepted = _accepted_acquired_claims(
+        [
+            {
+                "claim": "Bound to source A only.",
+                "evidence_quote": "Snippet A.",
+                "source_urls": ["https://example.org/a"],
+                "covered_aspects": [RequiredAspect.light_exposure.value],
+                "confidence": 0.9,
+            },
+            {
+                "claim": "Bound to source B only.",
+                "evidence_quote": "Snippet B.",
+                "source_urls": ["https://example.org/b"],
+                "covered_aspects": [RequiredAspect.light_exposure.value],
+                "confidence": 0.9,
+            },
+        ],
+        pages_by_url={
+            page_a.result.url: page_a,
+            page_b.result.url: page_b,
+        },
+        allowed_aspects={RequiredAspect.light_exposure.value},
+    )
+
+    assert [claim.source_url for claim in accepted] == [
+        "https://example.org/a",
+        "https://example.org/b",
+    ]
+    assert accepted[0].evidence_quote == "Snippet A."
+    assert accepted[1].evidence_quote == "Snippet B."
+
+
+def test_support_citing_two_urls_is_rejected_at_accepted_claim_selection() -> None:
+    page_a = TrustedPageEvidence(
+        result=SearchResult(
+            title="Source A",
+            url="https://example.org/a",
+            snippet="Snippet A.",
+            source_domain="example.org",
+        ),
+        content="Snippet A.",
+        validation_status="trusted",
+    )
+    page_b = TrustedPageEvidence(
+        result=SearchResult(
+            title="Source B",
+            url="https://example.org/b",
+            snippet="Snippet B.",
+            source_domain="example.org",
+        ),
+        content="Snippet B.",
+        validation_status="trusted",
+    )
+    accepted = _accepted_acquired_claims(
+        [
+            {
+                "claim": "One claim bound to two sources.",
+                "evidence_quote": "Snippet A.",
+                "source_urls": ["https://example.org/a", "https://example.org/b"],
+                "covered_aspects": [RequiredAspect.light_exposure.value],
+                "confidence": 0.9,
+            }
+        ],
+        pages_by_url={
+            page_a.result.url: page_a,
+            page_b.result.url: page_b,
+        },
+        allowed_aspects={RequiredAspect.light_exposure.value},
+    )
+
+    assert accepted == []
 
 
 def test_content_chunk_and_vector_identity_is_policy_and_aspect_set_independent() -> None:
@@ -297,7 +676,7 @@ def test_content_chunk_and_vector_identity_is_policy_and_aspect_set_independent(
         source_title="Light",
         source_domain="example.org",
         source_version="etag-v1",
-        source_retrieved_at=datetime.now(timezone.utc),
+        source_retrieved_at=datetime.now(UTC),
         source_published_at=None,
         supported_aspects=(RequiredAspect.light_exposure.value,),
         confidence=0.9,
@@ -337,6 +716,19 @@ class FakeEvidenceRepository:
 
     async def get_enrichment_evidence_state(self, metadata):
         return self.state
+
+    async def get_enrichment_evidence_state_by_document_id(
+        self, document_id, *, for_update=False
+    ):
+        if self.state is None or self.state.document_id != document_id:
+            return None
+        return self.state
+
+    async def add_enrichment_validation_evidence(
+        self, *, validation_id, document_id
+    ) -> None:
+        self.evidence_associations = getattr(self, "evidence_associations", [])
+        self.evidence_associations.append((validation_id, document_id))
 
     async def add_enrichment_aspect_supports(
         self, *, document_id, aspects, confidence, review_status
@@ -433,7 +825,7 @@ async def test_multi_aspect_evidence_is_embedded_once_and_reused_across_policy_c
         source_title="Care",
         source_domain="example.org",
         source_version="etag-v1",
-        source_retrieved_at=datetime.now(timezone.utc),
+        source_retrieved_at=datetime.now(UTC),
         source_published_at=None,
         supported_aspects=(
             RequiredAspect.light_exposure.value,
@@ -449,13 +841,19 @@ async def test_multi_aspect_evidence_is_embedded_once_and_reused_across_policy_c
         taxonomy_provenance_id=taxonomy_id,
         claim=claim,
     )
-    await service.ensure_claim_indexed(first)
+    await service.associate_validation_and_refresh(
+        validation_id=uuid4(),
+        document_id=first.document_id,
+    )
     replay = await service.persist_claim_relational(
         identity=identity,
         taxonomy_provenance_id=taxonomy_id,
         claim=claim,
     )
-    await service.ensure_claim_indexed(replay)
+    await service.associate_validation_and_refresh(
+        validation_id=uuid4(),
+        document_id=replay.document_id,
+    )
 
     assert replay.document_id == first.document_id
     assert vector_index.prepare_calls == 1
@@ -465,3 +863,4 @@ async def test_multi_aspect_evidence_is_embedded_once_and_reused_across_policy_c
         list(claim.supported_aspects),
         list(claim.supported_aspects),
     ]
+    assert len(repository.evidence_associations) == 2

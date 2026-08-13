@@ -21,7 +21,6 @@ from app.knowledge.schemas import (
 )
 from app.providers.interfaces import EmbeddingProvider
 
-
 EXPECTED_ENRICHMENT_CONSTRAINTS = {
     "knowledge_documents_pkey",
     "uq_knowledge_documents_enrichment_content_identity",
@@ -130,7 +129,12 @@ class EnrichmentEvidencePersistenceService:
                 review_status=ReviewStatus.auto_ingested,
             )
             await self.repository.session.commit()
-            return existing
+            refreshed = await self.repository.get_enrichment_evidence_state(metadata)
+            if refreshed is None:
+                raise RuntimeError(
+                    "enrichment evidence state disappeared after aspect association"
+                )
+            return refreshed
 
         document = KnowledgeDocumentInput(
             scientific_name=identity.normalized_binomial,
@@ -207,26 +211,65 @@ class EnrichmentEvidencePersistenceService:
                 review_status=ReviewStatus.auto_ingested,
             )
             await self.repository.session.commit()
-            return winner
+            refreshed = await self.repository.get_enrichment_evidence_state(metadata)
+            if refreshed is None:
+                raise RuntimeError(
+                    "enrichment evidence state disappeared after aspect association"
+                )
+            return refreshed
 
-        return EnrichmentEvidenceState(
-            document_id=document_id,
-            chunks=stable_ingestion.chunks,
-            embeddings=stable_ingestion.embeddings,
-            embedding_provider=stable_ingestion.provider,
-            embedding_model=stable_ingestion.model,
+        authoritative = await self.repository.get_enrichment_evidence_state_by_document_id(
+            document_id
         )
+        if authoritative is None:
+            raise RuntimeError(
+                "enrichment evidence state disappeared after new-document persistence"
+            )
+        return authoritative
 
-    async def ensure_claim_indexed(
+    async def associate_validation_and_refresh(
         self,
-        state: EnrichmentEvidenceState,
+        *,
+        validation_id: UUID,
+        document_id: UUID,
     ) -> None:
-        await self.vector_index.ensure_vector_nodes(
-            chunks=state.chunks,
-            embeddings=state.embeddings,
-            provider=state.embedding_provider,
-            model=state.embedding_model,
-        )
+        """Phase B: converge relational validation association and vector
+        metadata for one document under the document row lock.
+
+        Required order per execution:
+        1. Lock the document with ``SELECT ... FOR UPDATE`` and reload the
+           authoritative relational aspect union (never cached chunk JSON).
+        2. Insert the idempotent validation-evidence association.
+        3. Upsert stable vector nodes from the authoritative state.
+        4. Commit only after the vector upsert succeeds.
+        5. Roll back on every exception, including ``CancelledError``.
+
+        One document is processed per transaction; locks for multiple
+        documents are never held simultaneously.
+        """
+        try:
+            reloaded = await self.repository.get_enrichment_evidence_state_by_document_id(
+                document_id,
+                for_update=True,
+            )
+            if reloaded is None:
+                raise ValueError(
+                    "enrichment evidence document is not available for indexing"
+                )
+            await self.repository.add_enrichment_validation_evidence(
+                validation_id=validation_id,
+                document_id=document_id,
+            )
+            await self.vector_index.ensure_vector_nodes(
+                chunks=reloaded.chunks,
+                embeddings=reloaded.embeddings,
+                provider=reloaded.embedding_provider,
+                model=reloaded.embedding_model,
+            )
+            await self.repository.session.commit()
+        except BaseException:
+            await self.repository.session.rollback()
+            raise
 
     async def record_validation(
         self,
@@ -240,7 +283,6 @@ class EnrichmentEvidencePersistenceService:
         answerability_status: str,
         judge_confidence: float,
         validation_metadata: dict[str, object],
-        document_ids: list[UUID] | None = None,
     ) -> UUID:
         fingerprint = json.dumps(
             {
@@ -267,7 +309,6 @@ class EnrichmentEvidencePersistenceService:
             answerability_status=answerability_status,
             judge_confidence=judge_confidence,
             validation_metadata=validation_metadata,
-            document_ids=document_ids if document_ids else None,
         )
         await self.repository.session.commit()
         return validation_id

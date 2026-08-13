@@ -5,10 +5,15 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.enrichment.policy import get_enrichment_policy
 from app.enrichment.service import (
+    EnrichmentExecution,
     EnrichmentExecutionService,
     ProductionEnrichmentService,
 )
-from app.jobs.handler import JobHandler, JobHandlerResult
+from app.jobs.handler import (
+    EnrichmentEfficacySnapshot,
+    JobHandler,
+    JobHandlerResult,
+)
 from app.jobs.schemas import (
     EnrichConfirmedPlantPayload,
     EnrichmentJobResult,
@@ -23,8 +28,14 @@ from app.providers.wrappers import AllProvidersFailedError
 
 
 class EnrichConfirmedPlantHandler(JobHandler):
-    def __init__(self, service: EnrichmentExecutionService | None = None) -> None:
+    def __init__(
+        self,
+        service: EnrichmentExecutionService | None = None,
+        *,
+        policy_resolver=get_enrichment_policy,
+    ) -> None:
         self._service = service or ProductionEnrichmentService()
+        self._policy_resolver = policy_resolver
 
     async def handle(
         self,
@@ -39,10 +50,10 @@ class EnrichConfirmedPlantHandler(JobHandler):
                 retryable=False,
             )
         try:
-            policy = get_enrichment_policy(payload.policy_version)
+            policy = self._policy_resolver(payload.policy_version)
         except ValueError:
             return JobHandlerResult.failed(
-                category=JobFailureCategory.unsupported_version,
+                category=JobFailureCategory.unsupported_payload_version,
                 retryable=False,
             )
         if max_attempts > policy.max_durable_attempts:
@@ -56,26 +67,31 @@ class EnrichConfirmedPlantHandler(JobHandler):
             return JobHandlerResult.failed(
                 category=JobFailureCategory.invariant_violation,
                 retryable=False,
+                efficacy=self._zero_snapshot(payload.policy_version),
             )
         except DBAPIError:
             return JobHandlerResult.failed(
                 category=JobFailureCategory.database_transient,
                 retryable=True,
+                efficacy=self._zero_snapshot(payload.policy_version),
             )
         except VectorIndexError:
             return JobHandlerResult.failed(
                 category=JobFailureCategory.indexing_transient,
                 retryable=True,
+                efficacy=self._zero_snapshot(payload.policy_version),
             )
         except (ProviderError, AllProvidersFailedError, TimeoutError):
             return JobHandlerResult.failed(
                 category=JobFailureCategory.provider_transient,
                 retryable=True,
+                efficacy=self._zero_snapshot(payload.policy_version),
             )
         except ValueError:
             return JobHandlerResult.failed(
                 category=JobFailureCategory.invariant_violation,
                 retryable=False,
+                efficacy=self._zero_snapshot(payload.policy_version),
             )
 
         covered = [aspect.value for aspect in execution.covered_aspects]
@@ -86,6 +102,12 @@ class EnrichConfirmedPlantHandler(JobHandler):
                 error=JobError(
                     category=JobFailureCategory.insufficient_evidence,
                     retryable=False,
+                ),
+                efficacy=self._snapshot(
+                    payload.policy_version,
+                    execution=execution,
+                    final_covered_count=0,
+                    accepted_aspect_count=0,
                 ),
             )
         if missing:
@@ -102,7 +124,16 @@ class EnrichConfirmedPlantHandler(JobHandler):
                 limitations=limitations,
                 acquisition_avoided=execution.acquisition_avoided,
             )
-            return JobHandlerResult(status=JobStatus.partial, result=result)
+            return JobHandlerResult(
+                status=JobStatus.partial,
+                result=result,
+                efficacy=self._snapshot(
+                    payload.policy_version,
+                    execution=execution,
+                    final_covered_count=len(covered),
+                    accepted_aspect_count=execution.accepted_aspect_count,
+                ),
+            )
         result = EnrichmentJobResult(
             outcome="complete",
             policy_version=payload.policy_version,
@@ -112,7 +143,46 @@ class EnrichConfirmedPlantHandler(JobHandler):
             missing_count=0,
             acquisition_avoided=execution.acquisition_avoided,
         )
-        return JobHandlerResult(status=JobStatus.complete, result=result)
+        return JobHandlerResult(
+            status=JobStatus.complete,
+            result=result,
+            efficacy=self._snapshot(
+                payload.policy_version,
+                execution=execution,
+                final_covered_count=len(covered),
+                accepted_aspect_count=execution.accepted_aspect_count,
+            ),
+        )
+
+    @staticmethod
+    def _snapshot(
+        policy_version: int,
+        *,
+        execution: EnrichmentExecution,
+        final_covered_count: int,
+        accepted_aspect_count: int,
+    ) -> EnrichmentEfficacySnapshot:
+        return EnrichmentEfficacySnapshot(
+            policy_version=policy_version,
+            acquisition_avoided=execution.acquisition_avoided,
+            local_covered_count=execution.local_covered_count,
+            final_covered_count=final_covered_count,
+            coverage_gain=final_covered_count - execution.local_covered_count,
+            accepted_aspect_count=accepted_aspect_count,
+            search_count=execution.search_count,
+        )
+
+    @staticmethod
+    def _zero_snapshot(policy_version: int) -> EnrichmentEfficacySnapshot:
+        return EnrichmentEfficacySnapshot(
+            policy_version=policy_version,
+            acquisition_avoided=False,
+            local_covered_count=0,
+            final_covered_count=0,
+            coverage_gain=0,
+            accepted_aspect_count=0,
+            search_count=0,
+        )
 
 
 __all__ = ["EnrichConfirmedPlantHandler"]
