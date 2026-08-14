@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   getToken: vi.fn(),
 }));
 
-vi.mock("@auth/core/jwt", () => ({
+vi.mock("next-auth/jwt", () => ({
   getToken: mocks.getToken,
 }));
 
@@ -16,6 +16,7 @@ describe("GET /api/identifications/candidates/[candidateId]/enrichment", () => {
   });
 
   it("forwards authenticated candidate-owned status reads without caching", async () => {
+    process.env.AUTH_SECRET = "test-secret";
     const payload = {
       candidate_id: "00000000-0000-4000-8000-000000000001",
       policy_version: 1,

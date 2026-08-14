@@ -8,5 +8,13 @@
     "lint": "pnpm --filter frontend lint",
     "fallow": "pnpx fallow",
     "e2e:enrichment": "sh scripts/run-enrichment-e2e.sh"
+  },
+  "pnpm": {
+    "overrides": {
+      "next>sharp": "0.35.0",
+      "next>postcss": "8.5.23",
+      "postcss>nanoid": "3.3.18",
+      "sass>immutable": "5.1.8"
+    }
   }
 }

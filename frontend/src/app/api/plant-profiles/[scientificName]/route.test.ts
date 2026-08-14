@@ -5,12 +5,13 @@ const mocks = vi.hoisted(() => ({
   getToken: vi.fn(),
 }));
 
-vi.mock("@auth/core/jwt", () => ({
+vi.mock("next-auth/jwt", () => ({
   getToken: mocks.getToken,
 }));
 
 describe("GET /api/plant-profiles/[scientificName]", () => {
   it("forwards auth headers and candidate context to the backend", async () => {
+    process.env.AUTH_SECRET = "test-secret";
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       Response.json({ scientific_name: "Nephrolepis exaltata" }),
     );
