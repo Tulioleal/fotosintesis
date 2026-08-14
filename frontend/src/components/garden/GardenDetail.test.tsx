@@ -105,7 +105,7 @@ describe("GardenDetail", () => {
 
     expect(await screen.findByRole("link", { name: /Iniciar Chat sobre Helecho/i })).toHaveAttribute(
       "href",
-      "/assistant?plant=Helecho&binomial=Nephrolepis%20exaltata&scientific=Nephrolepis%20exaltata",
+      "/assistant?plant=Helecho&binomial=Nephrolepis%20exaltata&scientific=Nephrolepis%20exaltata&candidate=candidate-1",
     );
   });
 

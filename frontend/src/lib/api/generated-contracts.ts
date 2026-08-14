@@ -25,7 +25,13 @@ export const enrichmentJobResultSchema = z.object({
   covered_count: z.number().int().nonnegative(),
   missing_count: z.number().int().nonnegative(),
   limitations: z.array(
-    z.enum(["missing_required_aspects", "safety_evidence_rejected"])
+    z.enum([
+      "missing_required_aspects",
+      "safety_evidence_rejected",
+      "retry_exhausted",
+      "workflow_incomplete",
+      "indexing_deferred",
+    ])
   ),
   acquisition_avoided: z.boolean(),
 });
@@ -50,7 +56,10 @@ export const jobStatusSchema = z.enum([
 
 export const jobStatusResponseSchema = z.object({
   id: z.string().uuid(),
-    job_type: z.enum(["ingest_validated_claims", "enrich_confirmed_plant"]),
+  job_type: z.enum([
+    "ingest_validated_claims",
+    "enrich_confirmed_plant",
+  ]),
   status: jobStatusSchema,
   attempt_count: z.number().int().nonnegative(),
   max_attempts: z.number().int().positive(),

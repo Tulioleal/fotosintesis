@@ -97,6 +97,37 @@ uniqueness, immutability, and existence for every new terminal enrichment
 transition: a terminal enrichment job cannot commit without exactly one
 matching observation, and historical jobs are neither backfilled nor rejected.
 
+## Migration 0013: durable enrichment job progress
+
+Migration `0013_enrichment_job_progress` adds the durable per-job progress
+checkpoint that the worker uses to decide partial versus failed outcomes and
+to derive terminal efficacy observations. Routine application rollback must not
+downgrade migration 0013.
+
+The Alembic downgrade for 0013 exists for controlled development/test teardown
+only. Downgrading loses all durable progress checkpoints, which can change how
+already-exhausted or crashed enrichment jobs are later reconciled (a job with
+accepted evidence that survived as `partial` could be reported as `failed`
+after the checkpoint is gone). The 0013 downgrade never deletes accepted
+knowledge evidence or existing profile snapshots.
+
+## Migration 0014: canonical profile species identity
+
+Migration `0014_profile_canonical_identity` adds the nullable canonical
+identity columns on `plant_profiles` and the partial unique index over
+non-null `canonical_species_key`. Routine application rollback must not
+downgrade migration 0014.
+
+The Alembic downgrade for 0014 exists for controlled development/test teardown
+only. Downgrading loses canonical profile identity metadata and its uniqueness
+constraint, so profiles fall back to display-name lookup and concurrent
+canonical creation may no longer converge on one row. The 0014 downgrade never
+deletes accepted evidence or existing profile snapshots.
+
+Neither the 0013 nor the 0014 downgrade is a routine production rollback path.
+Use image rollback, backup restore, or a forward-fix migration instead, and keep
+`JOBS_PRODUCER_ENABLED=false` when rolling back across these migrations.
+
 The deploy workflow does not attempt to undo a migration. It always
 runs `alembic upgrade head`. Operators must pick restore or forward-fix
 based on the data loss tolerance for the affected environment.

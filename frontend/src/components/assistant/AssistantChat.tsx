@@ -50,6 +50,7 @@ export function AssistantChat() {
   const plant = searchParams.get("plant");
   const binomial = searchParams.get("binomial");
   const scientific = searchParams.get("scientific");
+  const candidate = searchParams.get("candidate");
   const hasPlantContext = Boolean(plant);
   const scientificLabel = binomial ?? scientific ?? null;
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export function AssistantChat() {
         plant,
         plant_binomial_name: binomial,
         plant_scientific_name: scientific,
+        confirmed_candidate_id: candidate ?? undefined,
       });
       if (
         "retryable" in response &&

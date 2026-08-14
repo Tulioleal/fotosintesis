@@ -16,7 +16,6 @@ import { apiClient } from "@/lib/api/client";
 import type { CandidateEnrichmentStatus } from "@/lib/api/client";
 import { buildAssistantHref } from "@/lib/assistant";
 import { ChatTextIcon, PlusCircleIcon, SunIcon } from "@phosphor-icons/react";
-import type { PlantProfile } from "./types";
 import styles from "./PlantProfileView.module.scss";
 
 const sectionLabels: Record<string, string> = {
@@ -41,6 +40,9 @@ const limitationCopy: Record<string, string> = {
   missing_required_aspects: "Faltan aspectos requeridos.",
   safety_evidence_rejected: "La evidencia de seguridad no alcanzo el umbral requerido.",
   insufficient_evidence: "No se encontro evidencia suficiente.",
+  retry_exhausted: "Se agotaron los reintentos de ampliar la evidencia.",
+  workflow_incomplete: "El proceso de ampliacion quedo incompleto.",
+  indexing_deferred: "La evidencia se guardo pero la indexacion quedo pendiente.",
 };
 
 const aspectCopy: Record<string, string> = {
@@ -66,6 +68,9 @@ const aspectCopy: Record<string, string> = {
 const terminalStatuses = new Set(["complete", "partial", "failed"]);
 const activeStatuses = new Set(["pending", "processing"]);
 
+export const ENRICHMENT_POLL_INTERVAL_MS = 3_000;
+export const ENRICHMENT_STALL_AFTER_MS = 300_000;
+
 export const plantProfileQueryKey = (candidateId: string, scientificName: string, language: string) =>
   ["plant-profile", candidateId, scientificName, language] as const;
 
@@ -76,11 +81,15 @@ export function enrichmentRefetchInterval(
   query: { state: { data?: CandidateEnrichmentStatus; status?: string } },
   fallback?: CandidateEnrichmentStatus | null,
   terminalObserved = false,
+  stalled = false,
 ) {
   if (terminalObserved) return false;
 
   const enrichment = query.state.data ?? fallback;
-  return activeStatuses.has(enrichment?.job.status ?? "") ? 3_000 : false;
+  const status = enrichment?.job.status ?? "";
+  if (!activeStatuses.has(status)) return false;
+  if (stalled) return false;
+  return ENRICHMENT_POLL_INTERVAL_MS;
 }
 
 function optionalText(value: FormDataEntryValue | null) {
@@ -95,13 +104,26 @@ export function PlantProfileView({
   const [language] = useState(() => typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es");
   const [message, setMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [enrichmentStalled, setEnrichmentStalled] = useState(false);
+  const [enrichmentRefreshing, setEnrichmentRefreshing] = useState(false);
   const invalidatedTerminal = useRef<string | null>(null);
   const terminalObservation = useRef<string | null>(null);
+  // Client observation window scoped by candidate and job id. Identical active
+  // responses and lease-renewal timestamp changes never reset it; only a
+  // candidate or job change starts a fresh bounded window.
+  const observationWindow = useRef<{ key: string; startedAt: number } | null>(null);
   const profileQuery = useQuery({
     queryKey: plantProfileQueryKey(confirmedCandidateId ?? "", scientificName, language),
     queryFn: () => apiClient.getPlantProfile(scientificName, confirmedCandidateId!, language),
     enabled: Boolean(confirmedCandidateId),
   });
+  const terminalObservedFor = (
+    enrichment: CandidateEnrichmentStatus | null | undefined,
+  ) =>
+    terminalObservation.current !== null &&
+    enrichment !== undefined &&
+    enrichment !== null &&
+    terminalObservation.current === `${confirmedCandidateId}:${enrichment.job.id}`;
   const enrichmentQuery = useQuery({
     queryKey: candidateEnrichmentQueryKey(confirmedCandidateId ?? "", scientificName, language),
     queryFn: () => apiClient.getCandidateEnrichment(confirmedCandidateId!),
@@ -110,9 +132,45 @@ export function PlantProfileView({
       enrichmentRefetchInterval(
         query,
         profileQuery.data?.enrichment,
-        terminalObservation.current !== null,
+        terminalObservedFor(query.state.data ?? profileQuery.data?.enrichment),
+        enrichmentStalled,
       ),
   });
+  const observedEnrichment =
+    enrichmentQuery.data ?? profileQuery.data?.enrichment;
+
+  useEffect(() => {
+    const status = observedEnrichment?.job.status;
+    const jobId = observedEnrichment?.job.id;
+    if (!activeStatuses.has(status ?? "")) {
+      observationWindow.current = null;
+      setEnrichmentStalled(false);
+      return;
+    }
+    if (!confirmedCandidateId || !jobId) return;
+    const key = `${confirmedCandidateId}:${jobId}`;
+    if (observationWindow.current === null || observationWindow.current.key !== key) {
+      observationWindow.current = { key, startedAt: Date.now() };
+      terminalObservation.current = null;
+      setEnrichmentStalled(false);
+    }
+  }, [confirmedCandidateId, observedEnrichment?.job.id, observedEnrichment?.job.status]);
+
+  useEffect(() => {
+    if (!confirmedCandidateId) return;
+    const check = () => {
+      const window = observationWindow.current;
+      if (window === null) {
+        setEnrichmentStalled(false);
+        return;
+      }
+      setEnrichmentStalled(
+        Date.now() - window.startedAt >= ENRICHMENT_STALL_AFTER_MS,
+      );
+    };
+    const timer = window.setInterval(check, ENRICHMENT_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [confirmedCandidateId]);
   const saveMutation = useMutation({
     mutationFn: (body: Parameters<typeof apiClient.saveGardenPlant>[0]) => apiClient.saveGardenPlant(body),
     onSuccess: async (payload) => {
@@ -124,6 +182,9 @@ export function PlantProfileView({
 
   useEffect(() => {
     terminalObservation.current = null;
+    observationWindow.current = null;
+    setEnrichmentStalled(false);
+    setEnrichmentRefreshing(false);
   }, [confirmedCandidateId, scientificName, language]);
 
   useEffect(() => {
@@ -132,14 +193,10 @@ export function PlantProfileView({
     if (!confirmedCandidateId || !status || !terminalStatuses.has(status)) return;
 
     const observation = `${confirmedCandidateId}:${enrichment.policy_version}:${enrichment.job.id}:${status}`;
-    terminalObservation.current = observation;
+    terminalObservation.current = `${confirmedCandidateId}:${enrichment.job.id}`;
 
     if (invalidatedTerminal.current === observation) return;
     invalidatedTerminal.current = observation;
-    void queryClient.invalidateQueries({
-      queryKey: candidateEnrichmentQueryKey(confirmedCandidateId, scientificName, language),
-      exact: true,
-    });
     void queryClient.invalidateQueries({
       queryKey: plantProfileQueryKey(confirmedCandidateId, scientificName, language),
       exact: true,
@@ -173,11 +230,12 @@ export function PlantProfileView({
   const limitations = profile.limitations ?? [];
   const sections = profile.sections ?? {};
   const sources = profile.sources ?? [];
-  const binomialName = profileBinomialName(profile);
+  const binomialName = profile.binomial_name ?? null;
   const assistantHref = buildAssistantHref({
     plant: profile.selected_alias ?? profile.common_name ?? profile.scientific_name,
     binomial: binomialName,
     scientific: profile.scientific_name,
+    candidate: confirmedCandidateId ?? null,
   });
   const reminderHref = `/reminders?plant=${encodeURIComponent(profile.scientific_name)}`;
   const lightMeterHref = `/light-meter?plant=${encodeURIComponent(profile.scientific_name)}`;
@@ -190,7 +248,20 @@ export function PlantProfileView({
         description={profile.scientific_name}
       />
 
-      {enrichment ? <EnrichmentSummary enrichment={enrichment} /> : null}
+      {enrichment ? (
+        <EnrichmentSummary
+          enrichment={enrichment}
+          stalled={enrichmentStalled}
+          refreshing={enrichmentRefreshing}
+          onRetry={() => {
+            if (enrichmentRefreshing) return;
+            setEnrichmentRefreshing(true);
+            void enrichmentQuery.refetch().finally(() => {
+              setEnrichmentRefreshing(false);
+            });
+          }}
+        />
+      ) : null}
       {profileQuery.isError ? (
         <Notice tone="warning" role="note" heading="No pudimos actualizar el perfil">
           Conservamos la ultima instantanea disponible. {profileQuery.error.message}
@@ -203,7 +274,7 @@ export function PlantProfileView({
       ) : null}
 
       {limitations.length ? (
-        <Notice tone="warning" heading="Limitaciones de la evidencia">
+        <Notice tone="warning" role="note" heading="Limitaciones de la evidencia">
           {limitations.map((item) => <p key={item}>{item}</p>)}
         </Notice>
       ) : null}
@@ -294,17 +365,45 @@ export function PlantProfileView({
   );
 }
 
-function EnrichmentSummary({ enrichment }: Readonly<{ enrichment: CandidateEnrichmentStatus }>) {
+function EnrichmentSummary({
+  enrichment,
+  stalled,
+  refreshing,
+  onRetry,
+}: Readonly<{
+  enrichment: CandidateEnrichmentStatus;
+  stalled: boolean;
+  refreshing: boolean;
+  onRetry: () => void;
+}>) {
   const { job, policy_version: policyVersion } = enrichment;
   const result = enrichmentResult(enrichment);
   const limitations = result?.limitations ?? (job.last_error ? [job.last_error.category] : []);
+  const status = lifecycleCopy[job.status];
 
   return (
     <Card variant="tonal" padding="md">
       <h2 className={styles.sectionTitle}>Estado de la evidencia</h2>
-      <p className={styles.sectionCopy} role="status" aria-live="polite">
-        {lifecycleCopy[job.status]} · Politica v{policyVersion}
-      </p>
+      <div role="status" aria-live="polite">
+        <p className={styles.sectionCopy}>
+          {status} · Politica v{policyVersion}
+        </p>
+        {stalled ? (
+          <p className={styles.sectionCopy}>
+            La ampliacion esta tardando mas de lo esperado. Puedes seguir usando el perfil.
+          </p>
+        ) : null}
+      </div>
+      {stalled ? (
+        <Button
+          variant="outline"
+          onClick={onRetry}
+          disabled={refreshing}
+          aria-busy={refreshing}
+        >
+          {refreshing ? "Revisando estado..." : "Revisar estado"}
+        </Button>
+      ) : null}
       {result ? (
         <div className={styles.evidenceSummary}>
           <AspectSummary label="Aspectos cubiertos" aspects={result.covered_aspects} count={result.covered_count} />
@@ -341,8 +440,4 @@ function aspectLabel(aspect: string) {
 function enrichmentResult(enrichment: CandidateEnrichmentStatus) {
   const result = enrichment.job.result;
   return result && "covered_aspects" in result ? result : null;
-}
-
-function profileBinomialName(profile: PlantProfile) {
-  return (profile as PlantProfile & { binomial_name?: string | null }).binomial_name ?? null;
 }

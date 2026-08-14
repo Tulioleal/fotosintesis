@@ -16,6 +16,12 @@ from sqlalchemy import text
 from app.core.settings import Settings, get_settings
 from app.db.session import AsyncSessionLocal
 from app.enrichment.policy import enrichment_policy_label
+from app.enrichment.progress import (
+    EnrichmentProgressRepository,
+    build_efficacy_snapshot,
+    build_failure_terminal_result,
+    select_operational_limitation,
+)
 from app.jobs.handler import (
     EnrichmentEfficacySnapshot,
     JobHandler,
@@ -31,6 +37,7 @@ from app.jobs.schemas import (
     ClaimedJob,
     EnrichConfirmedPlantPayload,
     EnrichmentJobResult,
+    EnrichmentLimitation,
     JobError,
     JobFailureCategory,
     JobStatus,
@@ -68,6 +75,17 @@ def _validate_required_contracts(*, get_payload_model, configured: str) -> None:
             raise RuntimeError("required job contract is not registered")
 
 
+def _has_operational_limitation(details: EnrichmentJobResult) -> bool:
+    return any(
+        limitation in details.limitations
+        for limitation in (
+            EnrichmentLimitation.retry_exhausted,
+            EnrichmentLimitation.workflow_incomplete,
+            EnrichmentLimitation.indexing_deferred,
+        )
+    )
+
+
 def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
     details = result.result
     if isinstance(details, EnrichmentJobResult):
@@ -77,7 +95,7 @@ def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
             and not details.missing_aspects
             or result.status is JobStatus.partial
             and details.outcome == "partial"
-            and bool(details.missing_aspects)
+            and (bool(details.missing_aspects) or _has_operational_limitation(details))
         )
         if valid:
             return result
@@ -345,32 +363,33 @@ class Worker:
             result = await repo.reconcile_expired_processing(
                 batch_limit=self.settings.jobs_batch_size,
             )
-            reconciliation_now = datetime.now(UTC)
-            for job_id, raw_policy in result.exhausted_enrichment_jobs:
-                created_at = result.exhausted_enrichment_job_created_at.get(job_id)
-                completion_duration = (
-                    max((reconciliation_now - created_at).total_seconds(), 0.0)
-                    if created_at is not None
-                    else 0.0
-                )
+            for terminal in result.exhausted_enrichment_terminals:
                 await repo.record_terminal_enrichment_observation(
-                    job_id=job_id,
-                    policy_label=enrichment_policy_label(raw_policy),
-                    lifecycle_outcome="failed",
-                    acquisition_avoided=False,
-                    local_covered_count=0,
-                    final_covered_count=0,
-                    coverage_gain=0,
-                    accepted_aspect_count=0,
-                    search_count=0,
-                    duration_seconds=completion_duration,
+                    job_id=terminal.job_id,
+                    policy_label=terminal.policy_label,
+                    lifecycle_outcome=terminal.lifecycle_outcome,
+                    acquisition_avoided=terminal.acquisition_avoided,
+                    local_covered_count=terminal.local_covered_count,
+                    final_covered_count=terminal.final_covered_count,
+                    coverage_gain=terminal.coverage_gain,
+                    accepted_aspect_count=terminal.accepted_aspect_count,
+                    search_count=terminal.search_count,
+                    duration_seconds=terminal.duration_seconds,
                 )
             await session.commit()
+        for terminal in result.exhausted_enrichment_terminals:
+            self._metrics.record_job_outcome(
+                job_type=JobType.enrich_confirmed_plant.value,
+                status=terminal.status.value,
+                duration_seconds=terminal.duration_seconds,
+            )
         await self._refresh_durable_efficacy_metrics(propagate_errors=True)
         for job_type, count in result.exhausted_by_type.items():
             self._metrics.record_job_stale_recovery(
                 job_type=job_type, outcome="attempts_exhausted", count=count
             )
+            if job_type == JobType.enrich_confirmed_plant.value:
+                continue
             for _ in range(count):
                 self._metrics.record_job_outcome(
                     job_type=job_type,
@@ -718,8 +737,12 @@ class Worker:
                     self._record_lease_loss(state, operation="complete")
                     return
                 if state.job_type == JobType.enrich_confirmed_plant.value:
+                    efficacy = await self._checkpoint_efficacy_in_session(
+                        session=session, state=state
+                    )
                     await self._record_observation_in_session(
-                        repo, state=state, outcome="complete", duration=self._completion_duration_seconds(state)
+                        repo, state=state, outcome="complete", duration=self._completion_duration_seconds(state),
+                        efficacy_override=efficacy,
                     )
                 await session.commit()
                 state.terminal_committed = True
@@ -750,8 +773,12 @@ class Worker:
                     self._record_lease_loss(state, operation="partial")
                     return
                 if state.job_type == JobType.enrich_confirmed_plant.value:
+                    efficacy = await self._checkpoint_efficacy_in_session(
+                        session=session, state=state
+                    )
                     await self._record_observation_in_session(
-                        repo, state=state, outcome="partial", duration=self._completion_duration_seconds(state)
+                        repo, state=state, outcome="partial", duration=self._completion_duration_seconds(state),
+                        efficacy_override=efficacy,
                     )
                 await session.commit()
                 state.terminal_committed = True
@@ -823,6 +850,23 @@ class Worker:
                 )
                 return
 
+            if job_type == JobType.enrich_confirmed_plant.value:
+                final_category = (
+                    JobFailureCategory.attempts_exhausted
+                    if is_last_attempt and should_retry
+                    else failure_category
+                )
+                await self._finalize_failed_enrichment(
+                    repo=repo,
+                    state=state,
+                    session=session,
+                    failure_category=final_category,
+                    is_last_attempt=is_last_attempt,
+                    attempt_count=attempt_count,
+                    duration=duration,
+                )
+                return
+
             success = await repo.fail_job(
                 job_id=job_id, owner=self.owner,
                 lease_token=lease_token,
@@ -833,10 +877,6 @@ class Worker:
                 await session.rollback()
                 self._record_lease_loss(state, operation="fail")
                 return
-            if state.job_type == JobType.enrich_confirmed_plant.value:
-                await self._record_observation_in_session(
-                    repo, state=state, outcome="failed", duration=self._completion_duration_seconds(state)
-                )
             await session.commit()
             state.terminal_committed = True
             self._metrics.record_job_outcome(
@@ -856,6 +896,114 @@ class Worker:
                 },
             )
 
+    async def _finalize_failed_enrichment(
+        self,
+        *,
+        repo: JobRepository,
+        state: _ExecutionState,
+        session,
+        failure_category: JobFailureCategory,
+        is_last_attempt: bool,
+        attempt_count: int,
+        duration: float,
+    ) -> None:
+        """Finalize a failed enrichment attempt from the durable checkpoint.
+
+        Useful accepted coverage finalizes as ``partial`` with the closed
+        error and an operational limitation; otherwise the job finalizes as
+        ``failed``. Terminal efficacy telemetry is built from the durable
+        progress checkpoint and inserted in the same transaction as the
+        terminal transition, never from the handler's zero snapshot.
+        """
+        job_id = state.job_id
+        progress = EnrichmentProgressRepository(session)
+        snapshot = await progress.get_for_terminalization(
+            job_id=UUID(job_id),
+            for_update=True,
+        )
+        operational = select_operational_limitation(
+            snapshot,
+            is_last_attempt=is_last_attempt,
+        )
+        final_status, terminal_result, closed_error = build_failure_terminal_result(
+            snapshot,
+            failure_category=failure_category,
+            operational_limitation=operational,
+        )
+        if final_status is JobStatus.partial:
+            success = await repo.partial_job(
+                job_id=UUID(job_id),
+                owner=self.owner,
+                lease_token=state.lease_token,
+                result=terminal_result,
+                error=closed_error,
+            )
+            operation = "partial"
+        else:
+            success = await repo.fail_job(
+                job_id=UUID(job_id),
+                owner=self.owner,
+                lease_token=state.lease_token,
+                error=closed_error,
+                result=None,
+            )
+            operation = "fail"
+        if not success:
+            await session.rollback()
+            self._record_lease_loss(state, operation=operation)
+            return
+        efficacy = build_efficacy_snapshot(snapshot) if snapshot is not None else state.efficacy
+        await self._record_observation_in_session(
+            repo,
+            state=state,
+            outcome=final_status.value,
+            duration=self._completion_duration_seconds(state),
+            efficacy_override=efficacy,
+        )
+        await session.commit()
+        state.terminal_committed = True
+        self._metrics.record_job_outcome(
+            job_type=state.job_type,
+            status=final_status.value,
+            duration_seconds=duration,
+        )
+        await self._refresh_durable_efficacy_metrics(propagate_errors=False)
+        logger.info(
+            "job_terminal_from_progress",
+            extra={
+                "ctx_job_id": job_id,
+                "ctx_job_type": state.job_type,
+                "ctx_attempt": attempt_count,
+                "ctx_failure_category": failure_category.value,
+                "ctx_duration": duration,
+                "ctx_worker_identity": self.owner,
+                "ctx_outcome": final_status.value,
+            },
+        )
+
+    async def _checkpoint_efficacy_in_session(
+        self,
+        *,
+        session,
+        state: _ExecutionState,
+    ) -> EnrichmentEfficacySnapshot | None:
+        """Build terminal efficacy from the locked durable progress checkpoint.
+
+        Every terminal enrichment observation uses the durable progress
+        checkpoint rather than a handler snapshot so complete, semantic
+        partial, failure-derived partial, and failed outcomes are consistent.
+        Returns ``None`` only when no checkpoint exists (non-enrichment jobs
+        or handlers that predate durable checkpoints).
+        """
+        progress = EnrichmentProgressRepository(session)
+        snapshot = await progress.get_for_terminalization(
+            job_id=UUID(state.job_id),
+            for_update=True,
+        )
+        if snapshot is None:
+            return None
+        return build_efficacy_snapshot(snapshot)
+
     def _completion_duration_seconds(self, state: _ExecutionState) -> float:
         """Enqueue-to-terminal duration for durable enrichment efficacy."""
         if state.job_created_at is None:
@@ -871,12 +1019,15 @@ class Worker:
         state: _ExecutionState,
         outcome: str,
         duration: float,
+        efficacy_override: EnrichmentEfficacySnapshot | None = None,
     ) -> None:
         """Insert the immutable terminal enrichment observation in the same
         transaction as the terminal job transition. Never called for retries
         or non-enrichment jobs. ``duration`` is the completion duration from
-        job creation to the terminal commit."""
-        snapshot = state.efficacy
+        job creation to the terminal commit. ``efficacy_override`` replaces
+        the handler snapshot for failure-derived terminals built from the
+        durable progress checkpoint."""
+        snapshot = efficacy_override or state.efficacy
         if snapshot is None:
             policy_label = state.policy_label or "unsupported"
             acquisition_avoided = False

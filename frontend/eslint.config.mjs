@@ -81,4 +81,13 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ["e2e/next-font-mocked-responses.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        module: "readonly",
+      },
+    },
+  },
 );

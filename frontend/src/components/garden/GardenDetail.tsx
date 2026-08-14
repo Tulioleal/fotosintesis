@@ -25,6 +25,7 @@ import { resolveImageUrl } from "@/lib/images";
 import { AppLink, Button, Card, Chip, Notice } from "@/components/ui";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./GardenDetail.module.scss";
+import type { PlantProfile } from "./types";
 import Image from "next/image";
 
 const classificationLabel: Record<LightClassification, string> = {
@@ -131,6 +132,7 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
     plant: plant.nickname ?? displayName,
     binomial: binomialName,
     scientific: plant.profile.scientific_name,
+    candidate: plant.confirmed_candidate_id ?? null,
   });
   const lightMeterHref = `/light-meter?plant=${encodeURIComponent(plant.profile.scientific_name)}`;
   const reminderHref = `/reminders?plant=${encodeURIComponent(plant.profile.scientific_name)}`;
@@ -359,8 +361,6 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   );
 }
 
-function profileBinomialName(
-  profile: { scientific_name: string } & { binomial_name?: string | null },
-) {
+function profileBinomialName(profile: PlantProfile) {
   return profile.binomial_name ?? null;
 }

@@ -163,6 +163,35 @@ describe("IdentifyFlow", () => {
     );
   });
 
+  it("links to the assistant with candidate, binomial and scientific context after confirmation", async () => {
+    const confirmedPayload = {
+      ...identificationPayload,
+      candidates: [
+        { ...identificationPayload.candidates[0], confirmed_at: "2026-01-01T00:00:00Z" },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({ ok: true, json: async () => confirmedPayload }),
+    );
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp"]',
+    ) as HTMLInputElement;
+
+    fireEvent.change(upload, {
+      target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] },
+    });
+    await screen.findByRole("heading", { name: "Pata de oso" });
+
+    expect(
+      screen.getByRole("link", { name: "Preguntar al asistente" }),
+    ).toHaveAttribute(
+      "href",
+      "/assistant?plant=Pata%20de%20oso&binomial=Cotyledon%20tomentosa&scientific=Cotyledon%20tomentosa&candidate=candidate-1",
+    );
+  });
+
   it("allows only one pending confirmation, shows progress, and does not navigate after a 503", async () => {
     vi.stubGlobal(
       "fetch",

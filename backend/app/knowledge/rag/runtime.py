@@ -65,7 +65,6 @@ def create_llamaindex_pgvector_store(settings: Settings) -> Any:
         user=config.user,
         table_name=config.table_name,
         embed_dim=config.embed_dim,
-        initialization_fail_on_error=True,
     )
 
 

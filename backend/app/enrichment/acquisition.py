@@ -73,6 +73,8 @@ class OfflineEnrichmentAcquisitionService:
             )
             trusted = self.trusted_sources.filter(candidates)
             for page in await self.page_fetcher.fetch_all(trusted, limit=3):
+                if not (page.has_fetched_content and page.fetch_status == "fetched"):
+                    continue
                 if page.evidence_text.strip():
                     selected.setdefault(page.result.url, page)
 

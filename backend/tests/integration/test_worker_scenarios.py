@@ -33,6 +33,8 @@ from app.jobs.handler import (
 )
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import (
+    EnrichConfirmedPlantPayload,
+    EnrichmentLimitation,
     IngestValidatedClaimsPayload,
     JobError,
     JobFailureCategory,
@@ -1720,3 +1722,512 @@ class TestRenewalFinalizationRace:
                 )
             ).scalars().all()
         assert list(observations) == [outcome]
+
+
+class _FakeEnrichExhaustingHandler(JobHandler):
+    """Enrich handler that always reports a retryable provider failure."""
+
+    async def handle(self, *, payload, attempt_count, max_attempts) -> JobHandlerResult:
+        return JobHandlerResult.failed(
+            category=JobFailureCategory.provider_transient,
+            retryable=True,
+        )
+
+
+class _FakeEnrichFailingThenCompletingHandler(JobHandler):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def handle(self, *, payload, attempt_count, max_attempts) -> JobHandlerResult:
+        self.calls += 1
+        if self.calls == 1:
+            return JobHandlerResult.failed(
+                category=JobFailureCategory.provider_transient,
+                retryable=True,
+            )
+        return JobHandlerResult(
+            status=JobStatus.complete,
+            result=ReadJobResult(succeeded=1),
+        )
+
+
+class TestDurablePartialProgress:
+    """Durable-progress checkpoint scenarios for the partial/failed decision."""
+
+    async def _enrich_job(self, pg_session_factory, *, max_attempts: int = 1) -> UUID:
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            run_id = uuid4()
+            result = await repo.enqueue_active_enrichment(
+                payload_version=1,
+                payload={
+                    "payload_version": 1,
+                    "policy_version": 1,
+                    "species": {
+                        "accepted_gbif_key": 2878688,
+                        "normalized_binomial": "Monstera deliciosa",
+                    },
+                    "taxonomy_provenance_id": str(uuid4()),
+                    "run_id": str(run_id),
+                },
+                idempotency_key=f"progress-{uuid4()}",
+                active_deduplication_key=f"active-progress-{uuid4()}",
+                max_attempts=max_attempts,
+            )
+            await session.commit()
+        return result.job_id
+
+    async def _init_progress(
+        self,
+        pg_session_factory,
+        *,
+        job_id: UUID,
+        persisted: list[str],
+        local: list[str] | None = None,
+    ) -> None:
+        from app.enrichment.progress import EnrichmentProgressRepository
+        from app.enrichment.policy import ENRICHMENT_POLICY_V1
+
+        async with pg_session_factory() as session:
+            progress = EnrichmentProgressRepository(session)
+            await progress.initialize_or_load(
+                job_id=job_id,
+                policy_version=1,
+                required_aspects=[
+                    aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects
+                ],
+            )
+            await progress.record_local_coverage(
+                job_id=job_id, local_covered_aspects=local if local is not None else []
+            )
+            if persisted:
+                await progress.record_persisted_aspects(
+                    job_id=job_id, persisted_aspects=persisted
+                )
+            await session.commit()
+
+    async def _run_worker_until_terminal(
+        self, worker: Worker, pg_session_factory, job_id: UUID, status: str
+    ) -> None:
+        task = asyncio.create_task(worker.start())
+        try:
+            for _ in range(200):
+                row = await _job_status(pg_session_factory, job_id)
+                if row.get("status") == status:
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            worker.stop()
+            await task
+
+    async def _observation(self, pg_session_factory, job_id: UUID) -> dict | None:
+        from app.auth.tables import enrichment_telemetry_observations
+
+        async with pg_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(
+                        enrichment_telemetry_observations.c.lifecycle_outcome,
+                        enrichment_telemetry_observations.c.acquisition_avoided,
+                        enrichment_telemetry_observations.c.local_covered_count,
+                        enrichment_telemetry_observations.c.final_covered_count,
+                        enrichment_telemetry_observations.c.coverage_gain,
+                        enrichment_telemetry_observations.c.accepted_aspect_count,
+                        enrichment_telemetry_observations.c.search_count,
+                        enrichment_telemetry_observations.c.duration_seconds,
+                    ).where(
+                        enrichment_telemetry_observations.c.job_id == job_id
+                    )
+                )
+            ).first()
+        return dict(row._mapping) if row else None
+
+    def _registry(self) -> HandlerRegistry:
+        registry = HandlerRegistry()
+        registry.register(
+            JobType.enrich_confirmed_plant.value,
+            _FakeEnrichExhaustingHandler(),
+            payload_models={1: EnrichConfirmedPlantPayload},
+        )
+        return registry
+
+    async def test_live_exhaustion_with_useful_checkpoint_becomes_partial(
+        self, pg_session_factory
+    ) -> None:
+        job_id = await self._enrich_job(pg_session_factory, max_attempts=1)
+        await self._init_progress(
+            pg_session_factory,
+            job_id=job_id,
+            persisted=["light_exposure"],
+        )
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=self._registry(),
+        )
+        await self._run_worker_until_terminal(worker, pg_session_factory, job_id, JobStatus.partial.value)
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.partial.value
+        assert row["lease_owner"] is None
+        assert row["lease_token"] is None
+        assert row["last_error"]["category"] == JobFailureCategory.attempts_exhausted.value
+        assert row["last_error"]["retryable"] is False
+        result = row["result"]
+        assert result["outcome"] == "partial"
+        assert "light_exposure" in result["covered_aspects"]
+        assert result["missing_aspects"]
+        # Accepted evidence persisted but was never indexed, so the actual
+        # unfinished stage selects the indexing_deferred limitation even
+        # though the final permitted attempt exhausted retries.
+        assert "indexing_deferred" in result["limitations"]
+        assert "retry_exhausted" not in result["limitations"]
+        observation = await self._observation(pg_session_factory, job_id)
+        assert observation is not None
+        assert observation["lifecycle_outcome"] == "partial"
+        assert observation["local_covered_count"] == 0
+        assert observation["final_covered_count"] == 1
+        assert observation["coverage_gain"] == 1
+        assert observation["accepted_aspect_count"] == 1
+        assert observation["search_count"] == 0
+        assert observation["duration_seconds"] >= 0.0
+        from app.auth.tables import enrichment_telemetry_observations
+
+        async with pg_session_factory() as session:
+            count = int(
+                await session.scalar(
+                    select(func.count()).select_from(enrichment_telemetry_observations)
+                )
+                or 0
+            )
+        assert count == 1
+
+    async def test_live_exhaustion_with_local_only_checkpoint_becomes_partial(
+        self, pg_session_factory
+    ) -> None:
+        """A final permitted attempt that fails after local-only accepted
+        coverage survives as a partial because useful coverage equals accepted
+        local plus persisted aspects, without a deferred-indexing claim."""
+        job_id = await self._enrich_job(pg_session_factory, max_attempts=1)
+        await self._init_progress(
+            pg_session_factory,
+            job_id=job_id,
+            persisted=[],
+            local=["light_exposure"],
+        )
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=self._registry(),
+        )
+        await self._run_worker_until_terminal(worker, pg_session_factory, job_id, JobStatus.partial.value)
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == "partial"
+        result = row["result"]
+        assert result["covered_aspects"] == ["light_exposure"]
+        assert "retry_exhausted" in result["limitations"]
+        assert "indexing_deferred" not in result["limitations"]
+        observation = await self._observation(pg_session_factory, job_id)
+        assert observation is not None
+        assert observation["local_covered_count"] == 1
+        assert observation["final_covered_count"] == 1
+        assert observation["accepted_aspect_count"] == 0
+
+    async def test_live_exhaustion_without_useful_checkpoint_stays_failed(
+        self, pg_session_factory
+    ) -> None:
+        job_id = await self._enrich_job(pg_session_factory, max_attempts=1)
+        await self._init_progress(pg_session_factory, job_id=job_id, persisted=[])
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=self._registry(),
+        )
+        await self._run_worker_until_terminal(worker, pg_session_factory, job_id, JobStatus.failed.value)
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.failed.value
+        assert row["last_error"]["category"] == JobFailureCategory.attempts_exhausted.value
+        assert row["last_error"]["retryable"] is False
+        assert row["result"] is None
+        observation = await self._observation(pg_session_factory, job_id)
+        assert observation is not None
+        assert observation["lifecycle_outcome"] == "failed"
+
+    async def test_crash_reconciliation_uses_same_decision_rule(
+        self, pg_session_factory
+    ) -> None:
+        from app.enrichment.progress import EnrichmentProgressRepository
+        from app.enrichment.policy import ENRICHMENT_POLICY_V1
+
+        useful_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        empty_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        # Force both jobs into an exhausted crashed processing state.
+        now = datetime.now(UTC)
+        async with pg_session_factory() as session:
+            await session.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id.in_([useful_id, empty_id]))
+                .values(
+                    status="processing",
+                    attempt_count=3,
+                    max_attempts=3,
+                    lease_owner="crashed-worker",
+                    lease_token="token",
+                    lease_expires_at=now - timedelta(seconds=60),
+                    available_at=now - timedelta(seconds=60),
+                )
+            )
+            await session.commit()
+        await self._init_progress(
+            pg_session_factory,
+            job_id=useful_id,
+            persisted=["light_exposure"],
+        )
+        async with pg_session_factory() as session:
+            progress = EnrichmentProgressRepository(session)
+            await progress.initialize_or_load(
+                job_id=empty_id,
+                policy_version=1,
+                required_aspects=[
+                    aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects
+                ],
+            )
+            await session.commit()
+
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            result = await repo.reconcile_expired_processing(batch_limit=100)
+            await session.commit()
+
+        terminals = {
+            terminal.job_id: terminal for terminal in result.exhausted_enrichment_terminals
+        }
+        assert useful_id in terminals
+        assert empty_id in terminals
+        useful = terminals[useful_id]
+        empty = terminals[empty_id]
+        assert useful.status is JobStatus.partial
+        assert useful.result is not None
+        assert useful.lifecycle_outcome == "partial"
+        assert empty.status is JobStatus.failed
+        assert empty.result is None
+        assert empty.lifecycle_outcome == "failed"
+
+        # Reconciled partial terminal facts are derived from the durable
+        # checkpoint: accepted persisted coverage survives crash recovery and
+        # the outcome is the generic partial lifecycle, not a failed one.
+        assert useful.local_covered_count == 0
+        assert useful.final_covered_count == 1
+        assert useful.coverage_gain == 1
+        assert useful.accepted_aspect_count == 1
+        assert useful.result.outcome == "partial"
+        assert "light_exposure" in useful.result.covered_aspects
+        assert EnrichmentLimitation.indexing_deferred in useful.result.limitations
+        assert empty.local_covered_count == 0
+        assert empty.final_covered_count == 0
+        assert empty.coverage_gain == 0
+        assert empty.accepted_aspect_count == 0
+
+        for terminal in (useful, empty):
+            assert terminal.last_error.category is JobFailureCategory.attempts_exhausted
+            assert terminal.last_error.retryable is False
+
+        # The worker writes matching terminal observations from the typed
+        # records in the same transaction as the terminal transition.
+        from app.auth.tables import enrichment_telemetry_observations
+
+        async with pg_session_factory() as session:
+            repo = JobRepository(session)
+            for terminal in (useful, empty):
+                await repo.record_terminal_enrichment_observation(
+                    job_id=terminal.job_id,
+                    policy_label=terminal.policy_label,
+                    lifecycle_outcome=terminal.lifecycle_outcome,
+                    acquisition_avoided=terminal.acquisition_avoided,
+                    local_covered_count=terminal.local_covered_count,
+                    final_covered_count=terminal.final_covered_count,
+                    coverage_gain=terminal.coverage_gain,
+                    accepted_aspect_count=terminal.accepted_aspect_count,
+                    search_count=terminal.search_count,
+                    duration_seconds=terminal.duration_seconds,
+                )
+            await session.commit()
+            outcomes = (
+                await session.execute(
+                    select(
+                        enrichment_telemetry_observations.c.job_id,
+                        enrichment_telemetry_observations.c.lifecycle_outcome,
+                    )
+                )
+            ).all()
+        outcomes_by_job = {str(job_id): outcome for job_id, outcome in outcomes}
+        assert outcomes_by_job[str(useful_id)] == "partial"
+        assert outcomes_by_job[str(empty_id)] == "failed"
+
+    async def test_retry_produces_no_terminal_observation(self, pg_session_factory) -> None:
+        registry = HandlerRegistry()
+        handler = _FakeEnrichFailingThenCompletingHandler()
+        registry.register(
+            JobType.enrich_confirmed_plant.value,
+            handler,
+            payload_models={1: EnrichConfirmedPlantPayload},
+        )
+        job_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        await self._init_progress(pg_session_factory, job_id=job_id, persisted=["light_exposure"])
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=registry,
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            for _ in range(200):
+                row = await _job_status(pg_session_factory, job_id)
+                if row.get("status") == JobStatus.pending.value and row.get("attempt_count", 0) >= 1:
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            worker.stop()
+            await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.pending.value
+        assert row["attempt_count"] >= 1
+        assert row["last_error"]["category"] == JobFailureCategory.provider_transient.value
+        assert row["last_error"]["retryable"] is True
+        assert await self._observation(pg_session_factory, job_id) is None
+
+    async def test_reconciled_partial_worker_records_generic_partial_observation(
+        self, pg_session_factory
+    ) -> None:
+        """The full worker reconciliation path records a generic partial
+        observation for a crashed exhausted job with durable accepted
+        progress, with counts matching the durable checkpoint."""
+        job_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        now = datetime.now(UTC)
+        async with pg_session_factory() as session:
+            await session.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id == job_id)
+                .values(
+                    status="processing",
+                    attempt_count=3,
+                    max_attempts=3,
+                    lease_owner="crashed-worker",
+                    lease_token="token",
+                    lease_expires_at=now - timedelta(seconds=60),
+                    available_at=now - timedelta(seconds=60),
+                )
+            )
+            await session.commit()
+        await self._init_progress(
+            pg_session_factory,
+            job_id=job_id,
+            persisted=["light_exposure", "watering_frequency_or_trigger"],
+        )
+        from app.observability.metrics import MetricsRegistry
+
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=self._registry(),
+            metrics=metrics,
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            for _ in range(200):
+                row = await _job_status(pg_session_factory, job_id)
+                if row.get("status") == JobStatus.partial.value:
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            worker.stop()
+            await task
+
+        row = await _job_status(pg_session_factory, job_id)
+        assert row["status"] == JobStatus.partial.value
+        assert row["last_error"]["category"] == JobFailureCategory.attempts_exhausted.value
+        assert row["last_error"]["retryable"] is False
+        observation = await self._observation(pg_session_factory, job_id)
+        assert observation is not None
+        assert observation["lifecycle_outcome"] == "partial"
+        assert observation["local_covered_count"] == 0
+        assert observation["final_covered_count"] == 2
+        assert observation["coverage_gain"] == 2
+        assert observation["accepted_aspect_count"] == 2
+        assert observation["duration_seconds"] >= 0.0
+        job_type = JobType.enrich_confirmed_plant.value
+        assert metrics.job_outcomes[(job_type, JobStatus.partial.value)] == 1
+        assert metrics.job_outcomes.get((job_type, JobStatus.failed.value), 0) == 0
+
+    async def test_mixed_exhausted_batch_records_partial_and_failed_outcomes(
+        self, pg_session_factory
+    ) -> None:
+        """A reconciliation batch containing one enrichment job with useful
+        accepted progress and one without reports one generic partial and one
+        generic failed outcome, never a blanket failure for the partial."""
+        partial_job_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        failed_job_id = await self._enrich_job(pg_session_factory, max_attempts=3)
+        now = datetime.now(UTC)
+        async with pg_session_factory() as session:
+            await session.execute(
+                application_jobs.update()
+                .where(application_jobs.c.id.in_([partial_job_id, failed_job_id]))
+                .values(
+                    status="processing",
+                    attempt_count=3,
+                    max_attempts=3,
+                    lease_owner="crashed-worker",
+                    lease_token="token",
+                    lease_expires_at=now - timedelta(seconds=60),
+                    available_at=now - timedelta(seconds=60),
+                )
+            )
+            await session.commit()
+        await self._init_progress(
+            pg_session_factory,
+            job_id=partial_job_id,
+            persisted=["light_exposure"],
+        )
+        await self._init_progress(
+            pg_session_factory,
+            job_id=failed_job_id,
+            persisted=[],
+        )
+        from app.observability.metrics import MetricsRegistry
+
+        metrics = MetricsRegistry()
+        worker = Worker(
+            session_factory=pg_session_factory,
+            handler_registry=self._registry(),
+            metrics=metrics,
+        )
+        task = asyncio.create_task(worker.start())
+        try:
+            for _ in range(200):
+                partial_row = await _job_status(pg_session_factory, partial_job_id)
+                failed_row = await _job_status(pg_session_factory, failed_job_id)
+                if (
+                    partial_row.get("status") == JobStatus.partial.value
+                    and failed_row.get("status") == JobStatus.failed.value
+                ):
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            worker.stop()
+            await task
+
+        job_type = JobType.enrich_confirmed_plant.value
+        assert metrics.job_outcomes[(job_type, JobStatus.partial.value)] == 1
+        assert metrics.job_outcomes[(job_type, JobStatus.failed.value)] == 1
+        assert metrics.job_outcomes.get((job_type, JobStatus.complete.value), 0) == 0
+
+        partial_row = await _job_status(pg_session_factory, partial_job_id)
+        failed_row = await _job_status(pg_session_factory, failed_job_id)
+        assert partial_row["status"] == JobStatus.partial.value
+        assert failed_row["status"] == JobStatus.failed.value
+
+        partial_observation = await self._observation(pg_session_factory, partial_job_id)
+        failed_observation = await self._observation(pg_session_factory, failed_job_id)
+        assert partial_observation is not None
+        assert partial_observation["lifecycle_outcome"] == "partial"
+        assert failed_observation is not None
+        assert failed_observation["lifecycle_outcome"] == "failed"

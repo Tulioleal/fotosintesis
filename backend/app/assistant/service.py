@@ -40,6 +40,22 @@ class AssistantService:
     async def chat(
         self, *, user_id: UUID, payload: AssistantChatRequest
     ) -> AssistantChatResponse | AssistantRetryableError:
+        resolved_context = None
+        if payload.confirmed_candidate_id is not None:
+            resolved_context = await self.repository.resolve_candidate_context(
+                user_id=user_id,
+                candidate_id=payload.confirmed_candidate_id,
+            )
+        if resolved_context is not None:
+            # The server-resolved canonical identity overrides any conflicting
+            # client-supplied taxonomy fields and is never derived from a
+            # client-supplied canonical key.
+            payload = payload.model_copy(
+                update={
+                    "plant_binomial_name": resolved_context["normalized_binomial"],
+                    "plant_scientific_name": resolved_context["accepted_scientific_name"],
+                }
+            )
         operation_name = operational_plant_name(
             plant=payload.plant,
             plant_binomial_name=payload.plant_binomial_name,
@@ -61,6 +77,9 @@ class AssistantService:
             }.items()
             if value
         }
+        if resolved_context is not None:
+            plant_metadata["canonical_species_key"] = resolved_context["canonical_species_key"]
+            plant_metadata["confirmed_candidate_id"] = str(payload.confirmed_candidate_id)
         conversation_id = await self.repository.get_or_create_conversation(
             user_id=user_id,
             conversation_id=payload.conversation_id,
@@ -78,6 +97,16 @@ class AssistantService:
             plant_hint=payload.plant,
             plant_binomial_name=payload.plant_binomial_name,
             plant_scientific_name=payload.plant_scientific_name,
+            canonical_species_key=(
+                resolved_context["canonical_species_key"]
+                if resolved_context is not None
+                else None
+            ),
+            accepted_gbif_key=(
+                resolved_context["accepted_gbif_key"]
+                if resolved_context is not None
+                else None
+            ),
         )
         if state.get("total_generation_failure") and not state.get("answer"):
             tool_failures = state.get("tool_failures", [])

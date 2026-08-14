@@ -2,17 +2,25 @@ from collections import defaultdict
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, insert, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.schemas import GardenPlantCard
 from app.auth.tables import (
+    enrichment_validation_evidence,
+    enrichment_validation_runs,
     garden_plants,
     identification_candidates,
     identification_images,
     knowledge_chunks,
+    knowledge_document_aspect_supports,
+    knowledge_documents,
+    knowledge_sources,
     plant_profiles,
 )
 from app.db.repository import RepositoryBase
+from app.enrichment.identity import CanonicalSpeciesIdentity
+from app.knowledge.schemas import ReviewStatus
 from app.profile_garden.schemas import (
     GardenPlantCreate,
     GardenPlantResponse,
@@ -32,6 +40,30 @@ SECTION_TOPICS = {
 }
 
 
+def canonical_identity_fields(candidate) -> dict[str, object]:
+    """Derive canonical profile identity from a confirmed candidate.
+
+    Returns an empty mapping when the candidate has no valid normalized
+    binomial, so callers keep the legacy display-name behavior.
+    """
+    if candidate is None:
+        return {}
+    try:
+        identity = CanonicalSpeciesIdentity(
+            accepted_gbif_key=candidate.gbif_accepted_key,
+            normalized_binomial=candidate.binomial_name,
+            taxonomy_validated=True,
+        )
+    except (TypeError, ValueError):
+        return {}
+    assert identity.normalized_binomial is not None
+    return {
+        "accepted_gbif_key": identity.accepted_gbif_key,
+        "normalized_binomial": identity.normalized_binomial,
+        "canonical_species_key": identity.key,
+    }
+
+
 class PlantProfileGardenRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -44,14 +76,63 @@ class PlantProfileGardenRepository(RepositoryBase):
         region: str | None = None,
         country: str | None = None,
         language: str | None = None,
+        accepted_gbif_key: int | None = None,
+        normalized_binomial: str | None = None,
+        canonical_species_key: str | None = None,
     ) -> PlantProfileResponse:
-        existing = await self._get_profile_row(scientific_name)
-        if existing is None:
-            profile_id = await self._create_profile(scientific_name, common_name)
-            existing = await self._get_profile_row_by_id(profile_id)
-        if existing is None:
-            raise ValueError("Unable to create plant profile")
-        return _profile_from_row(existing, region=region, country=country, language=language)
+        for attempt in range(2):
+            existing = await self._find_profile(
+                scientific_name=scientific_name,
+                normalized_binomial=normalized_binomial,
+                canonical_species_key=canonical_species_key,
+            )
+            if existing is not None:
+                return _profile_from_row(
+                    existing, region=region, country=country, language=language
+                )
+            try:
+                profile_id = await self._create_profile(
+                    scientific_name,
+                    common_name,
+                    accepted_gbif_key=accepted_gbif_key,
+                    normalized_binomial=normalized_binomial,
+                    canonical_species_key=canonical_species_key,
+                )
+                existing = await self._get_profile_row_by_id(profile_id)
+                if existing is not None:
+                    return _profile_from_row(
+                        existing, region=region, country=country, language=language
+                    )
+            except IntegrityError:
+                # Concurrent canonical profile creation lost the unique-key
+                # race; the retry re-selects the winning profile.
+                if attempt == 0:
+                    continue
+                raise
+            break
+        raise ValueError("Unable to create plant profile")
+
+    async def _find_profile(
+        self,
+        *,
+        scientific_name: str,
+        normalized_binomial: str | None,
+        canonical_species_key: str | None,
+    ):
+        """Select an existing profile for the canonical identity.
+
+        A profile is found only by its canonical species key when one is
+        supplied. Ambiguous null-key legacy profiles are never adopted at
+        runtime based on display-name equality: the 0014 migration backfilled
+        only unambiguous controlled legacy rows, and remaining null-key rows
+        stay unchanged. A candidate without any canonical identity (no GBIF
+        key and no normalized binomial) keeps the legacy display-name lookup.
+        """
+        if canonical_species_key:
+            return await self._get_profile_row_by_canonical(canonical_species_key)
+        if not normalized_binomial:
+            return await self._get_profile_row(scientific_name)
+        return None
 
     async def save_garden_plant(
         self, *, user_id: UUID, payload: GardenPlantCreate
@@ -63,6 +144,7 @@ class PlantProfileGardenRepository(RepositoryBase):
         profile = await self.get_or_create_profile(
             scientific_name=scientific_name,
             common_name=candidate.common_name,
+            **canonical_identity_fields(candidate),
         )
         garden_id = uuid4()
         await self.session.execute(
@@ -138,6 +220,15 @@ class PlantProfileGardenRepository(RepositoryBase):
             )
         ).first()
 
+    async def _get_profile_row_by_canonical(self, canonical_species_key: str):
+        return (
+            await self.session.execute(
+                select(plant_profiles).where(
+                    plant_profiles.c.canonical_species_key == canonical_species_key
+                )
+            )
+        ).first()
+
     async def _get_profile_row_by_id(self, profile_id: UUID):
         return (
             await self.session.execute(
@@ -145,32 +236,150 @@ class PlantProfileGardenRepository(RepositoryBase):
             )
         ).first()
 
-    async def _create_profile(self, scientific_name: str, common_name: str | None) -> UUID:
-        rows = (
-            await self.session.execute(
-                select(knowledge_chunks).where(
-                    knowledge_chunks.c.scientific_name == scientific_name
-                )
-            )
-        ).all()
+    async def _create_profile(
+        self,
+        scientific_name: str,
+        common_name: str | None,
+        *,
+        accepted_gbif_key: int | None = None,
+        normalized_binomial: str | None = None,
+        canonical_species_key: str | None = None,
+    ) -> UUID:
+        rows = await self._profile_evidence_chunks(
+            canonical_species_key=canonical_species_key,
+            normalized_binomial=normalized_binomial,
+        )
         profile_id = uuid4()
         sections, sources, confidence, limitations, aliases = _build_profile_evidence(
             scientific_name, common_name, [row._mapping for row in rows]
         )
-        await self.session.execute(
-            insert(plant_profiles).values(
-                id=profile_id,
-                scientific_name=scientific_name,
-                common_name=common_name,
-                aliases=aliases,
-                sections=sections,
-                sources=sources,
-                confidence=confidence,
-                limitations=limitations,
+        try:
+            await self.session.execute(
+                insert(plant_profiles).values(
+                    id=profile_id,
+                    scientific_name=scientific_name,
+                    common_name=common_name,
+                    aliases=aliases,
+                    sections=sections,
+                    sources=sources,
+                    confidence=confidence,
+                    limitations=limitations,
+                    accepted_gbif_key=accepted_gbif_key,
+                    normalized_binomial=normalized_binomial,
+                    canonical_species_key=canonical_species_key,
+                )
             )
-        )
-        await self.session.commit()
+            await self.session.commit()
+        except IntegrityError:
+            await self.session.rollback()
+            raise
         return profile_id
+
+    async def _profile_evidence_chunks(
+        self, *, canonical_species_key: str | None, normalized_binomial: str | None
+    ) -> list:
+        """Gather snapshot evidence from canonical enrichment documents plus
+        compatible legacy chunks by normalized binomial.
+
+        Enrichment evidence is selected by canonical species key only; the
+        authority-bearing accepted display name is never used to search
+        enrichment evidence. A canonical document is eligible for a new
+        snapshot only when it has trusted source provenance, an eligible
+        (auto-ingested) review state, at least one accepted individual aspect
+        support, and applicable validation provenance. Legacy chunks are used
+        only when no canonical identity exists. Chunks are deduplicated by
+        stable chunk id.
+        """
+        rows: list = []
+        seen: set[UUID] = set()
+        if canonical_species_key:
+            canonical_rows = (
+                await self.session.execute(
+                    select(
+                        knowledge_chunks,
+                        knowledge_document_aspect_supports.c.aspect.label(
+                            "supported_aspect"
+                        ),
+                        enrichment_validation_runs.c.covered_aspects.label(
+                            "validation_covered_aspects"
+                        ),
+                    )
+                    .join(
+                        knowledge_documents,
+                        knowledge_documents.c.id == knowledge_chunks.c.document_id,
+                    )
+                    .join(
+                        knowledge_sources,
+                        knowledge_sources.c.document_id == knowledge_documents.c.id,
+                    )
+                    .join(
+                        knowledge_document_aspect_supports,
+                        knowledge_document_aspect_supports.c.document_id
+                        == knowledge_documents.c.id,
+                    )
+                    .join(
+                        enrichment_validation_evidence,
+                        enrichment_validation_evidence.c.document_id
+                        == knowledge_documents.c.id,
+                    )
+                    .join(
+                        enrichment_validation_runs,
+                        enrichment_validation_runs.c.id
+                        == enrichment_validation_evidence.c.validation_run_id,
+                    )
+                    .where(
+                        knowledge_documents.c.canonical_species_key
+                        == canonical_species_key,
+                        knowledge_documents.c.review_status
+                        == ReviewStatus.auto_ingested.value,
+                        knowledge_chunks.c.review_status
+                        == ReviewStatus.auto_ingested.value,
+                        knowledge_document_aspect_supports.c.review_status
+                        == ReviewStatus.auto_ingested.value,
+                        knowledge_sources.c.validation_status == "trusted",
+                        enrichment_validation_runs.c.taxonomy_provenance_id
+                        == knowledge_documents.c.taxonomy_provenance_id,
+                        enrichment_validation_runs.c.answerability_status.in_(
+                            ["full", "partial"]
+                        ),
+                    )
+                )
+            ).all()
+            for row in canonical_rows:
+                mapping = row._mapping
+                supported_aspect = mapping["supported_aspect"]
+                covered_aspects = mapping["validation_covered_aspects"]
+
+                if not isinstance(covered_aspects, list):
+                    continue
+                if supported_aspect not in covered_aspects:
+                    continue
+
+                chunk_id = mapping[knowledge_chunks.c.id]
+                if chunk_id in seen:
+                    continue
+
+                seen.add(chunk_id)
+                rows.append(row)
+        elif normalized_binomial:
+            legacy = (
+                await self.session.execute(
+                    select(knowledge_chunks)
+                    .join(
+                        knowledge_documents,
+                        knowledge_documents.c.id == knowledge_chunks.c.document_id,
+                    )
+                    .where(
+                        knowledge_chunks.c.scientific_name == normalized_binomial,
+                        knowledge_documents.c.canonical_species_key.is_(None),
+                    )
+                )
+            ).fetchall()
+            for row in legacy:
+                if row.id not in seen:
+                    seen.add(row.id)
+                    rows.append(row)
+        return rows
 
     async def confirmed_candidate(self, candidate_id: UUID, user_id: UUID):
         return (
@@ -235,7 +444,9 @@ def _build_profile_evidence(
                 aliases.append(alias)
         sources_by_url[chunk["source_url"]] = {
             "title": (
-                metadata.get("title") if isinstance(metadata, dict) else chunk["source_domain"]
+                metadata.get("title")
+                if isinstance(metadata, dict) and metadata.get("title")
+                else chunk["source_domain"]
             ),
             "url": chunk["source_url"],
             "domain": chunk["source_domain"],
@@ -285,6 +496,9 @@ def _profile_from_row(
         sources=[ProfileSource.model_validate(source) for source in row.sources],
         confidence=row.confidence,
         limitations=row.limitations,
+        accepted_gbif_key=row.accepted_gbif_key,
+        binomial_name=row.normalized_binomial,
+        canonical_species_key=row.canonical_species_key,
     )
 
 
@@ -317,6 +531,9 @@ def _garden_from_row(row) -> GardenPlantResponse:
         sources=[ProfileSource.model_validate(source) for source in row[plant_profiles.c.sources]],
         confidence=row[plant_profiles.c.confidence],
         limitations=row[plant_profiles.c.limitations],
+        accepted_gbif_key=row[plant_profiles.c.accepted_gbif_key],
+        binomial_name=row[plant_profiles.c.normalized_binomial],
+        canonical_species_key=row[plant_profiles.c.canonical_species_key],
     )
     return GardenPlantResponse(
         id=row[garden_plants.c.id],

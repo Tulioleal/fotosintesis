@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, select, text, update
@@ -20,6 +20,7 @@ from app.auth.tables import (
 )
 from app.core.settings import Settings, get_settings
 from app.db.repository import RepositoryBase
+from app.enrichment.policy import enrichment_policy_label
 from app.jobs.schemas import (
     CandidateEnrichmentStatus,
     ClaimedJob,
@@ -41,6 +42,32 @@ class ReconciliationResult:
     exhausted_by_type: dict[str, int]
     exhausted_enrichment_jobs: list[tuple[UUID, object]] = field(default_factory=list)
     exhausted_enrichment_job_created_at: dict[UUID, datetime] = field(default_factory=dict)
+    exhausted_enrichment_terminals: list["EnrichmentTerminalReconciliation"] = field(
+        default_factory=list
+    )
+
+
+@dataclass(frozen=True)
+class EnrichmentTerminalReconciliation:
+    """Typed terminal facts for a crashed exhausted enrichment job.
+
+    The worker inserts the matching immutable observation from these durable
+    facts in the same transaction as the terminal job transition.
+    """
+
+    job_id: UUID
+    status: JobStatus
+    policy_label: str
+    lifecycle_outcome: str
+    acquisition_avoided: bool
+    local_covered_count: int
+    final_covered_count: int
+    coverage_gain: int
+    accepted_aspect_count: int
+    search_count: int
+    duration_seconds: float
+    result: EnrichmentJobResult | None
+    last_error: JobError
 
 
 ENRICHMENT_TELEMETRY_POLICY_LABELS = frozenset({"1", "unsupported"})
@@ -552,6 +579,7 @@ class JobRepository(RepositoryBase):
                 lease_token=None,
                 lease_expires_at=None,
                 active_deduplication_key=None,
+                last_error=None,
             )
         )
         return transition.rowcount > 0
@@ -563,7 +591,22 @@ class JobRepository(RepositoryBase):
         owner: str,
         lease_token: str,
         result: JobResult | None = None,
+        error: JobError | None = None,
     ) -> bool:
+        values: dict[str, object] = {
+            "status": JobStatus.partial.value,
+            "result": result.model_dump(mode="json") if result is not None else None,
+            "completed_at": func.now(),
+            "updated_at": func.now(),
+            "lease_owner": None,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "active_deduplication_key": None,
+        }
+        if error is not None:
+            values["last_error"] = error.model_dump(mode="json")
+        else:
+            values["last_error"] = None
         transition = await self.session.execute(
             update(application_jobs)
             .where(
@@ -573,16 +616,7 @@ class JobRepository(RepositoryBase):
                 application_jobs.c.status == JobStatus.processing.value,
                 application_jobs.c.lease_expires_at > func.now(),
             )
-            .values(
-                status=JobStatus.partial.value,
-                result=result.model_dump(mode="json") if result is not None else None,
-                completed_at=func.now(),
-                updated_at=func.now(),
-                lease_owner=None,
-                lease_token=None,
-                lease_expires_at=None,
-                active_deduplication_key=None,
-            )
+            .values(**values)
         )
         return transition.rowcount > 0
 
@@ -688,6 +722,8 @@ class JobRepository(RepositoryBase):
         exhausted: dict[str, int] = {}
         exhausted_enrichment_jobs: list[tuple[UUID, object]] = []
         exhausted_enrichment_job_created_at: dict[UUID, datetime] = {}
+        exhausted_enrichment_terminals: list[EnrichmentTerminalReconciliation] = []
+        now = datetime.now(UTC)
         for row in rows:
             job_type = row["job_type"]
             attempt_count = row["attempt_count"]
@@ -703,23 +739,31 @@ class JobRepository(RepositoryBase):
                     )
                     exhausted_enrichment_jobs.append((row["id"], raw_policy))
                     exhausted_enrichment_job_created_at[row["id"]] = row["created_at"]
-                await self.session.execute(
-                    update(application_jobs)
-                    .where(application_jobs.c.id == row["id"])
-                    .values(
-                        status=JobStatus.failed.value,
-                        last_error=JobError(
-                            category=JobFailureCategory.attempts_exhausted,
-                            retryable=False,
-                        ).model_dump(mode="json"),
-                        completed_at=func.now(),
-                        updated_at=func.now(),
-                        lease_owner=None,
-                        lease_token=None,
-                        lease_expires_at=None,
-                        active_deduplication_key=None,
+                    terminal = await self._reconcile_exhausted_enrichment(
+                        job_id=row["id"],
+                        raw_policy=raw_policy,
+                        created_at=row["created_at"],
+                        now=now,
                     )
-                )
+                    exhausted_enrichment_terminals.append(terminal)
+                else:
+                    await self.session.execute(
+                        update(application_jobs)
+                        .where(application_jobs.c.id == row["id"])
+                        .values(
+                            status=JobStatus.failed.value,
+                            last_error=JobError(
+                                category=JobFailureCategory.attempts_exhausted,
+                                retryable=False,
+                            ).model_dump(mode="json"),
+                            completed_at=func.now(),
+                            updated_at=func.now(),
+                            lease_owner=None,
+                            lease_token=None,
+                            lease_expires_at=None,
+                            active_deduplication_key=None,
+                        )
+                    )
             else:
                 recovered[job_type] = recovered.get(job_type, 0) + 1
                 delay = recovery_backoff_seconds(
@@ -750,6 +794,96 @@ class JobRepository(RepositoryBase):
             exhausted_by_type=exhausted,
             exhausted_enrichment_jobs=exhausted_enrichment_jobs,
             exhausted_enrichment_job_created_at=exhausted_enrichment_job_created_at,
+            exhausted_enrichment_terminals=exhausted_enrichment_terminals,
+        )
+
+    async def _reconcile_exhausted_enrichment(
+        self,
+        *,
+        job_id: UUID,
+        raw_policy: object,
+        created_at: datetime,
+        now: datetime,
+    ) -> EnrichmentTerminalReconciliation:
+        """Reconcile a crashed exhausted enrichment job from durable progress.
+
+        Useful checkpoint coverage finalizes as ``partial`` with bounded
+        result metadata; otherwise the job finalizes as ``failed``. The
+        terminal transition clears the lease and active deduplication key and
+        stores the closed ``attempts_exhausted`` error. The returned typed
+        record lets the worker insert the matching immutable observation in
+        the same transaction.
+        """
+        from app.enrichment.progress import (
+            EnrichmentProgressRepository,
+            build_efficacy_snapshot,
+            build_failure_terminal_result,
+            select_operational_limitation,
+        )
+
+        progress = EnrichmentProgressRepository(self.session)
+        snapshot = await progress.get_for_terminalization(
+            job_id=job_id,
+            for_update=True,
+        )
+        operational = select_operational_limitation(
+            snapshot,
+            is_last_attempt=True,
+        )
+        status, result, closed_error = build_failure_terminal_result(
+            snapshot,
+            failure_category=JobFailureCategory.attempts_exhausted,
+            operational_limitation=operational,
+        )
+        values: dict[str, object] = {
+            "status": status.value,
+            "last_error": closed_error.model_dump(mode="json"),
+            "completed_at": func.now(),
+            "updated_at": func.now(),
+            "lease_owner": None,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "active_deduplication_key": None,
+        }
+        if result is not None:
+            values["result"] = result.model_dump(mode="json")
+        await self.session.execute(
+            update(application_jobs)
+            .where(application_jobs.c.id == job_id)
+            .values(**values)
+        )
+        duration_seconds = max((now - created_at).total_seconds(), 0.0)
+        if snapshot is None:
+            return EnrichmentTerminalReconciliation(
+                job_id=job_id,
+                status=status,
+                policy_label=enrichment_policy_label(raw_policy),
+                lifecycle_outcome=status.value,
+                acquisition_avoided=False,
+                local_covered_count=0,
+                final_covered_count=0,
+                coverage_gain=0,
+                accepted_aspect_count=0,
+                search_count=0,
+                duration_seconds=duration_seconds,
+                result=result,
+                last_error=closed_error,
+            )
+        efficacy = build_efficacy_snapshot(snapshot)
+        return EnrichmentTerminalReconciliation(
+            job_id=job_id,
+            status=status,
+            policy_label=enrichment_policy_label(snapshot.policy_version),
+            lifecycle_outcome=status.value,
+            acquisition_avoided=efficacy.acquisition_avoided,
+            local_covered_count=efficacy.local_covered_count,
+            final_covered_count=efficacy.final_covered_count,
+            coverage_gain=efficacy.coverage_gain,
+            accepted_aspect_count=efficacy.accepted_aspect_count,
+            search_count=efficacy.search_count,
+            duration_seconds=duration_seconds,
+            result=result,
+            last_error=closed_error,
         )
 
     async def record_terminal_enrichment_observation(

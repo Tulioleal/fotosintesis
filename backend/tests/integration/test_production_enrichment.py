@@ -833,3 +833,344 @@ async def test_content_hash_and_source_version_are_independent_identity_dimensio
     )
     assert status_value == "retrieved"
     assert len(chunks) == 3
+
+
+async def test_snippet_only_fetch_failures_have_zero_domain_and_vector_effects(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    provider_environment,
+) -> None:
+    """Snippet-only page fetches (timeout, unsupported content, oversized,
+    unsafe redirect) never become confirmed-plant enrichment evidence: no
+    domain document, source, chunk, embedding, support, association, or
+    vector node is created, even when the semantic judge would support the
+    aspect from the snippet URL."""
+    from app.enrichment import acquisition as acquisition_module
+    from app.knowledge.acquisition import TrustedSourceValidator
+    from app.knowledge.page_evidence import TrustedPageEvidence
+    from app.providers.types import SearchResult
+
+    cases = [
+        {
+            "error": "timed out",
+            "category": "timeout",
+            "fetch_status": "failed",
+        },
+        {
+            "error": "unsupported content type: application/pdf",
+            "category": "unsupported_content_type",
+            "fetch_status": "failed",
+        },
+        {
+            "error": "response exceeded maximum size",
+            "category": "too_large",
+            "fetch_status": "failed",
+        },
+        {
+            "error": "unsafe destination",
+            "category": "unsafe_destination",
+            "fetch_status": "failed",
+        },
+    ]
+
+    for case in cases:
+        result = SearchResult(
+            title="Snippet only",
+            url=PAGE_URL,
+            snippet="Strong snippet about watering frequency.",
+            source_domain="example.org",
+        )
+        page = TrustedPageEvidence(
+            result=result,
+            content=None,
+            error=case["error"],
+            fetch_status=case["fetch_status"],
+            fetch_error_category=case["category"],
+            validation_status="trusted",
+            snippet_length=len("Strong snippet about watering frequency."),
+        )
+
+        class SnippetOnlyFetcher:
+            async def fetch_all(self, results, *, limit=3):
+                return [page]
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(
+            acquisition_module,
+            "TrustedPageEvidenceFetcher",
+            lambda trusted_sources: SnippetOnlyFetcher(),  # type: ignore[arg-type]
+        )
+        try:
+            before = await _effect_snapshot(pg_session_factory, vector_store)
+            judge = DeterministicJudgeProvider(
+                pages={PAGE_URL: (WATERING,)},
+                emit_unsupplied_support=True,
+            )
+            search = DeterministicSearchProvider(page=_page())
+            execution = await _production_service(
+                pg_session_factory, _providers(judge=judge, search=search)
+            ).execute(await _confirmed_payload(pg_session_factory))
+            after = await _effect_snapshot(pg_session_factory, vector_store)
+        finally:
+            monkeypatch.undo()
+
+        assert {aspect.value for aspect in execution.covered_aspects} == set()
+        assert judge.last_result is not None
+        assert any(
+            WATERING in (support.get("covered_aspects") or [])
+            for support in judge.last_result.source_support
+        )
+        # No domain document, source, chunk, embedding, support, or vector
+        # node was created; a validation-run audit row is allowed.
+        assert after.equals_ignoring_validation_runs(before), case["category"]
+
+
+async def test_mixed_fetched_and_snippet_only_acquisition_persists_only_fetched(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    provider_environment,
+) -> None:
+    """A single acquisition containing one successfully fetched page and one
+    failed page with a strong snippet: only the fetched page is accepted and
+    persisted, and the snippet-only source never produces domain or vector
+    effects even when the semantic judge would support its aspect."""
+    from app.enrichment import acquisition as acquisition_module
+    from app.knowledge.page_evidence import TrustedPageEvidence
+    from app.providers.types import SearchResult
+
+    fetched_url = PAGE_URL
+    snippet_url = "https://example.org/watering-snippet"
+
+    class MixedSearchProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search(self, query: str, **kwargs) -> list[SearchResult]:
+            self.calls += 1
+            if "light" in query:
+                return [
+                    SearchResult(
+                        title="Monstera light guide",
+                        url=fetched_url,
+                        snippet="Fetched page snippet about light.",
+                        source_domain="example.org",
+                        metadata={"source_version": "etag-v1"},
+                    )
+                ]
+            if "watering" in query:
+                return [
+                    SearchResult(
+                        title="Snippet only",
+                        url=snippet_url,
+                        snippet="Strong snippet about watering frequency.",
+                        source_domain="example.org",
+                        metadata={"source_version": "etag-snippet"},
+                    )
+                ]
+            return []
+
+    class MixedFetcher:
+        async def fetch_all(self, results, *, limit=3):
+            out = []
+            for result in results[:limit]:
+                if result.url == snippet_url:
+                    out.append(
+                        TrustedPageEvidence(
+                            result=result,
+                            content=None,
+                            error="timed out",
+                            fetch_status="failed",
+                            fetch_error_category="timeout",
+                            validation_status="trusted",
+                            snippet_length=len(result.snippet or ""),
+                        )
+                    )
+                else:
+                    out.append(
+                        TrustedPageEvidence(
+                            result=result,
+                            content=(
+                                "Fetched content describing bright indirect light "
+                                "requirements for Monstera deliciosa."
+                            ),
+                            validation_status="trusted",
+                            fetch_status="fetched",
+                            retrieved_at=datetime(2026, 8, 1, tzinfo=UTC),
+                            source_version="etag-v1",
+                        )
+                    )
+            return out
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        acquisition_module,
+        "TrustedPageEvidenceFetcher",
+        lambda trusted_sources: MixedFetcher(),
+    )
+    try:
+        search = MixedSearchProvider()
+        judge = DeterministicJudgeProvider(
+            pages={fetched_url: (LIGHT,), snippet_url: (WATERING,)},
+            emit_unsupplied_support=True,
+        )
+        execution = await _production_service(
+            pg_session_factory, _providers(judge=judge, search=search)
+        ).execute(await _confirmed_payload(pg_session_factory))
+    finally:
+        monkeypatch.undo()
+
+    covered = {aspect.value for aspect in execution.covered_aspects}
+    assert "light_exposure" in covered
+    assert "watering_frequency_or_trigger" not in covered
+
+    async with pg_session_factory() as session:
+        document_urls = set(
+            (
+                await session.execute(
+                    select(knowledge_documents.c.canonical_source_url)
+                )
+            ).scalars().all()
+        )
+        source_urls = set(
+            (await session.execute(select(knowledge_sources.c.url))).scalars().all()
+        )
+    assert document_urls == {fetched_url}
+    assert source_urls == {fetched_url}
+    assert snippet_url not in document_urls
+    assert snippet_url not in source_urls
+
+    assert await _counts(pg_session_factory) == {
+        "documents": 1,
+        "sources": 1,
+        "chunks": 1,
+        "embeddings": 1,
+        "supports": 1,
+    }
+    snapshot = await _effect_snapshot(pg_session_factory, vector_store)
+    assert snapshot.vector_node_ids == snapshot.relational_chunk_ids
+    assert snapshot.relational_aspects_by_document == {
+        str(next(iter(snapshot.documents))): frozenset({LIGHT})
+    }
+
+
+async def test_final_redirect_url_and_provenance_are_persisted(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    provider_environment,
+) -> None:
+    """A search result URL that redirects to a final canonical URL persists the
+    final URL and fetched provenance, never the pre-redirect search URL."""
+    from app.enrichment import acquisition as acquisition_module
+    from app.knowledge.page_evidence import TrustedPageEvidence
+    from app.knowledge.source_urls import URL_CANONICALIZATION_VERSION
+    from app.providers.types import SearchResult
+
+    original_url = "https://example.org/redirecting-care"
+    final_url = "https://example.org/canonical/monstera-care?edition=2"
+    source_version = "etag:final-v2"
+
+    class RedirectSearchProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def search(self, query: str, **kwargs) -> list[SearchResult]:
+            self.calls += 1
+            return [
+                SearchResult(
+                    title="Monstera care guide",
+                    url=original_url,
+                    snippet="Trusted botanical page content about Monstera deliciosa.",
+                    source_domain="example.org",
+                    metadata={"source_version": source_version},
+                )
+            ]
+
+    class RedirectFetcher:
+        async def fetch_all(self, results, *, limit=3):
+            out = []
+            for result in results[:limit]:
+                canonical = result.url
+                if canonical == original_url:
+                    final_result = result.model_copy(
+                        update={
+                            "url": final_url,
+                            "source_domain": "example.org",
+                        }
+                    )
+                    out.append(
+                        TrustedPageEvidence(
+                            result=final_result,
+                            content=(
+                                "Trusted botanical page content about Monstera "
+                                "deliciosa redirected to its canonical location."
+                            ),
+                            fetch_status="fetched",
+                            validation_status="trusted",
+                            canonical_url=final_url,
+                            retrieved_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+                            published_at=None,
+                            source_version=source_version,
+                            response_content_type="text/html",
+                        )
+                    )
+            return out
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        acquisition_module,
+        "TrustedPageEvidenceFetcher",
+        lambda trusted_sources: RedirectFetcher(),
+    )
+    try:
+        search = RedirectSearchProvider()
+        judge = DeterministicJudgeProvider(pages={final_url: (LIGHT,)})
+        execution = await _production_service(
+            pg_session_factory, _providers(judge=judge, search=search)
+        ).execute(await _confirmed_payload(pg_session_factory))
+    finally:
+        monkeypatch.undo()
+
+    assert {aspect.value for aspect in execution.covered_aspects} == {LIGHT}
+
+    async with pg_session_factory() as session:
+        row = (
+            await session.execute(
+                select(
+                    knowledge_documents.c.canonical_source_url,
+                    knowledge_documents.c.source_version,
+                    knowledge_documents.c.source_published_at,
+                    knowledge_documents.c.source_retrieved_at,
+                    knowledge_documents.c.enrichment_provenance,
+                )
+            )
+        ).mappings().one()
+        source_row = (
+            await session.execute(
+                select(
+                    knowledge_sources.c.url,
+                    knowledge_sources.c.retrieved_at,
+                    knowledge_sources.c.published_at,
+                )
+            )
+        ).mappings().one()
+
+    assert row["canonical_source_url"] == final_url
+    assert source_row["url"] == final_url
+    assert row["source_version"] == source_version
+    assert row["canonical_source_url"] != original_url
+    assert source_row["url"] != original_url
+    assert row["source_published_at"] is None
+    assert row["source_retrieved_at"] is not None
+    provenance = row["enrichment_provenance"] or {}
+    assert provenance.get("url_canonicalization_version") == URL_CANONICALIZATION_VERSION
+
+    assert await _counts(pg_session_factory) == {
+        "documents": 1,
+        "sources": 1,
+        "chunks": 1,
+        "embeddings": 1,
+        "supports": 1,
+    }

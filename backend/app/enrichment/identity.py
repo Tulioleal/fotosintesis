@@ -31,9 +31,9 @@ class CanonicalSpeciesIdentity:
         if not taxonomy_validated:
             raise ValueError("canonical species identity requires taxonomy validation")
 
-        if isinstance(self.accepted_gbif_key, bool) or (
-            self.accepted_gbif_key is not None
-            and self.accepted_gbif_key <= 0
+        if self.accepted_gbif_key is not None and (
+            type(self.accepted_gbif_key) is not int
+            or self.accepted_gbif_key <= 0
         ):
             raise ValueError("accepted_gbif_key must be a positive integer")
 

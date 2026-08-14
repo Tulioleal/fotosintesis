@@ -6,6 +6,7 @@
     "dev": "pnpm --filter frontend dev",
     "build": "pnpm --filter frontend build",
     "lint": "pnpm --filter frontend lint",
-    "fallow": "pnpx fallow"
+    "fallow": "pnpx fallow",
+    "e2e:enrichment": "sh scripts/run-enrichment-e2e.sh"
   }
 }

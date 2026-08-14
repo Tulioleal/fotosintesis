@@ -4,7 +4,6 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
-from urllib.parse import urlparse
 
 from app.assistant.care_contracts import RequiredAspect
 from app.assistant.semantic_coverage import (
@@ -23,9 +22,11 @@ from app.enrichment.evidence import (
 )
 from app.enrichment.identity import CanonicalSpeciesIdentity
 from app.enrichment.policy import get_enrichment_policy
+from app.enrichment.progress import EnrichmentProgressRepository
 from app.jobs.schemas import EnrichConfirmedPlantPayload
-from app.knowledge.acquisition import TrustedSourceValidator
+from app.knowledge.acquisition import TrustedSourceValidator, retrieve_balanced_enrichment
 from app.knowledge.page_evidence import TrustedPageEvidence
+from app.knowledge.source_urls import canonical_source_domain, canonical_source_url
 from app.knowledge.rag import KnowledgeVectorIndex
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import KnowledgeRetrievalFilters
@@ -119,6 +120,14 @@ class ProductionEnrichmentService:
         async with self._session_factory() as session:
             repository = KnowledgeRepository(session, self._settings)
             vector_index = self._vector_index_factory(repository)
+            progress = EnrichmentProgressRepository(
+                session, policy_resolver=self._policy_resolver
+            )
+            await progress.initialize_or_load(
+                job_id=payload.run_id,
+                policy_version=policy.version,
+                required_aspects=[item.value for item in required],
+            )
 
             async def retrieve(aspects: tuple[RequiredAspect, ...]) -> SemanticEvidence:
                 query = " ".join(
@@ -126,14 +135,33 @@ class ProductionEnrichmentService:
                 )
                 embedding = await self._providers.embeddings.create_embeddings([query])
                 query_embedding = embedding.embeddings[0] if embedding.embeddings else []
-                chunks = await vector_index.retrieve_chunks(
-                    KnowledgeRetrievalFilters(
-                        scientific_name=identity.normalized_binomial,
-                    ),
+                required_values = [item.value for item in aspects]
+                balanced = await retrieve_balanced_enrichment(
+                    vector_index=vector_index,
+                    canonical_species_key=identity.key,
+                    accepted_gbif_key=identity.accepted_gbif_key,
+                    required_aspects=required_values,
                     query_text=query,
                     query_embedding=query_embedding,
-                    limit=24,
+                    per_aspect_limit=5,
+                    budget=MAX_JUDGE_SOURCES,
                 )
+                ordered = list(balanced)
+                if len(ordered) < MAX_JUDGE_SOURCES:
+                    legacy = await vector_index.retrieve_chunks(
+                        KnowledgeRetrievalFilters(
+                            scientific_name=identity.normalized_binomial,
+                        ),
+                        query_text=query,
+                        query_embedding=query_embedding,
+                        limit=MAX_JUDGE_SOURCES - len(ordered),
+                    )
+                    seen = {str(chunk.id) for chunk in ordered}
+                    ordered.extend(
+                        chunk
+                        for chunk in legacy
+                        if chunk.id is None or str(chunk.id) not in seen
+                    )
                 return SemanticEvidence(
                     sources=tuple(
                         SemanticSourceEvidence(
@@ -147,7 +175,7 @@ class ProductionEnrichmentService:
                                 ),
                             },
                         )
-                        for chunk in chunks
+                        for chunk in ordered[:MAX_JUDGE_SOURCES]
                     ),
                     eligible_validation_statuses=frozenset({"trusted"}),
                 )
@@ -184,12 +212,24 @@ class ProductionEnrichmentService:
                 judge=judge,
                 thresholds=thresholds,
             )
+            await progress.record_local_coverage(
+                job_id=payload.run_id,
+                local_covered_aspects=[
+                    item.value for item in local.local_covered_aspects
+                ],
+            )
             persistence = EnrichmentEvidencePersistenceService(
                 repository,
                 vector_index=vector_index,
                 embedding_provider=self._providers.embeddings,
             )
             if not local.acquisition_aspects:
+                await progress.record_acquisition_summary(
+                    job_id=payload.run_id,
+                    acquisition_avoided=True,
+                    search_count=0,
+                )
+                await session.commit()
                 await persistence.record_validation(
                     job_id=payload.run_id,
                     taxonomy_provenance_id=payload.taxonomy_provenance_id,
@@ -208,6 +248,8 @@ class ProductionEnrichmentService:
                     local_covered_count=len(required),
                 )
 
+            await session.commit()
+
             trusted_sources = TrustedSourceValidator()
             acquisition = await OfflineEnrichmentAcquisitionService(
                 search=self._providers.search,
@@ -217,6 +259,11 @@ class ProductionEnrichmentService:
                 required_aspects=required,
                 acquisition_aspects=tuple(local.acquisition_aspects),
                 policy=policy,
+            )
+            await progress.record_acquisition_summary(
+                job_id=payload.run_id,
+                acquisition_avoided=False,
+                search_count=len(acquisition.searched_groups),
             )
             acquired_evidence = SemanticEvidence(
                 sources=tuple(
@@ -242,7 +289,10 @@ class ProductionEnrichmentService:
                 )
             missing = tuple(item for item in required if item not in covered)
 
-            pages_by_url = {page.result.url: page for page in acquisition.evidence}
+            pages_by_url = {
+                canonical_source_url(page.result.url): page
+                for page in acquisition.evidence
+            }
             allowed_aspects = {
                 item.value
                 for item in covered
@@ -261,6 +311,8 @@ class ProductionEnrichmentService:
                         identity=identity,
                         taxonomy_provenance_id=payload.taxonomy_provenance_id,
                         claim=claim,
+                        job_id=payload.run_id,
+                        progress=progress,
                     )
                     states.append(state)
 
@@ -279,6 +331,14 @@ class ProductionEnrichmentService:
                     "accepted_claim_count": len(accepted_claims),
                 },
             )
+            await progress.record_final_judging(
+                job_id=payload.run_id,
+                final_covered_aspects=[item.value for item in covered],
+                final_missing_aspects=[item.value for item in missing],
+                answerability_status=final.answerability.status,
+                last_validation_run_id=validation_id,
+            )
+            await session.commit()
 
             states_by_document_id = {
                 state.document_id: state for state in states
@@ -287,6 +347,8 @@ class ProductionEnrichmentService:
                 await persistence.associate_validation_and_refresh(
                     validation_id=validation_id,
                     document_id=document_id,
+                    job_id=payload.run_id,
+                    progress=progress,
                 )
             safety_rejected = any(
                 item in policy.safety_sensitive_aspects
@@ -318,6 +380,9 @@ def _page_metadata(page: TrustedPageEvidence) -> dict[str, object]:
         "title": page.result.title,
         "validation_status": page.validation_status,
         "fetch_status": page.fetch_status,
+        "canonical_url": page.canonical_url or page.result.url,
+        "retrieved_at": page.retrieved_at,
+        "source_version": page.source_version,
     }
 
 
@@ -339,11 +404,16 @@ def _accepted_acquired_claims(
         raw_url = urls[0]
         if not isinstance(raw_url, str) or not raw_url.strip():
             continue
-        url = raw_url.strip()
-        if url not in pages_by_url:
+        try:
+            canonical_url = canonical_source_url(raw_url)
+        except ValueError:
             continue
-        page = pages_by_url[url]
+        page = pages_by_url.get(canonical_url)
+        if page is None:
+            continue
         if page.validation_status != "trusted":
+            continue
+        if not page.has_fetched_content or page.fetch_status != "fetched":
             continue
         supported = tuple(
             dict.fromkeys(
@@ -358,24 +428,26 @@ def _accepted_acquired_claims(
             0.0,
             min(1.0, float(support.get("confidence") or 0.0)),
         )
-        raw_version = (
-            page.result.metadata.get("source_version")
-            if isinstance(page.result.metadata, dict)
-            else None
-        )
-        source_version = str(raw_version or "").strip() or hashlib.sha256(
-            page.evidence_text.encode()
-        ).hexdigest()
+        source_version = (page.source_version or "").strip()
+        if not source_version:
+            metadata_version = (
+                page.result.metadata.get("source_version")
+                if isinstance(page.result.metadata, dict)
+                else None
+            )
+            source_version = str(metadata_version or "").strip()
+        if not source_version:
+            source_version = hashlib.sha256(page.evidence_text.encode()).hexdigest()
         accepted.append(
             AcceptedEnrichmentClaim(
                 claim=claim,
                 evidence_quote=quote,
-                source_url=url,
+                source_url=canonical_url,
                 source_title=page.result.title,
-                source_domain=(page.result.source_domain or urlparse(url).netloc),
+                source_domain=canonical_source_domain(canonical_url),
                 source_version=source_version,
-                source_retrieved_at=now,
-                source_published_at=None,
+                source_retrieved_at=page.retrieved_at or now,
+                source_published_at=page.published_at,
                 supported_aspects=supported,
                 confidence=confidence,
             )

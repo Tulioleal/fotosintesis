@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from app.core.settings import get_settings
+
 
 @dataclass(frozen=True)
 class GbifTaxonomy:
@@ -53,7 +55,8 @@ class GbifTaxonomy:
 
 
 class GbifClient:
-    base_url = "https://api.gbif.org/v1/species/match"
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = base_url or get_settings().gbif_base_url
 
     async def match_name(self, scientific_name: str) -> GbifTaxonomy:
         return await asyncio.to_thread(self._match_name_sync, scientific_name)

@@ -38,6 +38,140 @@ async def test_confirmed_candidate_can_create_profile(
 
 
 @pytest.mark.asyncio
+async def test_profile_exposes_canonical_identity_and_reuses_profile(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, candidate_id = await _create_user_candidate(
+        session_factory,
+        email="canonical@example.com",
+        accepted_scientific_name="Monstera deliciosa",
+        gbif_accepted_key=2878688,
+        binomial_name="Monstera deliciosa",
+        confirmed=True,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.get(
+            f"/plant-profiles/Monstera%20deliciosa?candidateId={candidate_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        second = await client.get(
+            f"/plant-profiles/Monstera%20deliciosa?candidateId={candidate_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert first.status_code == 200
+    body = first.json()
+    assert body["accepted_gbif_key"] == 2878688
+    assert body["binomial_name"] == "Monstera deliciosa"
+    assert body["canonical_species_key"] == "gbif:2878688|binomial:Monstera deliciosa"
+    assert second.json()["id"] == body["id"]
+
+    async with session_factory() as session:
+        total = await session.scalar(select(func.count()).select_from(plant_profiles))
+    assert total == 1
+
+
+@pytest.mark.asyncio
+async def test_profile_preserves_accepted_display_name_separately_from_binomial(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The accepted display name (with author authority) and the canonical
+    binomial are separate: the profile stores and returns both, and the
+    canonical species key is derived only from the binomial plus GBIF key."""
+    accepted_display = "Monstera deliciosa Liebm."
+    binomial = "Monstera deliciosa"
+    token, candidate_id = await _create_user_candidate(
+        session_factory,
+        email="display-name@example.com",
+        accepted_scientific_name=accepted_display,
+        gbif_accepted_key=2878688,
+        binomial_name=binomial,
+        confirmed=True,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/plant-profiles/{accepted_display.replace(' ', '%20')}?candidateId={candidate_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scientific_name"] == accepted_display
+    assert body["binomial_name"] == binomial
+    assert body["accepted_gbif_key"] == 2878688
+    assert body["canonical_species_key"] == "gbif:2878688|binomial:Monstera deliciosa"
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(plant_profiles).where(plant_profiles.c.canonical_species_key == "gbif:2878688|binomial:Monstera deliciosa")
+            )
+        ).first()
+    assert row is not None
+    assert row.scientific_name == accepted_display
+    assert row.normalized_binomial == binomial
+    assert row.accepted_gbif_key == 2878688
+    assert row.canonical_species_key == "gbif:2878688|binomial:Monstera deliciosa"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_canonical_profile_creation_converges_on_one_profile(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """When canonical profile creation loses the unique-key race, the retry
+    reselects the winning profile so concurrent requests converge on one row
+    instead of surfacing an API failure."""
+    from app.profile_garden.repository import PlantProfileGardenRepository
+
+    # Seed the winning canonical profile through a real request.
+    token, candidate_id = await _create_user_candidate(
+        session_factory,
+        email="concurrent@example.com",
+        accepted_scientific_name="Monstera deliciosa",
+        gbif_accepted_key=2878688,
+        binomial_name="Monstera deliciosa",
+        confirmed=True,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        seeded = await client.get(
+            f"/plant-profiles/Monstera%20deliciosa?candidateId={candidate_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert seeded.status_code == 200
+    winner_id = seeded.json()["id"]
+
+    # Simulate the losing concurrent creation: the first lookups miss the
+    # winner (as if it committed after the read), so _create_profile hits the
+    # unique-key race and the retry reselects the winning profile.
+    async with session_factory() as session:
+        repo = PlantProfileGardenRepository(session)
+        original_find = repo._find_profile
+        attempts = {"n": 0}
+
+        async def find_once(**kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return None
+            return await original_find(**kwargs)
+
+        repo._find_profile = find_once  # type: ignore[method-assign]
+        result = await repo.get_or_create_profile(
+            scientific_name="Monstera deliciosa",
+            common_name="Helecho",
+            accepted_gbif_key=2878688,
+            normalized_binomial="Monstera deliciosa",
+            canonical_species_key="gbif:2878688|binomial:Monstera deliciosa",
+        )
+
+    assert str(result.id) == winner_id
+    async with session_factory() as session:
+        total = await session.scalar(select(func.count()).select_from(plant_profiles))
+    assert total == 1
+
+
+@pytest.mark.asyncio
 async def test_profile_requires_authenticated_confirmed_candidate_context(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -117,6 +251,57 @@ async def test_profile_rejects_unvalidated_candidate_and_name_mismatch(
     assert total == 0
 
 
+@pytest.mark.asyncio
+async def test_ambiguous_null_key_legacy_profile_is_not_adopted_by_display_name(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A null-key legacy profile is never adopted or mutated at runtime based
+    on display-name equality: the lookup only resolves canonical keys, and a
+    candidate without a canonical identity keeps the legacy display-name
+    path. Legacy null-key rows stay byte-for-byte unchanged."""
+    from app.profile_garden.repository import PlantProfileGardenRepository
+
+    legacy_profile_id = uuid4()
+    async with session_factory() as session:
+        await session.execute(
+            insert(plant_profiles).values(
+                id=legacy_profile_id,
+                scientific_name="Monstera deliciosa",
+                common_name="Monstera",
+                aliases=[],
+                sections={"care": ["Legacy snapshot content."]},
+                sources=[],
+                confidence=0.5,
+                limitations=[],
+            )
+        )
+        await session.commit()
+
+    # A confirmed candidate with a canonical identity must not resolve to the
+    # display-name-matching legacy profile: the canonical lookup misses it.
+    async with session_factory() as session:
+        repo = PlantProfileGardenRepository(session)
+        existing = await repo._find_profile(
+            scientific_name="Monstera deliciosa",
+            normalized_binomial="Monstera deliciosa",
+            canonical_species_key="gbif:2878688|binomial:Monstera deliciosa",
+        )
+        assert existing is None
+        assert await repo._get_profile_row_by_id(legacy_profile_id) is not None
+
+    # The legacy profile remains null-key and unchanged.
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(plant_profiles).where(plant_profiles.c.id == legacy_profile_id)
+            )
+        ).first()
+    assert row.canonical_species_key is None
+    assert row.normalized_binomial is None
+    assert row.accepted_gbif_key is None
+    assert row.sections == {"care": ["Legacy snapshot content."]}
+
+
 async def _create_user_candidate(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -124,6 +309,8 @@ async def _create_user_candidate(
     accepted_scientific_name: str | None,
     validation_status: str = "validated",
     confirmed: bool,
+    gbif_accepted_key: int | None = None,
+    binomial_name: str | None = None,
 ) -> tuple[str, str]:
     async with session_factory() as session:
         repository = DatabaseAuthRepository(session)
@@ -157,6 +344,8 @@ async def _create_user_candidate(
                 visible_traits=["fronds"],
                 possible_match_copy="Matches a domestic fern.",
                 accepted_scientific_name=accepted_scientific_name,
+                gbif_accepted_key=gbif_accepted_key,
+                binomial_name=binomial_name,
                 validation_status=validation_status,
                 confirmed_at=datetime.now(timezone.utc) if confirmed else None,
             )

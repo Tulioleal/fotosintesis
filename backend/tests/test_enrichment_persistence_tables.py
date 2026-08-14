@@ -1,10 +1,11 @@
-from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex
 
 from app.auth.tables import (
     application_jobs,
     candidate_enrichment_jobs,
+    enrichment_job_progress,
     enrichment_validation_runs,
     knowledge_document_aspect_supports,
     knowledge_documents,
@@ -84,3 +85,45 @@ def test_enrichment_content_metadata_is_additive_for_legacy_rows() -> None:
 
     assert additive_columns <= set(knowledge_documents.c.keys())
     assert all(knowledge_documents.c[name].nullable for name in additive_columns)
+
+
+def test_enrichment_job_progress_table_is_bounded_and_job_referenced() -> None:
+    expected_columns = {
+        "job_id",
+        "policy_version",
+        "required_aspects",
+        "local_covered_aspects",
+        "persisted_covered_aspects",
+        "indexed_covered_aspects",
+        "final_judged_covered_aspects",
+        "final_judged_missing_aspects",
+        "answerability_status",
+        "acquisition_avoided",
+        "search_count",
+        "accepted_aspect_count",
+        "last_validation_run_id",
+        "created_at",
+        "updated_at",
+    }
+    assert expected_columns <= set(enrichment_job_progress.c.keys())
+    assert set(enrichment_job_progress.c.keys()) <= expected_columns
+
+    foreign_keys = list(enrichment_job_progress.foreign_keys)
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].column.table is application_jobs
+    assert foreign_keys[0].column.name == "id"
+
+    checks = _constraint_names(enrichment_job_progress, CheckConstraint)
+    assert {
+        "ck_enrichment_job_progress_policy_version",
+        "ck_enrichment_job_progress_answerability_status",
+        "ck_enrichment_job_progress_search_count",
+        "ck_enrichment_job_progress_accepted_aspect_count",
+    } <= checks
+
+    assert enrichment_job_progress.c.search_count.nullable is False
+    assert enrichment_job_progress.c.accepted_aspect_count.nullable is False
+    assert enrichment_job_progress.c.acquisition_avoided.nullable is False
+    assert enrichment_job_progress.c.final_judged_covered_aspects.nullable is True
+    assert enrichment_job_progress.c.answerability_status.nullable is True
+    assert enrichment_job_progress.c.last_validation_run_id.nullable is True

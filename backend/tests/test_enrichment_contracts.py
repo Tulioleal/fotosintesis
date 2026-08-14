@@ -1,5 +1,6 @@
 from dataclasses import replace
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -13,7 +14,9 @@ from app.enrichment import (
     build_run_idempotency_key,
     policy_change_requires_version_bump,
 )
+from app.enrichment.evidence import enrichment_content_key
 from app.jobs.schemas import EnrichmentJobResult, EnrichmentLimitation
+from app.knowledge.schemas import EnrichmentEvidenceMetadata
 
 
 def _identity(*, key: int | None = 2878688, name: str | None = "Monstera deliciosa"):
@@ -59,6 +62,25 @@ def test_canonical_identity_rejects_display_or_unvalidated_names(
             normalized_binomial=name,
             taxonomy_validated=validated,
         )
+
+
+class _IntSubclass(int):
+    pass
+
+
+@pytest.mark.parametrize("key", [1.5, "2878688", True, 0, -1, _IntSubclass(1)])
+def test_canonical_identity_rejects_invalid_gbif_key(key: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        CanonicalSpeciesIdentity(
+            accepted_gbif_key=key,
+            normalized_binomial="Monstera deliciosa",
+            taxonomy_validated=True,
+        )
+
+
+def test_canonical_identity_accepts_none_and_positive_integer_keys() -> None:
+    assert _identity(key=None).key == "binomial:Monstera deliciosa"
+    assert _identity(key=2878688).key == "gbif:2878688|binomial:Monstera deliciosa"
 
 
 def test_policy_v1_has_exact_required_aspects_and_registry_safety() -> None:
@@ -184,3 +206,97 @@ def test_active_and_run_idempotency_keys_are_stable_and_separate() -> None:
     assert active != run
     assert build_active_work_key(identity, 2) != active
     assert build_run_idempotency_key(identity, 1, UUID(int=2)) != run
+
+
+def _required() -> list[str]:
+    return sorted(aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects)
+
+
+def test_operational_partial_may_have_no_missing_aspects_with_operational_limitation() -> None:
+    required = _required()
+    result = EnrichmentJobResult(
+        outcome="partial",
+        policy_version=1,
+        covered_aspects=required,
+        missing_aspects=[],
+        covered_count=len(required),
+        missing_count=0,
+        limitations=[EnrichmentLimitation.indexing_deferred],
+    )
+
+    assert result.outcome == "partial"
+    assert result.limitations == [EnrichmentLimitation.indexing_deferred]
+
+
+@pytest.mark.parametrize(
+    "limitation",
+    [
+        EnrichmentLimitation.retry_exhausted,
+        EnrichmentLimitation.workflow_incomplete,
+        EnrichmentLimitation.indexing_deferred,
+    ],
+)
+def test_operational_partial_requires_an_operational_limitation(
+    limitation: EnrichmentLimitation,
+) -> None:
+    required = _required()
+    result = EnrichmentJobResult(
+        outcome="partial",
+        policy_version=1,
+        covered_aspects=required,
+        missing_aspects=[],
+        covered_count=len(required),
+        missing_count=0,
+        limitations=[limitation],
+    )
+
+    assert result.outcome == "partial"
+
+
+def test_partial_without_missing_or_operational_limitation_is_rejected() -> None:
+    required = _required()
+    with pytest.raises(ValueError, match="operational limitation"):
+        EnrichmentJobResult(
+            outcome="partial",
+            policy_version=1,
+            covered_aspects=required,
+            missing_aspects=[],
+            covered_count=len(required),
+            missing_count=0,
+        )
+
+
+def test_semantic_partial_requires_missing_aspect_limitation() -> None:
+    required = _required()
+    with pytest.raises(ValueError, match="missing-required-aspects"):
+        EnrichmentJobResult(
+            outcome="partial",
+            policy_version=1,
+            covered_aspects=required[:1],
+            missing_aspects=required[1:],
+            covered_count=1,
+            missing_count=16,
+            limitations=[EnrichmentLimitation.indexing_deferred],
+        )
+
+
+def _metadata(source_url: str) -> EnrichmentEvidenceMetadata:
+    return EnrichmentEvidenceMetadata(
+        canonical_species_key="gbif:2878688|binomial:Monstera deliciosa",
+        accepted_gbif_key=2878688,
+        normalized_binomial="Monstera deliciosa",
+        canonical_source_url=source_url,
+        canonical_source_domain="example.com",
+        source_version="etag:v1",
+        normalized_content_hash="0" * 64,
+        source_retrieved_at=datetime(2026, 8, 1, tzinfo=UTC),
+        enrichment_provenance={"kind": "confirmed_plant_enrichment", "version": 1},
+        taxonomy_provenance_id=uuid4(),
+    )
+
+
+def test_content_key_preserves_trailing_slash_source_distinction() -> None:
+    without_slash = _metadata("https://example.com/care")
+    with_slash = _metadata("https://example.com/care/")
+
+    assert enrichment_content_key(without_slash) != enrichment_content_key(with_slash)

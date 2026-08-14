@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import func, insert, select, update
 
 from app.auth.tables import (
@@ -174,3 +175,166 @@ async def test_candidate_policy_replay_and_authorized_status_preserve_associatio
     assert association_count == 2
     assert owner_status and owner_status.job.id == first.job_id
     assert foreign_status is None
+
+
+async def _job_for_candidate(session_factory, *, candidate_id, user_id) -> str:
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(candidate_enrichment_jobs.c.job_id)
+                .where(
+                    candidate_enrichment_jobs.c.candidate_id == candidate_id,
+                    candidate_enrichment_jobs.c.user_id == user_id,
+                )
+            )
+        ).first()
+        assert row is not None
+        return row._mapping["job_id"]
+
+
+async def _terminalize(session_factory, job_id, status: str) -> None:
+    async with session_factory() as session:
+        values = {
+            "status": status,
+            "completed_at": datetime.now(timezone.utc),
+            "active_deduplication_key": None,
+        }
+        if status == "complete" or status == "partial":
+            values["result"] = _result().model_dump(mode="json")
+        else:
+            values["last_error"] = {"category": "insufficient_evidence", "retryable": False}
+        await session.execute(update(application_jobs).where(application_jobs.c.id == job_id).values(**values))
+        await session.commit()
+
+
+@pytest.mark.parametrize("terminal_status", ["complete", "partial", "failed"])
+async def test_same_candidate_terminal_replay_reuses_existing_association(
+    session_factory, terminal_status: str
+) -> None:
+    user_id = uuid4()
+    image_id = uuid4()
+    candidate_id = uuid4()
+    async with session_factory() as session:
+        await session.execute(
+            insert(users).values(
+                id=user_id, name="Owner", email=f"{user_id}@example.org"
+            )
+        )
+        await session.execute(
+            insert(identification_images).values(
+                id=image_id,
+                user_id=user_id,
+                storage_path="plant.jpg",
+                mime_type="image/jpeg",
+                size_bytes=10,
+                status="complete",
+            )
+        )
+        await session.execute(
+            insert(identification_candidates).values(
+                id=candidate_id,
+                identification_id=image_id,
+                suggested_scientific_name="Monstera deliciosa",
+                confidence_label="high",
+                possible_match_copy="match",
+                validation_status="validated",
+                confirmed_at=datetime.now(timezone.utc),
+            )
+        )
+        repository = JobRepository(session)
+        await repository.associate_candidate_enrichment(
+            candidate_id=candidate_id,
+            user_id=user_id,
+            policy_version=1,
+            payload_version=1,
+            payload={"payload_version": 1, "run_id": str(uuid4())},
+            idempotency_key=f"terminal-{uuid4()}",
+            active_deduplication_key=f"terminal-active-{uuid4()}",
+        )
+        await session.commit()
+    job_id = await _job_for_candidate(session_factory, candidate_id=candidate_id, user_id=user_id)
+    await _terminalize(session_factory, job_id, terminal_status)
+
+    async with session_factory() as session:
+        repository = JobRepository(session)
+        replay = await repository.associate_candidate_enrichment(
+            candidate_id=candidate_id,
+            user_id=user_id,
+            policy_version=1,
+            payload_version=1,
+            payload={"payload_version": 1, "run_id": str(uuid4())},
+            idempotency_key=f"terminal-replay-{uuid4()}",
+            active_deduplication_key=f"terminal-replay-active-{uuid4()}",
+        )
+        await session.commit()
+
+    assert replay.job_id == job_id
+    assert replay.job_created is False
+    assert replay.association_created is False
+
+
+async def test_sibling_candidate_switching_does_not_cancel_shared_active_work(
+    session_factory,
+) -> None:
+    user_id = uuid4()
+    image_id = uuid4()
+    candidate_a = uuid4()
+    candidate_b = uuid4()
+    async with session_factory() as session:
+        await session.execute(
+            insert(users).values(id=user_id, name="Owner", email=f"{user_id}@example.org")
+        )
+        await session.execute(
+            insert(identification_images).values(
+                id=image_id,
+                user_id=user_id,
+                storage_path="plant.jpg",
+                mime_type="image/jpeg",
+                size_bytes=10,
+                status="complete",
+            )
+        )
+        for candidate_id in (candidate_a, candidate_b):
+            await session.execute(
+                insert(identification_candidates).values(
+                    id=candidate_id,
+                    identification_id=image_id,
+                    suggested_scientific_name="Monstera deliciosa",
+                    confidence_label="high",
+                    possible_match_copy="match",
+                    validation_status="validated",
+                    confirmed_at=datetime.now(timezone.utc),
+                )
+            )
+        repository = JobRepository(session)
+        shared_key = "sibling-shared-active"
+        first = await repository.associate_candidate_enrichment(
+            candidate_id=candidate_a,
+            user_id=user_id,
+            policy_version=1,
+            payload_version=1,
+            payload={"payload_version": 1, "run_id": str(uuid4())},
+            idempotency_key=f"a-{uuid4()}",
+            active_deduplication_key=shared_key,
+        )
+        second = await repository.associate_candidate_enrichment(
+            candidate_id=candidate_b,
+            user_id=user_id,
+            policy_version=1,
+            payload_version=1,
+            payload={"payload_version": 1, "run_id": str(uuid4())},
+            idempotency_key=f"b-{uuid4()}",
+            active_deduplication_key=shared_key,
+        )
+        await session.commit()
+
+    assert second.job_id == first.job_id
+    assert second.association_created is True
+    async with session_factory() as session:
+        job = (
+            await session.execute(
+                select(application_jobs).where(application_jobs.c.id == first.job_id)
+            )
+        ).first()
+        assert job._mapping["status"] == JobStatus.pending.value
+        assert job._mapping["active_deduplication_key"] == shared_key

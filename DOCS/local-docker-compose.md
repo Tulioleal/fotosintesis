@@ -59,12 +59,29 @@ Run frontend component tests:
 pnpm --filter frontend test
 ```
 
-Run Playwright against the local stack:
+### Focused Enrichment E2E
+
+The enrichment journey uses an isolated Compose project, deterministic AI
+providers, a local GBIF fixture, real Auth.js registration, PostgreSQL
+migrations, the durable worker, and a production Next.js build.
+
+Run:
 
 ```bash
-docker compose up frontend backend worker postgres -d
-pnpm --filter frontend test:e2e
+pnpm e2e:enrichment
 ```
+
+The script builds Next.js with offline font responses, waits for every service
+to become healthy, runs the enrichment journey serially, and removes only the
+isolated `photosynthesis-e2e` containers and volumes.
+
+Port 3000 must be available before starting. The command never reuses an
+unrelated frontend server.
+
+PostgreSQL and the backend remain internal to the isolated Compose network and
+do not publish host ports during this workflow. The command refuses to start
+when another enrichment E2E run is active, preventing concurrent runs from
+removing each other's containers or volumes.
 
 ## Evaluation
 

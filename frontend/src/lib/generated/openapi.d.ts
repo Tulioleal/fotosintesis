@@ -419,6 +419,8 @@ export interface components {
         };
         /** AssistantChatRequest */
         AssistantChatRequest: {
+            /** Confirmed Candidate Id */
+            confirmed_candidate_id?: string | null;
             /** Conversation Id */
             conversation_id?: string | null;
             /** Message */
@@ -608,7 +610,7 @@ export interface components {
          * EnrichmentLimitation
          * @enum {string}
          */
-        EnrichmentLimitation: "missing_required_aspects" | "safety_evidence_rejected";
+        EnrichmentLimitation: "missing_required_aspects" | "safety_evidence_rejected" | "retry_exhausted" | "workflow_incomplete" | "indexing_deferred";
         /** GardenDeleteResponse */
         GardenDeleteResponse: {
             /** Status */
@@ -862,8 +864,14 @@ export interface components {
         MeasurementSource: "sensor" | "camera" | "manual";
         /** PlantProfileResponse */
         PlantProfileResponse: {
+            /** Accepted Gbif Key */
+            accepted_gbif_key?: number | null;
             /** Aliases */
             aliases?: components["schemas"]["ProfileAlias"][];
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Canonical Species Key */
+            canonical_species_key?: string | null;
             /** Common Name */
             common_name?: string | null;
             /** Confidence */

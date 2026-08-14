@@ -6,6 +6,7 @@ async database engine from the test fixtures remains usable.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -84,6 +85,7 @@ async def _enqueue_for(pg_session_factory, *, user_id: UUID | None, key: str) ->
 
 class TestJobStatusAPI:
     async def test_owner_reads_terminal_metadata_without_payload_fields(self, http_client):
+
         from app.auth.tables import application_jobs
 
         client, user, factory = http_client
@@ -260,6 +262,101 @@ class TestJobStatusAPI:
         assert foreign_resp.status_code == unknown_resp.status_code == internal_resp.status_code == 404
         assert foreign_resp.json() == unknown_resp.json() == internal_resp.json()
         assert foreign_resp.headers["content-type"] == unknown_resp.headers["content-type"]
+
+    async def test_enrichment_status_exposes_bounded_result_not_internal_progress(
+        self, http_client,
+    ):
+        from app.auth.tables import application_jobs, enrichment_job_progress
+        from app.enrichment.policy import ENRICHMENT_POLICY_V1
+
+        client, user, factory = http_client
+        job_id = uuid4()
+        policy_aspects = sorted(
+            aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects
+        )
+        covered = ["light_exposure"]
+        missing = [aspect for aspect in policy_aspects if aspect != "light_exposure"]
+        async with factory() as session:
+            await session.execute(
+                application_jobs.insert().values(
+                    id=job_id,
+                    user_id=user,
+                    job_type="enrich_confirmed_plant",
+                    payload_version=1,
+                    payload={
+                        "run_id": str(job_id),
+                        "policy_version": 1,
+                    },
+                    status="partial",
+                    idempotency_key=f"enrich-api-{uuid4()}",
+                    attempt_count=3,
+                    max_attempts=3,
+                    completed_at=datetime.now(timezone.utc),
+                    result={
+                        "outcome": "partial",
+                        "policy_version": 1,
+                        "covered_aspects": covered,
+                        "missing_aspects": missing,
+                        "covered_count": 1,
+                        "missing_count": len(missing),
+                        "limitations": [
+                            "missing_required_aspects",
+                            "retry_exhausted",
+                        ],
+                        "acquisition_avoided": False,
+                    },
+                    last_error={
+                        "category": "attempts_exhausted",
+                        "retryable": False,
+                    },
+                )
+            )
+            await session.execute(
+                enrichment_job_progress.insert().values(
+                    job_id=job_id,
+                    policy_version=1,
+                    required_aspects=policy_aspects,
+                    local_covered_aspects=["light_exposure"],
+                    persisted_covered_aspects=["light_exposure"],
+                    indexed_covered_aspects=[],
+                    final_judged_covered_aspects=["light_exposure"],
+                    final_judged_missing_aspects=missing,
+                    answerability_status="partial",
+                    acquisition_avoided=False,
+                    search_count=3,
+                    accepted_aspect_count=1,
+                )
+            )
+            await session.commit()
+
+        response = await client.get(f"/jobs/{job_id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "partial"
+        assert body["last_error"] == {
+            "category": "attempts_exhausted",
+            "retryable": False,
+        }
+        assert body["result"]["covered_aspects"] == ["light_exposure"]
+        assert body["result"]["missing_aspects"] == missing
+        assert body["result"]["limitations"] == [
+            "missing_required_aspects",
+            "retry_exhausted",
+        ]
+        for forbidden in (
+            "local_covered_aspects",
+            "persisted_covered_aspects",
+            "indexed_covered_aspects",
+            "final_judged_covered_aspects",
+            "final_judged_missing_aspects",
+            "answerability_status",
+            "search_count",
+            "accepted_aspect_count",
+            "last_validation_run_id",
+            "idempotency_key",
+            "payload",
+        ):
+            assert forbidden not in json.dumps(body)
 
     async def test_unauthenticated_returns_401(self, pg_session_factory):
         from app.main import app

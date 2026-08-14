@@ -114,6 +114,18 @@
       },
       "AssistantChatRequest": {
         "properties": {
+          "confirmed_candidate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Candidate Id"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -595,7 +607,10 @@
       "EnrichmentLimitation": {
         "enum": [
           "missing_required_aspects",
-          "safety_evidence_rejected"
+          "safety_evidence_rejected",
+          "retry_exhausted",
+          "workflow_incomplete",
+          "indexing_deferred"
         ],
         "title": "EnrichmentLimitation",
         "type": "string"
@@ -1247,12 +1262,45 @@
       },
       "PlantProfileResponse": {
         "properties": {
+          "accepted_gbif_key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Gbif Key"
+          },
           "aliases": {
             "items": {
               "$ref": "#/components/schemas/ProfileAlias"
             },
             "title": "Aliases",
             "type": "array"
+          },
+          "binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binomial Name"
+          },
+          "canonical_species_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Species Key"
           },
           "common_name": {
             "anyOf": [

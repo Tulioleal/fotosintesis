@@ -79,4 +79,86 @@ describe("GET /api/identifications/candidates/[candidateId]/enrichment", () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ detail: "Candidate not found" });
   });
+
+  it.each([
+    "retry_exhausted",
+    "workflow_incomplete",
+    "indexing_deferred",
+  ] as const)("accepts the generated %s enrichment limitation", async (limitation) => {
+    const payload = {
+      candidate_id: "00000000-0000-4000-8000-000000000001",
+      policy_version: 1,
+      job: {
+        id: "00000000-0000-4000-8000-000000000002",
+        job_type: "enrich_confirmed_plant",
+        status: "partial",
+        attempt_count: 3,
+        max_attempts: 3,
+        created_at: "2026-07-22T00:00:00Z",
+        updated_at: "2026-07-22T00:00:00Z",
+        completed_at: "2026-07-22T00:01:00Z",
+        result: {
+          outcome: "partial",
+          policy_version: 1,
+          covered_aspects: ["watering_frequency_or_trigger"],
+          missing_aspects: [],
+          covered_count: 1,
+          missing_count: 0,
+          limitations: [limitation],
+          acquisition_avoided: false,
+        },
+        last_error: null,
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json(payload));
+
+    const response = await GET(
+      new Request("http://frontend.test/api/identifications/candidates/candidate-1/enrichment", {
+        headers: { cookie: "fotosintesis_session=opaque" },
+      }),
+      { params: Promise.resolve({ candidateId: "candidate-1" }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(payload);
+  });
+
+  it("rejects an unknown enrichment limitation", async () => {
+    const payload = {
+      candidate_id: "00000000-0000-4000-8000-000000000001",
+      policy_version: 1,
+      job: {
+        id: "00000000-0000-4000-8000-000000000002",
+        job_type: "enrich_confirmed_plant",
+        status: "partial",
+        attempt_count: 3,
+        max_attempts: 3,
+        created_at: "2026-07-22T00:00:00Z",
+        updated_at: "2026-07-22T00:00:00Z",
+        completed_at: "2026-07-22T00:01:00Z",
+        result: {
+          outcome: "partial",
+          policy_version: 1,
+          covered_aspects: ["watering_frequency_or_trigger"],
+          missing_aspects: [],
+          covered_count: 1,
+          missing_count: 0,
+          limitations: ["future_unrecognized_limitation"],
+          acquisition_avoided: false,
+        },
+        last_error: null,
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json(payload));
+
+    const response = await GET(
+      new Request("http://frontend.test/api/identifications/candidates/candidate-1/enrichment", {
+        headers: { cookie: "fotosintesis_session=opaque" },
+      }),
+      { params: Promise.resolve({ candidateId: "candidate-1" }) },
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ detail: "Invalid backend response" });
+  });
 });

@@ -2,6 +2,7 @@ export interface AssistantHrefValues {
   plant?: string | null;
   binomial?: string | null;
   scientific?: string | null;
+  candidate?: string | null;
 }
 
 export function buildAssistantHref(values: AssistantHrefValues): string {

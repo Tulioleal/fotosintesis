@@ -26,6 +26,8 @@ from app.auth.tables import (
 from app.core.settings import get_settings
 from app.enrichment.evidence import AcceptedEnrichmentClaim, EnrichmentEvidencePersistenceService
 from app.enrichment.identity import CanonicalSpeciesIdentity
+from app.enrichment.policy import ENRICHMENT_POLICY_V1
+from app.enrichment.progress import EnrichmentProgressRepository
 from app.knowledge.rag import KnowledgeVectorIndex, LlamaIndexRuntime, VectorIndexError
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import KnowledgeRetrievalFilters
@@ -37,6 +39,45 @@ from .conftest import BASE_DATABASE_URL
 
 WATERING = "watering_frequency_or_trigger"
 LIGHT = "light_exposure"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_progress_updates_preserve_accepted_aspect_union(
+    pg_session_factory,
+    enrichment_job_id,
+) -> None:
+    required = sorted(
+        aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects
+    )
+    async with pg_session_factory() as session:
+        progress = EnrichmentProgressRepository(session)
+        await progress.initialize_or_load(
+            job_id=enrichment_job_id,
+            policy_version=ENRICHMENT_POLICY_V1.version,
+            required_aspects=required,
+        )
+        await session.commit()
+
+    async def record(aspect: str) -> None:
+        async with pg_session_factory() as session:
+            progress = EnrichmentProgressRepository(session)
+            await progress.record_persisted_aspects(
+                job_id=enrichment_job_id,
+                persisted_aspects=[aspect],
+            )
+            await asyncio.sleep(0.05)
+            await session.commit()
+
+    await asyncio.gather(record(LIGHT), record(WATERING))
+
+    async with pg_session_factory() as session:
+        snapshot = await EnrichmentProgressRepository(
+            session
+        ).get_for_terminalization(job_id=enrichment_job_id)
+
+    assert snapshot is not None
+    assert set(snapshot.persisted_covered_aspects) == {LIGHT, WATERING}
+    assert snapshot.accepted_aspect_count == 2
 
 
 class _EmbeddingProvider:
@@ -466,6 +507,80 @@ async def test_retry_after_relational_commit_and_vector_failure_converges_withou
     assert len(by_aspect) == 1
     assert by_aspect[0].id == first.chunks[0].id
     await _assert_vector_equals_relational(vector_store, pg_session_factory)
+
+
+class _FailAfterPersistedCheckpoint(EnrichmentProgressRepository):
+    """Progress repository that performs the real checkpoint update and then
+    fails, proving the update is rolled back with the rest of Phase A."""
+
+    async def record_persisted_aspects(
+        self,
+        *,
+        job_id,
+        persisted_aspects,
+    ):
+        await super().record_persisted_aspects(
+            job_id=job_id,
+            persisted_aspects=persisted_aspects,
+        )
+        raise RuntimeError("fail after real checkpoint update")
+
+
+async def test_checkpoint_failure_after_real_update_rolls_back_phase_a(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    taxonomy_provenance_id,
+    enrichment_job_id,
+) -> None:
+    required = sorted(
+        aspect.value for aspect in ENRICHMENT_POLICY_V1.required_aspects
+    )
+    async with pg_session_factory() as session:
+        progress = EnrichmentProgressRepository(session)
+        await progress.initialize_or_load(
+            job_id=enrichment_job_id,
+            policy_version=ENRICHMENT_POLICY_V1.version,
+            required_aspects=required,
+        )
+        await session.commit()
+
+    session = pg_session_factory()
+    repository = KnowledgeRepository(session, get_settings())
+    failing_progress = _FailAfterPersistedCheckpoint(session)
+    service = EnrichmentEvidencePersistenceService(
+        repository,
+        vector_index=vector_index_factory(repository),
+        embedding_provider=_EmbeddingProvider(),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="fail after real checkpoint update"):
+            await service.persist_claim_relational(
+                identity=_identity(),
+                taxonomy_provenance_id=taxonomy_provenance_id,
+                claim=_claim(aspects=(LIGHT,)),
+                job_id=enrichment_job_id,
+                progress=failing_progress,
+            )
+    finally:
+        await session.close()
+
+    assert await _counts(pg_session_factory) == {
+        "documents": 0,
+        "sources": 0,
+        "chunks": 0,
+        "embeddings": 0,
+        "supports": 0,
+    }
+
+    async with pg_session_factory() as session:
+        snapshot = await EnrichmentProgressRepository(
+            session
+        ).get_for_terminalization(job_id=enrichment_job_id)
+    assert snapshot is not None
+    assert snapshot.persisted_covered_aspects == ()
+    assert snapshot.indexed_covered_aspects == ()
+    assert snapshot.accepted_aspect_count == 0
 
 
 async def test_replayed_validation_association_produces_one_row(
@@ -1016,3 +1131,392 @@ async def test_aspect_filtered_retrieval_survives_higher_scoring_unrelated_chunk
 
     assert result.status.value == "retrieved"
     assert requested.chunks[0].id in {chunk.id for chunk in result.chunks}
+
+
+async def test_balanced_ordering_survives_production_local_judge_budget(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    taxonomy_provenance_id,
+    enrichment_job_id,
+) -> None:
+    """Coverage-balanced ordering is preserved through the production local
+    semantic judge budget: with a budget of MAX_JUDGE_SOURCES and unrelated
+    higher-scoring chunks present, each requested aspect still contributes a
+    candidate before any aspect contributes a duplicate."""
+    from dataclasses import replace
+
+    from app.enrichment.service import MAX_JUDGE_SOURCES
+    from app.knowledge.acquisition import retrieve_balanced_enrichment
+
+    async def persist(claim_text: str, quote: str, aspects: tuple[str, ...], embedding_provider):
+        async with pg_session_factory() as session:
+            repository = KnowledgeRepository(session, get_settings())
+            service = EnrichmentEvidencePersistenceService(
+                repository,
+                vector_index=vector_index_factory(repository),
+                embedding_provider=embedding_provider,
+            )
+            claim = replace(
+                _claim(aspects=aspects),
+                claim=claim_text,
+                evidence_quote=quote,
+                source_version="balance-budget",
+            )
+            state = await service.persist_claim_relational(
+                identity=_identity(),
+                taxonomy_provenance_id=taxonomy_provenance_id,
+                claim=claim,
+            )
+            validation_id = await _record_validation(
+                pg_session_factory,
+                state=state,
+                covered=set(aspects),
+                job_id=enrichment_job_id,
+                taxonomy_provenance_id=taxonomy_provenance_id,
+            )
+            await service.associate_validation_and_refresh(
+                validation_id=validation_id,
+                document_id=state.document_id,
+            )
+            return state
+
+    # Two requested aspects carry marker content embedded far from the query,
+    # while unrelated higher-scoring chunks fill the pgvector top-k.
+    watering = await persist(
+        "REQUESTED_MARKER watering guidance.",
+        "REQUESTED_MARKER watering quote.",
+        (WATERING,),
+        _AspectRankEmbeddingProvider(),
+    )
+    light = await persist(
+        "REQUESTED_MARKER light guidance.",
+        "REQUESTED_MARKER light quote.",
+        (LIGHT,),
+        _AspectRankEmbeddingProvider(),
+    )
+    unrelated_aspects = ("soil_drainage", "humidity_preference", "climate_temperature_range")
+    for index in range(24):
+        await persist(
+            f"UNRELATED_MARKER aspect {index % len(unrelated_aspects)} content.",
+            f"UNRELATED_MARKER quote {index}.",
+            (unrelated_aspects[index % len(unrelated_aspects)],),
+            _AspectRankEmbeddingProvider(),
+        )
+
+    async with pg_session_factory() as session:
+        repository = KnowledgeRepository(session, get_settings())
+        result = await retrieve_balanced_enrichment(
+            vector_index=vector_index_factory(repository),
+            canonical_species_key=_identity().key,
+            accepted_gbif_key=2878688,
+            required_aspects=[WATERING, LIGHT],
+            query_text="care",
+            query_embedding=[0.0] * 8,
+            per_aspect_limit=5,
+            budget=MAX_JUDGE_SOURCES,
+        )
+
+    ids = [str(chunk.id) for chunk in result]
+    watering_id = str(watering.chunks[0].id)
+    light_id = str(light.chunks[0].id)
+    unrelated_ids = [chunk_id for chunk_id in ids if chunk_id not in {watering_id, light_id}]
+    assert len(result) <= MAX_JUDGE_SOURCES
+    assert watering_id in ids and light_id in ids
+    # Both requested aspects lead the balanced ordering before any unrelated
+    # higher-scoring chunk, and each requested chunk appears exactly once.
+    assert ids.index(watering_id) < ids.index(light_id)
+    if unrelated_ids:
+        assert ids.index(light_id) < ids.index(unrelated_ids[0])
+
+
+async def test_new_profile_snapshot_includes_only_accepted_canonical_evidence(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    taxonomy_provenance_id,
+    enrichment_job_id,
+) -> None:
+    """A new canonical profile snapshot includes only enrichment documents
+    whose aspect support and validation provenance cover the same accepted
+    aspect, with trusted source provenance and eligible review state. Each
+    exclusion gate is arranged independently so a single broken gate cannot
+    hide behind another."""
+    from sqlalchemy import insert
+
+    from app.auth.tables import (
+        enrichment_validation_evidence,
+        enrichment_validation_runs,
+        knowledge_document_aspect_supports,
+        knowledge_sources,
+        plant_profiles,
+    )
+    from app.knowledge.schemas import ReviewStatus
+    from app.profile_garden.repository import PlantProfileGardenRepository
+
+    accepted_support = {LIGHT, WATERING}
+
+    # Accepted canonical evidence: aspect support and validation provenance
+    # both cover the same aspects, with trusted source and eligible review.
+    service, session = _service(pg_session_factory, vector_index_factory)
+    try:
+        accepted = await service.persist_claim_relational(
+            identity=_identity(),
+            taxonomy_provenance_id=taxonomy_provenance_id,
+            claim=_claim(aspects=(LIGHT, WATERING)),
+        )
+        validation_id = await _record_validation(
+            pg_session_factory,
+            state=accepted,
+            covered=accepted_support,
+            job_id=enrichment_job_id,
+            taxonomy_provenance_id=taxonomy_provenance_id,
+        )
+        await service.associate_validation_and_refresh(
+            validation_id=validation_id,
+            document_id=accepted.document_id,
+        )
+    finally:
+        await session.close()
+    await _annotate_accepted_marker(pg_session_factory, accepted.document_id)
+
+    # Independent negative arrangements, each exercising exactly one gate:
+    # mismatched aspect validation, legacy null-key fallback, untrusted
+    # source, rejected review state, missing support, missing validation.
+    fixtures = [
+        (
+            "MISMATCHED_ASPECT_MARKER",
+            dict(
+                supports={WATERING},
+                validation_covered={LIGHT},
+                canonical=True,
+                source_validation="trusted",
+                review=ReviewStatus.auto_ingested.value,
+            ),
+        ),
+        (
+            "LEGACY_FALLBACK_MARKER",
+            dict(
+                supports={WATERING},
+                validation_covered={WATERING},
+                canonical=False,
+                source_validation="trusted",
+                review=ReviewStatus.auto_ingested.value,
+            ),
+        ),
+        (
+            "UNTRUSTED_MARKER",
+            dict(
+                supports={WATERING},
+                validation_covered={WATERING},
+                canonical=True,
+                source_validation="untrusted",
+                review=ReviewStatus.auto_ingested.value,
+            ),
+        ),
+        (
+            "REJECTED_REVIEW_MARKER",
+            dict(
+                supports={WATERING},
+                validation_covered={WATERING},
+                canonical=True,
+                source_validation="trusted",
+                review=ReviewStatus.rejected.value,
+            ),
+        ),
+        (
+            "NO_SUPPORT_MARKER",
+            dict(
+                supports=set(),
+                validation_covered={WATERING},
+                canonical=True,
+                source_validation="trusted",
+                review=ReviewStatus.auto_ingested.value,
+            ),
+        ),
+        (
+            "NO_VALIDATION_MARKER",
+            dict(
+                supports={WATERING},
+                validation_covered=set(),
+                canonical=True,
+                source_validation="trusted",
+                review=ReviewStatus.auto_ingested.value,
+            ),
+        ),
+    ]
+    async with pg_session_factory() as session:
+        for index, (marker, options) in enumerate(fixtures):
+            await _insert_canonical_fixture(
+                session,
+                marker=marker,
+                identity=_identity(),
+                taxonomy_provenance_id=taxonomy_provenance_id,
+                job_id=enrichment_job_id,
+                index=index,
+                **options,
+            )
+        await session.commit()
+
+        profile = await PlantProfileGardenRepository(session).get_or_create_profile(
+            scientific_name=_identity().normalized_binomial,
+            common_name="Monstera",
+            accepted_gbif_key=_identity().accepted_gbif_key,
+            normalized_binomial=_identity().normalized_binomial,
+            canonical_species_key=_identity().key,
+        )
+
+    combined = " ".join(
+        item for section in profile.sections.values() for item in section
+    )
+    assert "ACCEPTED_COUPLED_MARKER" in combined
+    assert "MISMATCHED_ASPECT_MARKER" not in combined
+    assert "LEGACY_FALLBACK_MARKER" not in combined
+    assert "UNTRUSTED_MARKER" not in combined
+    assert "REJECTED_REVIEW_MARKER" not in combined
+    assert "NO_SUPPORT_MARKER" not in combined
+    assert "NO_VALIDATION_MARKER" not in combined
+    # The accepted evidence document is referenced as a snapshot source.
+    assert profile.sources
+    async with pg_session_factory() as session:
+        profile_total = await session.scalar(
+            select(func.count()).select_from(plant_profiles)
+        )
+    assert profile_total == 1
+
+
+async def _annotate_accepted_marker(session_factory, document_id: UUID) -> None:
+    """Tag the accepted document's chunk content with the accepted marker."""
+    from app.auth.tables import knowledge_chunks
+
+    async with session_factory() as session:
+        chunks = (
+            await session.execute(
+                select(knowledge_chunks).where(
+                    knowledge_chunks.c.document_id == document_id
+                )
+            )
+        ).mappings().all()
+        assert chunks
+        for chunk in chunks:
+            await session.execute(
+                knowledge_chunks.update()
+                .where(knowledge_chunks.c.id == chunk["id"])
+                .values(content=chunk["content"] + " ACCEPTED_COUPLED_MARKER")
+            )
+        await session.commit()
+
+
+async def _insert_canonical_fixture(
+    session,
+    *,
+    marker: str,
+    identity,
+    taxonomy_provenance_id: UUID,
+    job_id: UUID,
+    index: int,
+    supports: set[str],
+    validation_covered: set[str],
+    canonical: bool,
+    source_validation: str,
+    review: str,
+) -> None:
+    from sqlalchemy import insert
+
+    from app.auth.tables import (
+        enrichment_validation_evidence,
+        enrichment_validation_runs,
+        knowledge_document_aspect_supports,
+        knowledge_sources,
+    )
+    from app.knowledge.schemas import ReviewStatus
+
+    now = datetime.now(UTC)
+    document_id = uuid4()
+    chunk_id = uuid4()
+    source_id = uuid4()
+    key = identity.key if canonical else None
+    source_url = f"https://example.org/marker-{index}"
+    content = f"{marker} content must never enter the snapshot unless accepted."
+    await session.execute(
+        insert(knowledge_documents).values(
+            id=document_id,
+            scientific_name=identity.normalized_binomial,
+            topic="confirmed_plant_enrichment",
+            title=marker,
+            content=content,
+            confidence=0.9,
+            review_status=review,
+            canonical_species_key=key,
+            accepted_gbif_key=identity.accepted_gbif_key if canonical else None,
+            normalized_binomial=identity.normalized_binomial,
+            canonical_source_url=source_url,
+            canonical_source_domain="example.org",
+            source_version=f"etag-marker-{index}",
+            normalized_content_hash=f"{marker}{index}".ljust(64, "0")[:64],
+            source_retrieved_at=now,
+            enrichment_provenance={"kind": "confirmed_plant_enrichment", "version": 1},
+            taxonomy_provenance_id=taxonomy_provenance_id if canonical else None,
+        )
+    )
+    await session.execute(
+        insert(knowledge_sources).values(
+            id=source_id,
+            document_id=document_id,
+            title=marker,
+            url=source_url,
+            source_domain="example.org",
+            retrieved_at=now,
+            validation_status=source_validation,
+        )
+    )
+    await session.execute(
+        insert(knowledge_chunks).values(
+            id=chunk_id,
+            document_id=document_id,
+            source_id=source_id,
+            chunk_index=0,
+            content=content,
+            metadata={},
+            scientific_name=identity.normalized_binomial,
+            topic="confirmed_plant_enrichment",
+            source_domain="example.org",
+            source_url=source_url,
+            confidence=0.9,
+            review_status=review,
+            retrieved_at=now,
+        )
+    )
+    for aspect in supports:
+        await session.execute(
+            insert(knowledge_document_aspect_supports).values(
+                id=uuid4(),
+                document_id=document_id,
+                aspect=aspect,
+                support_confidence=0.95,
+                review_status=ReviewStatus.auto_ingested.value,
+            )
+        )
+    if validation_covered:
+        validation_run_id = uuid4()
+        await session.execute(
+            insert(enrichment_validation_runs).values(
+                id=validation_run_id,
+                job_id=job_id,
+                taxonomy_provenance_id=taxonomy_provenance_id,
+                policy_version=1,
+                required_aspects=[WATERING, LIGHT],
+                covered_aspects=sorted(validation_covered),
+                missing_aspects=[],
+                answerability_status="full",
+                judge_confidence=0.95,
+                validation_metadata={"acquisition_avoided": False},
+            )
+        )
+        await session.execute(
+            insert(enrichment_validation_evidence).values(
+                id=uuid4(),
+                validation_run_id=validation_run_id,
+                document_id=document_id,
+            )
+        )

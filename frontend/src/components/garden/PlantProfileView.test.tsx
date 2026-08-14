@@ -2,14 +2,17 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithQueryClient } from "@/test/renderWithQueryClient";
 import {
+  ENRICHMENT_POLL_INTERVAL_MS,
+  ENRICHMENT_STALL_AFTER_MS,
+  PlantProfileView,
   candidateEnrichmentQueryKey,
   enrichmentRefetchInterval,
   plantProfileQueryKey,
-  PlantProfileView,
 } from "./PlantProfileView";
 
 const profile = {
   aliases: [{ country: null, language: "es", name: "Helecho", region: null }],
+  binomial_name: "Nephrolepis exaltata",
   common_name: "Helecho",
   confidence: 0.9,
   id: "profile-1",
@@ -36,7 +39,7 @@ function enrichment(status: "pending" | "processing" | "complete" | "partial" | 
   return {
     candidate_id: "candidate-1",
     policy_version: 1,
-    job: { ...jobBase, status },
+    job: { ...jobBase, status, updated_at: new Date().toISOString() },
   };
 }
 
@@ -174,7 +177,7 @@ describe("PlantProfileView", () => {
     expect(mocks.getCandidateEnrichment).toHaveBeenCalledTimes(terminalRequestCount);
   });
 
-  it("stops at a newly observed terminal state and invalidates status and snapshot metadata once", async () => {
+  it("terminal observation invalidates only the profile query, not the status query", async () => {
     mocks.getCandidateEnrichment
       .mockResolvedValueOnce(enrichment("pending"))
       .mockResolvedValue(enrichment("complete"));
@@ -190,16 +193,44 @@ describe("PlantProfileView", () => {
     });
 
     await screen.findByText(/Evidencia completa/);
-    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(2));
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
-      exact: true,
-    });
+    await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: plantProfileQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
+    expect(invalidate).not.toHaveBeenCalledWith({
+      queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+      exact: true,
+    });
     expect(screen.getByText("Este estado no regenera las secciones del perfil guardado.")).toBeInTheDocument();
+  });
+
+  it("makes no further status request after a terminal observation", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment
+      .mockResolvedValueOnce(enrichment("processing"))
+      .mockResolvedValueOnce(enrichment("complete"))
+      .mockResolvedValue(enrichment("complete"));
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText(/Buscando evidencia/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_POLL_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText(/Evidencia completa/)).toBeInTheDocument();
+
+    const callsAfterTerminal = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(callsAfterTerminal);
   });
 
   it("renders policy, bounded partial coverage and snapshot sources as separate state", async () => {
@@ -220,6 +251,132 @@ describe("PlantProfileView", () => {
     expect(screen.getByText(/La evidencia nueva se informa por separado/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Guia original" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Agregar a Mi Jardin" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["retry_exhausted", "Se agotaron los reintentos de ampliar la evidencia."],
+    ["workflow_incomplete", "El proceso de ampliacion quedo incompleto."],
+    ["indexing_deferred", "La evidencia se guardo pero la indexacion quedo pendiente."],
+  ])("renders distinct text for the %s operational limitation", async (limitation, copy) => {
+    mocks.getCandidateEnrichment.mockResolvedValue({
+      ...enrichment("partial"),
+      job: {
+        ...jobBase,
+        status: "partial" as const,
+        result: {
+          acquisition_avoided: false,
+          covered_aspects: ["light_exposure"],
+          covered_count: 1,
+          limitations: [limitation],
+          missing_aspects: [],
+          missing_count: 0,
+          outcome: "partial" as const,
+          policy_version: 1,
+        },
+      },
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText((_, element) =>
+      element?.tagName === "P" && element.textContent?.includes(copy) === true,
+    )).toBeInTheDocument();
+  });
+
+  it("keeps exactly one polite live region for enrichment status", async () => {
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    await screen.findByText(/Buscando evidencia/);
+    const liveRegions = screen.getAllByRole("status");
+    expect(liveRegions).toHaveLength(1);
+    expect(liveRegions[0]).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("reports polling errors with alert semantics without duplicate status nodes", async () => {
+    mocks.getCandidateEnrichment.mockRejectedValue(new Error("Estado temporalmente no disponible."));
+    mocks.getPlantProfile.mockResolvedValue({ ...profile, enrichment: enrichment("pending") });
+    const { container } = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Estado temporalmente no disponible.");
+    // Exactly one polite status region from the fallback, never duplicated by
+    // the polling error, which keeps alert semantics.
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+
+  it("resets stalled observation state when the candidate context changes", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    const first = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    first.unmount();
+
+    mocks.getCandidateEnrichment.mockClear().mockResolvedValue(enrichment("pending"));
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-2" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // The new candidate receives its own bounded window: no stale stall text.
+    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
+    expect(screen.getByText(/En espera/)).toBeInTheDocument();
+  });
+
+  it("issues exactly one request per manual retry and disables the control while checking", async () => {
+    vi.useFakeTimers();
+    const pending: Array<(value: unknown) => void> = [];
+    mocks.getCandidateEnrichment.mockImplementation(
+      () => new Promise((resolve) => { pending.push(resolve); }),
+    );
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      for (const resolve of pending.splice(0)) resolve(enrichment("processing"));
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    const retry = screen.getByRole("button", { name: "Revisar estado" });
+    const callsBefore = mocks.getCandidateEnrichment.mock.calls.length;
+    fireEvent.click(retry);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(callsBefore + 1);
+    expect(screen.getByRole("button", { name: "Revisando estado..." })).toBeDisabled();
+
+    await act(async () => {
+      for (const resolve of pending.splice(0)) resolve(enrichment("processing"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByRole("button", { name: "Revisar estado" })).not.toBeDisabled();
+  });
+
+  it("links to the assistant with candidate, binomial and scientific context", async () => {
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    const link = await screen.findByRole("link", { name: "Preguntar al asistente" });
+    expect(link).toHaveAttribute(
+      "href",
+      "/assistant?plant=Helecho&binomial=Nephrolepis%20exaltata&scientific=Nephrolepis%20exaltata&candidate=candidate-1",
+    );
   });
 
   it("keeps the persisted profile and actions available after failed enrichment", async () => {
@@ -281,5 +438,253 @@ describe("PlantProfileView", () => {
     expect(screen.getByText("Para ver el perfil, confirma primero una candidata validada desde Identificar.")).toBeInTheDocument();
     expect(mocks.getPlantProfile).not.toHaveBeenCalled();
     expect(mocks.getCandidateEnrichment).not.toHaveBeenCalled();
+  });
+
+  it("stops automatic polling after the stalled threshold", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText(/Buscando evidencia/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+
+    const callsBefore = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(callsBefore);
+  });
+
+  it("keeps the profile fallback active while status requests fail, but stops polling at the deadline", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockRejectedValue(new Error("Estado temporalmente no disponible."));
+    mocks.getPlantProfile.mockResolvedValue({ ...profile, enrichment: enrichment("processing") });
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // The profile fallback keeps the active status visible while the status
+    // query keeps failing.
+    expect(screen.getByRole("status")).toHaveTextContent("Buscando evidencia");
+    expect(screen.getByRole("alert")).toHaveTextContent("Estado temporalmente no disponible.");
+
+    // Polling continues through failures but the bounded deadline still stops it.
+    const callsBefore = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_POLL_INTERVAL_MS * 3);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBeGreaterThan(callsBefore);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+
+    const terminalCalls = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(terminalCalls);
+  });
+
+  it("clears stalled text immediately when the same candidate moves to a new job", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    const { queryClient } = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+
+    act(() => {
+      queryClient.setQueryData(
+        candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+        {
+          ...enrichment("processing"),
+          job: {
+            ...jobBase,
+            id: "job-2",
+            status: "processing",
+          },
+        },
+      );
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
+  });
+
+  it("allows polling again for a new active job after a terminal job", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValueOnce(enrichment("complete"));
+
+    const { queryClient } = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByText(/Evidencia completa/)).toBeInTheDocument();
+
+    const callsAtTerminal = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    // No further requests after the terminal job.
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(callsAtTerminal);
+
+    // A brand-new active job for the same candidate resumes polling.
+    act(() => {
+      queryClient.setQueryData(
+        candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+        {
+          ...enrichment("processing"),
+          job: {
+            ...jobBase,
+            id: "job-2",
+            status: "processing",
+          },
+        },
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    const callsBeforeNewJob = mocks.getCandidateEnrichment.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_POLL_INTERVAL_MS * 2);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBeGreaterThan(callsBeforeNewJob);
+  });
+
+  it("does not reset the observation deadline on lease-only updated_at changes", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    const { queryClient } = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    // Repeated identical active responses with refreshed lease timestamps must
+    // not extend the deadline.
+    for (const stamp of ["2026-01-01T00:00:01Z", "2026-01-01T00:00:02Z", "2026-01-01T00:00:03Z"]) {
+      act(() => {
+        queryClient.setQueryData(
+          candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+          {
+            ...enrichment("processing"),
+            job: { ...jobBase, id: "job-1", status: "processing", updated_at: stamp },
+          },
+        );
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+    }
+    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+  });
+
+  it("remounting does not hide an already stalled job", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    const first = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    first.unmount();
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+  });
+
+  it("manual retry performs exactly one immediate refetch", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    expect(screen.getByRole("button", { name: "Revisar estado" })).toBeInTheDocument();
+
+    const callsBefore = mocks.getCandidateEnrichment.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Revisar estado" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.getCandidateEnrichment.mock.calls.length).toBe(callsBefore + 1);
+  });
+
+  it("manual retry does not move focus", async () => {
+    vi.useFakeTimers();
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
+    });
+    const retry = screen.getByRole("button", { name: "Revisar estado" });
+    retry.focus();
+    expect(retry).toHaveFocus();
+
+    fireEvent.click(retry);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(retry).toHaveFocus();
+  });
+
+  it("keeps profile actions keyboard reachable while enrichment runs", async () => {
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("processing"));
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText(/Buscando evidencia/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Preguntar al asistente" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Crear recordatorio" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Agregar a Mi Jardin" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar planta confirmada" })).toBeInTheDocument();
   });
 });

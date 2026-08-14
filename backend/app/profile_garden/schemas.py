@@ -31,6 +31,9 @@ class PlantProfileResponse(BaseModel):
     confidence: float
     limitations: list[str] = Field(default_factory=list)
     enrichment: CandidateEnrichmentStatus | None = None
+    accepted_gbif_key: int | None = None
+    binomial_name: str | None = None
+    canonical_species_key: str | None = None
 
 
 class GardenPlantCreate(BaseModel):

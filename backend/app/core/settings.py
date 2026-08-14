@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     trefle_api_key: str | None = None
     perenual_api_key: str | None = None
+    gbif_base_url: str = Field(
+        default="https://api.gbif.org/v1/species/match",
+        validation_alias="GBIF_BASE_URL",
+    )
     openai_text_model: str = "gpt-5.4"
     openai_classifier_model: str = "gpt-5.4-mini"
     openai_vision_model: str = "gpt-5.4"

@@ -362,6 +362,9 @@ async def test_profile_keeps_snapshot_separate_from_every_enrichment_state(
                 sources=snapshot_sources,
                 confidence=0.9,
                 limitations=["Snapshot limitation."],
+                accepted_gbif_key=2878688,
+                normalized_binomial="Monstera deliciosa",
+                canonical_species_key="gbif:2878688|binomial:Monstera deliciosa",
             )
         )
         await session.commit()

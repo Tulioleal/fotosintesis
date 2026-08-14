@@ -38,14 +38,31 @@ def _format_record(record: logging.LogRecord) -> str:
 
 @pytest.mark.asyncio
 async def test_page_fetch_success_log_omits_source_identity(caplog) -> None:
+    from datetime import UTC, datetime
+
+    from app.knowledge.page_evidence import _FetchOutcome
+
     result = SearchResult(
         title="t",
         url=URL_SENTINEL,
         snippet=SNIPPET_SENTINEL,
         source_domain=DOMAIN_SENTINEL,
     )
+
+    def _fake_fetch_sync(_result):
+        return _FetchOutcome(
+            result=_result,
+            content=BODY_SENTINEL,
+            canonical_url=_result.url,
+            retrieved_at=datetime.now(UTC),
+            published_at=None,
+            source_version=None,
+            response_content_type="text/plain",
+            response_charset="utf-8",
+        )
+
     fetcher = TrustedPageEvidenceFetcher(TrustedSourceValidator(["example.org"]))
-    fetcher._fetch_sync = lambda _result: BODY_SENTINEL  # type: ignore[method-assign]
+    fetcher._fetch_sync = _fake_fetch_sync  # type: ignore[method-assign]
     caplog.set_level(logging.INFO)
 
     evidence = await fetcher.fetch(result)

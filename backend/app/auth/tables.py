@@ -241,12 +241,22 @@ plant_profiles = sa.Table(
     sa.Column("sources", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
     sa.Column("confidence", sa.Float(), nullable=False),
     sa.Column("limitations", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+    sa.Column("accepted_gbif_key", sa.Integer(), nullable=True),
+    sa.Column("normalized_binomial", sa.String(length=240), nullable=True),
+    sa.Column("canonical_species_key", sa.String(length=512), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
     sa.Column(
         "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
+)
+sa.Index(
+    "uq_plant_profiles_canonical_species_key",
+    plant_profiles.c.canonical_species_key,
+    unique=True,
+    postgresql_where=plant_profiles.c.canonical_species_key.is_not(None),
+    sqlite_where=plant_profiles.c.canonical_species_key.is_not(None),
 )
 
 garden_plants = sa.Table(
@@ -627,6 +637,68 @@ sa.Index(
     application_jobs.c.status,
     application_jobs.c.lease_expires_at,
     postgresql_where=application_jobs.c.status == "processing",
+)
+
+enrichment_job_progress = sa.Table(
+    "enrichment_job_progress",
+    metadata,
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("policy_version", sa.Integer(), nullable=False),
+    sa.Column("required_aspects", sa.JSON(), nullable=False),
+    sa.Column("local_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("persisted_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("indexed_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("final_judged_covered_aspects", sa.JSON(), nullable=True),
+    sa.Column("final_judged_missing_aspects", sa.JSON(), nullable=True),
+    sa.Column("answerability_status", sa.String(length=20), nullable=True),
+    sa.Column(
+        "acquisition_avoided",
+        sa.Boolean(),
+        nullable=False,
+        server_default=sa.false(),
+    ),
+    sa.Column("search_count", sa.Integer(), nullable=False, server_default="0"),
+    sa.Column(
+        "accepted_aspect_count",
+        sa.Integer(),
+        nullable=False,
+        server_default="0",
+    ),
+    sa.Column("last_validation_run_id", sa.Uuid(), nullable=True),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.Column(
+        "updated_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.CheckConstraint(
+        "policy_version >= 1",
+        name="ck_enrichment_job_progress_policy_version",
+    ),
+    sa.CheckConstraint(
+        "answerability_status IS NULL OR answerability_status IN "
+        "('full', 'partial', 'insufficient', 'contradictory')",
+        name="ck_enrichment_job_progress_answerability_status",
+    ),
+    sa.CheckConstraint(
+        "search_count >= 0 AND search_count <= 100",
+        name="ck_enrichment_job_progress_search_count",
+    ),
+    sa.CheckConstraint(
+        "accepted_aspect_count >= 0 AND accepted_aspect_count <= 100",
+        name="ck_enrichment_job_progress_accepted_aspect_count",
+    ),
 )
 
 light_measurements = sa.Table(

@@ -13,7 +13,8 @@
     "openapi:check": "node scripts/check-openapi.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:enrichment": "playwright test e2e/enrichment-journeys.spec.ts --workers=1"
   },
   "dependencies": {
     "@auth/core": "^0.37.4",
@@ -30,6 +31,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "9",
     "@next/eslint-plugin-next": "15.5.18",
     "@playwright/test": "^1.49.1",

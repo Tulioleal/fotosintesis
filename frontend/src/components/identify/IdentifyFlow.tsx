@@ -533,6 +533,7 @@ function assistantHrefForCandidate(candidate: Candidate) {
     plant: candidateDisplayName(candidate),
     binomial: candidate.binomial_name,
     scientific,
+    candidate: candidate.id,
   });
 }
 

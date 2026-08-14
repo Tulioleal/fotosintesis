@@ -147,6 +147,30 @@ describe("AssistantChat", () => {
     });
   });
 
+  it("maps assistant candidate query parameter to confirmed_candidate_id", async () => {
+    mocks.searchParams = new URLSearchParams({
+      plant: "Monstera",
+      binomial: "Monstera deliciosa",
+      scientific: "Monstera deliciosa Liebm.",
+      candidate: "candidate-1234",
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledWith({
+        message: "Tengo una consulta sobre Monstera:",
+        conversation_id: null,
+        plant: "Monstera",
+        plant_binomial_name: "Monstera deliciosa",
+        plant_scientific_name: "Monstera deliciosa Liebm.",
+        confirmed_candidate_id: "candidate-1234",
+      });
+    });
+  });
+
   it("keeps plant-only assistant requests compatible", async () => {
     mocks.searchParams = new URLSearchParams({ plant: "Pata" });
 

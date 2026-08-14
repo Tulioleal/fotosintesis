@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from sqlalchemy.exc import IntegrityError
 
 from app.enrichment.identity import CanonicalSpeciesIdentity
+from app.enrichment.progress import EnrichmentProgressRepository
 from app.knowledge.rag import KnowledgeVectorIndex, OrchestratedKnowledgeIngestion
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import (
@@ -19,6 +20,7 @@ from app.knowledge.schemas import (
     KnowledgeSourceInput,
     ReviewStatus,
 )
+from app.knowledge.source_urls import URL_CANONICALIZATION_VERSION
 from app.providers.interfaces import EmbeddingProvider
 
 EXPECTED_ENRICHMENT_CONSTRAINTS = {
@@ -36,7 +38,7 @@ def enrichment_content_key(metadata: EnrichmentEvidenceMetadata) -> str:
     raw = json.dumps(
         {
             "species": metadata.canonical_species_key,
-            "source": str(metadata.canonical_source_url).rstrip("/"),
+            "source": str(metadata.canonical_source_url),
             "source_version": metadata.source_version,
             "content_hash": metadata.normalized_content_hash,
         },
@@ -52,6 +54,33 @@ def stable_enrichment_document_id(content_key: str) -> UUID:
 
 def stable_enrichment_chunk_id(content_key: str, chunk_index: int) -> UUID:
     return uuid5(NAMESPACE_URL, f"enrichment-content:{content_key}:chunk:{chunk_index}")
+
+
+def _document_covered_aspects(chunks: list) -> tuple[str, ...]:
+    aspects: list[str] = []
+    for chunk in chunks:
+        covered = chunk.metadata.get("covered_aspects")
+        if not isinstance(covered, list):
+            continue
+        for aspect in covered:
+            if isinstance(aspect, str) and aspect not in aspects:
+                aspects.append(aspect)
+    return tuple(aspects)
+
+
+class _NoOpProgress:
+    """Progress fallback for callers that predate durable checkpoints.
+
+    Production enrichment always supplies the durable progress repository;
+    this fallback preserves repository- and unit-test callers that exercise
+    idempotent persistence without a job checkpoint.
+    """
+
+    async def record_persisted_aspects(self, *, job_id, persisted_aspects) -> None:
+        return None
+
+    async def record_indexed_aspects(self, *, job_id, indexed_aspects) -> None:
+        return None
 
 
 def _is_expected_enrichment_conflict(exc: IntegrityError) -> bool:
@@ -102,9 +131,12 @@ class EnrichmentEvidencePersistenceService:
         identity: CanonicalSpeciesIdentity,
         taxonomy_provenance_id: UUID,
         claim: AcceptedEnrichmentClaim,
+        job_id: UUID | None = None,
+        progress: EnrichmentProgressRepository | None = None,
     ) -> EnrichmentEvidenceState:
         if not claim.supported_aspects:
             raise ValueError("accepted enrichment evidence requires supported aspects")
+        progress = progress or _NoOpProgress()
         content = claim.persisted_content
         metadata = EnrichmentEvidenceMetadata(
             canonical_species_key=identity.key,
@@ -116,19 +148,31 @@ class EnrichmentEvidencePersistenceService:
             normalized_content_hash=_normalized_hash(content),
             source_retrieved_at=claim.source_retrieved_at,
             source_published_at=claim.source_published_at,
-            enrichment_provenance={"kind": "confirmed_plant_enrichment", "version": 1},
+            enrichment_provenance={
+                "kind": "confirmed_plant_enrichment",
+                "version": 1,
+                "url_canonicalization_version": URL_CANONICALIZATION_VERSION,
+            },
             taxonomy_provenance_id=taxonomy_provenance_id,
         )
         content_key = enrichment_content_key(metadata)
         existing = await self.repository.get_enrichment_evidence_state(metadata)
         if existing is not None:
-            await self.repository.add_enrichment_aspect_supports(
-                document_id=existing.document_id,
-                aspects=list(claim.supported_aspects),
-                confidence=claim.confidence,
-                review_status=ReviewStatus.auto_ingested,
-            )
-            await self.repository.session.commit()
+            try:
+                await self.repository.add_enrichment_aspect_supports(
+                    document_id=existing.document_id,
+                    aspects=list(claim.supported_aspects),
+                    confidence=claim.confidence,
+                    review_status=ReviewStatus.auto_ingested,
+                )
+                await progress.record_persisted_aspects(
+                    job_id=job_id,
+                    persisted_aspects=claim.supported_aspects,
+                )
+                await self.repository.session.commit()
+            except BaseException:
+                await self.repository.session.rollback()
+                raise
             refreshed = await self.repository.get_enrichment_evidence_state(metadata)
             if refreshed is None:
                 raise RuntimeError(
@@ -193,6 +237,10 @@ class EnrichmentEvidencePersistenceService:
                 confidence=claim.confidence,
                 review_status=ReviewStatus.auto_ingested,
             )
+            await progress.record_persisted_aspects(
+                job_id=job_id,
+                persisted_aspects=claim.supported_aspects,
+            )
             await self.repository.session.commit()
         except IntegrityError as exc:
             await self.repository.session.rollback()
@@ -204,19 +252,30 @@ class EnrichmentEvidencePersistenceService:
             if winner is None:
                 raise
 
-            await self.repository.add_enrichment_aspect_supports(
-                document_id=winner.document_id,
-                aspects=list(claim.supported_aspects),
-                confidence=claim.confidence,
-                review_status=ReviewStatus.auto_ingested,
-            )
-            await self.repository.session.commit()
+            try:
+                await self.repository.add_enrichment_aspect_supports(
+                    document_id=winner.document_id,
+                    aspects=list(claim.supported_aspects),
+                    confidence=claim.confidence,
+                    review_status=ReviewStatus.auto_ingested,
+                )
+                await progress.record_persisted_aspects(
+                    job_id=job_id,
+                    persisted_aspects=claim.supported_aspects,
+                )
+                await self.repository.session.commit()
+            except BaseException:
+                await self.repository.session.rollback()
+                raise
             refreshed = await self.repository.get_enrichment_evidence_state(metadata)
             if refreshed is None:
                 raise RuntimeError(
                     "enrichment evidence state disappeared after aspect association"
                 )
             return refreshed
+        except BaseException:
+            await self.repository.session.rollback()
+            raise
 
         authoritative = await self.repository.get_enrichment_evidence_state_by_document_id(
             document_id
@@ -232,21 +291,29 @@ class EnrichmentEvidencePersistenceService:
         *,
         validation_id: UUID,
         document_id: UUID,
+        job_id: UUID | None = None,
+        progress: EnrichmentProgressRepository | None = None,
     ) -> None:
-        """Phase B: converge relational validation association and vector
-        metadata for one document under the document row lock.
+        """Phase B: converge relational validation association, vector
+        metadata, and the indexed-aspect checkpoint for one document under
+        the document row lock.
 
         Required order per execution:
         1. Lock the document with ``SELECT ... FOR UPDATE`` and reload the
            authoritative relational aspect union (never cached chunk JSON).
         2. Insert the idempotent validation-evidence association.
         3. Upsert stable vector nodes from the authoritative state.
-        4. Commit only after the vector upsert succeeds.
-        5. Roll back on every exception, including ``CancelledError``.
+        4. Record the document's accepted aspects in the indexed checkpoint.
+        5. Commit the validation association and indexed checkpoint together.
+        6. Roll back on every exception, including ``CancelledError``, so a
+           vector failure never leaves a validation association or indexed
+           checkpoint without Phase B convergence; previously committed
+           Phase A evidence is preserved and stable-ID retry converges later.
 
         One document is processed per transaction; locks for multiple
         documents are never held simultaneously.
         """
+        progress = progress or _NoOpProgress()
         try:
             reloaded = await self.repository.get_enrichment_evidence_state_by_document_id(
                 document_id,
@@ -265,6 +332,10 @@ class EnrichmentEvidencePersistenceService:
                 embeddings=reloaded.embeddings,
                 provider=reloaded.embedding_provider,
                 model=reloaded.embedding_model,
+            )
+            await progress.record_indexed_aspects(
+                job_id=job_id,
+                indexed_aspects=_document_covered_aspects(reloaded.chunks),
             )
             await self.repository.session.commit()
         except BaseException:
@@ -320,4 +391,5 @@ __all__ = [
     "enrichment_content_key",
     "stable_enrichment_chunk_id",
     "stable_enrichment_document_id",
+    "_document_covered_aspects",
 ]

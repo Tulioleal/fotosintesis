@@ -1,14 +1,18 @@
 import { expect, test } from "@playwright/test";
-import { readCareToolsCredentials } from "./care-tools.setup";
+import { seedCareToolsState } from "./care-tools.setup";
 
-const { email, password } = readCareToolsCredentials();
+let credentials: { email: string; password: string };
+
+test.beforeAll(() => {
+  credentials = seedCareToolsState();
+});
 
 async function login(page: import("@playwright/test").Page) {
   await page.goto("/login");
-  await page.getByLabel("Correo").fill(email);
-  await page.getByLabel("Contraseña").fill(password);
+  await page.getByLabel("Correo").fill(credentials.email);
+  await page.getByLabel("Contraseña").fill(credentials.password);
   await page.getByRole("button", { name: "Ingresar" }).click();
-  await page.waitForURL(/\/home/);
+  await expect(page).toHaveURL(/\/home$/);
 }
 
 test.describe("care tools (deterministic)", () => {

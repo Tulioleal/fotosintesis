@@ -73,6 +73,9 @@ class JobLimitation(str, Enum):
 class EnrichmentLimitation(str, Enum):
     missing_required_aspects = "missing_required_aspects"
     safety_evidence_rejected = "safety_evidence_rejected"
+    retry_exhausted = "retry_exhausted"
+    workflow_incomplete = "workflow_incomplete"
+    indexing_deferred = "indexing_deferred"
 
 
 class JobError(BaseModel):
@@ -271,11 +274,25 @@ class EnrichmentJobResult(BaseModel):
             raise ValueError("complete enrichment cannot have missing aspects or limitations")
         if self.outcome == "complete" and covered != required:
             raise ValueError("complete enrichment requires all aspects covered")
-        if self.outcome == "partial" and (
-            not self.missing_aspects
-            or EnrichmentLimitation.missing_required_aspects not in self.limitations
-        ):
-            raise ValueError("partial enrichment requires bounded missing-aspect limitations")
+        if self.outcome == "partial":
+            if self.missing_aspects:
+                if EnrichmentLimitation.missing_required_aspects not in self.limitations:
+                    raise ValueError(
+                        "semantic partial requires the missing-required-aspects limitation"
+                    )
+            else:
+                operational = any(
+                    limitation in self.limitations
+                    for limitation in (
+                        EnrichmentLimitation.retry_exhausted,
+                        EnrichmentLimitation.workflow_incomplete,
+                        EnrichmentLimitation.indexing_deferred,
+                    )
+                )
+                if not operational:
+                    raise ValueError(
+                        "partial without missing aspects requires an operational limitation"
+                    )
         return self
 
 

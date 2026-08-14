@@ -262,34 +262,82 @@ persisted, logged, used as metric labels, or exposed through the status API.
 A job reaches terminal failure through one of two paths:
 
 1. **Live final handler attempt** — the handler's last attempt runs and
-   reaches its retry limit. The `last_error.category` retains its sanitized
-   category (e.g. `provider_transient`) with `retryable=false`. The
-   `attempt_count` reflects the actual number of handler invocations.
+   reaches its retry limit. The `last_error.category` is set to
+   `attempts_exhausted` (or the sanitized permanent category) with
+   `retryable=false`. The `attempt_count` reflects the actual number of
+   handler invocations.
 
 2. **Expired processing lease reconciled after exhaustion** — a crashed
    worker's lease expires and reconciliation finds the attempt count at the
    maximum. The `last_error.category` is set to `attempts_exhausted` with
    `retryable=false`. The `attempt_count` equals `max_attempts`.
 
-To diagnose:
+### Enrichment durable progress and terminal meaning
+
+Confirmed-plant enrichment finalizes exhausted jobs from the durable progress
+checkpoint (`enrichment_job_progress`), never from a handler's zero snapshot.
+Useful accepted coverage is the union of semantically accepted local aspects
+and durably persisted accepted aspects. Final semantic judge output that has
+not passed source binding and persistence is diagnostic only: **judge-only
+coverage is not durable progress** and can never turn an exhausted job into
+`partial`.
+
+The three terminal meanings after exhaustion are:
+
+- **`complete`** — every required aspect has accepted coverage.
+- **`partial`** — at least one required aspect has useful accepted evidence
+  checkpointed (persisted and/or locally covered), but the workflow did not
+  fully converge; this means accepted progress survived. The bounded result
+  carries the applicable operational limitation (`retry_exhausted`,
+  `workflow_incomplete`, or `indexing_deferred`) chosen from the actual
+  unfinished stage: persisted-but-not-indexed evidence is `indexing_deferred`,
+  an exhausted final attempt is `retry_exhausted`, and an interrupted attempt
+  is `workflow_incomplete`.
+- **`failed` + `attempts_exhausted`** — no useful accepted coverage survived in
+  the checkpoint, so the job reports total failure.
+
+Live finalization and crash reconciliation (`reconcile_expired_processing`)
+apply the same partial-versus-failed decision rule and write the matching
+immutable terminal observation in the same transaction as the terminal
+transition. Terminal efficacy values are derived from the durable checkpoint
+and use enqueue-to-terminal duration consistently across complete, semantic
+partial, failure-derived partial, and failed outcomes.
+
+**Do not reset terminal enrichment jobs in place.** Terminal telemetry
+(`enrichment_telemetry_observations`) is immutable, and in-place resets break
+the "exactly one observation per terminal job" invariant and discard audit
+history. For an approved rerun:
+
+1. Create a new logical job/run with a fresh `run_id`, idempotency key, and
+   active-deduplication key.
+2. Preserve the existing evidence and telemetry history unchanged; the new run
+   converges idempotently on the same stable content identities.
+
+To diagnose an exhausted enrichment job:
 
 1. Query the job to inspect `last_error` and `result`
-2. If the issue is transient and you want to retry, update the job:
-   ```sql
-   UPDATE application_jobs
-   SET status = 'pending',
-       attempt_count = 0,
-       lease_owner = NULL,
-       lease_token = NULL,
-       lease_expires_at = NULL,
-       last_error = NULL,
-       completed_at = NULL,
-       available_at = NOW()
-   WHERE id = '<job-uuid>';
-   ```
+2. If the issue is transient and an approved rerun is warranted, enqueue a new
+   logical run rather than rewriting the terminal job. Do not reuse the
+   in-place reset SQL below for enrichment jobs.
+
+For non-enrichment jobs that produced no correct domain effects, an in-place
+reset remains available:
+
+```sql
+UPDATE application_jobs
+SET status = 'pending',
+    attempt_count = 0,
+    lease_owner = NULL,
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    last_error = NULL,
+    completed_at = NULL,
+    available_at = NOW()
+WHERE id = '<job-uuid>';
+```
 
    This clears all lease fields, resets the attempt count, and makes the job
-   eligible for the next poll cycle. Do not reuse this SQL for jobs that
+   eligible for the next poll cycle. Do not use this SQL for jobs that
    produced correct domain effects; create a new idempotency key for genuinely
    new logical runs.
 

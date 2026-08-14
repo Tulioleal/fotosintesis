@@ -90,6 +90,12 @@ def policy_change_requires_version_bump(
 
 ENRICHMENT_POLICY_V1 = EnrichmentPolicy(
     version=1,
+    # Frozen semantics: policy v1 has no age-expiry or source-supersession
+    # behavior. Accepted evidence never expires by age, and an accepted source
+    # is never superseded by a newer source of the same canonical identity.
+    # Introducing a maximum evidence age or source supersession requires a new
+    # policy version (see policy_change_requires_version_bump), not a change
+    # to policy v1.
     search_groups=(
         (RequiredAspect.general_care_summary,),
         (

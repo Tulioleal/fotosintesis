@@ -25,6 +25,8 @@ class AssistantGraph:
         plant_hint: str | None,
         plant_binomial_name: str | None = None,
         plant_scientific_name: str | None = None,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
     ) -> AssistantState:
         state: AssistantState = {
             "user_id": user_id,
@@ -32,6 +34,8 @@ class AssistantGraph:
             "plant_hint": _normalize_plant_name(plant_hint),
             "plant_binomial_name": _normalize_plant_name(plant_binomial_name),
             "plant_scientific_name": _normalize_plant_name(plant_scientific_name),
+            "canonical_species_key": canonical_species_key,
+            "accepted_gbif_key": accepted_gbif_key,
             "operational_plant_name": operational_plant_name(
                 plant=plant_hint,
                 plant_binomial_name=plant_binomial_name,

@@ -34,11 +34,16 @@ async def load_user_context(owner, state: AssistantState) -> dict:
     garden = list(result.data or [])
     selected, ambiguous = _select_plant(garden, state.get("display_plant_name") or state.get("operational_plant_name"), state["message"])
     update: dict = {"garden": garden, "selected_plant": selected, "ambiguous": ambiguous}
-    if selected:
-        if selected.get("canonical_species_key"):
-            update["canonical_species_key"] = selected["canonical_species_key"]
-        if selected.get("accepted_gbif_key"):
-            update["accepted_gbif_key"] = selected["accepted_gbif_key"]
+    # Server-resolved confirmed candidate identity takes precedence over
+    # garden display matching. Garden context supplies canonical identity only
+    # when no authoritative candidate identity is already in state, and it is
+    # adopted as one coherent unit: a null GBIF key is valid for a
+    # binomial-only candidate and never permits garden fallback.
+    if selected and state.get("canonical_species_key") is None:
+        selected_key = selected.get("canonical_species_key")
+        if selected_key:
+            update["canonical_species_key"] = selected_key
+            update["accepted_gbif_key"] = selected.get("accepted_gbif_key")
     return update
 
 
@@ -51,8 +56,14 @@ async def retrieve(owner, state: AssistantState) -> dict:
         rendered = await owner._generate_fallback_response(state, _missing_taxonomy_draft(state))
         return {**rendered, "fallback_reasons": _append_reason(state, "missing_confirmed_taxonomy")}
     selected = state.get("selected_plant")
-    canonical_species_key = selected.get("canonical_species_key") if selected else None
-    accepted_gbif_key = selected.get("accepted_gbif_key") if selected else None
+    canonical_species_key = state.get("canonical_species_key")
+    accepted_gbif_key = state.get("accepted_gbif_key")
+
+    if canonical_species_key is None and selected:
+        selected_key = selected.get("canonical_species_key")
+        if selected_key:
+            canonical_species_key = selected_key
+            accepted_gbif_key = selected.get("accepted_gbif_key")
     result = await owner.tools.knowledge_search(
         scientific_name=scientific_name,
         topic=state.get("topic") or "care",

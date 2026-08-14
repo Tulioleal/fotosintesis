@@ -9,7 +9,10 @@ from app.auth.models import AuthUser
 from app.db.session import get_async_session
 from app.enrichment import get_current_enrichment_policy
 from app.jobs.repository import JobRepository
-from app.profile_garden.repository import PlantProfileGardenRepository
+from app.profile_garden.repository import (
+    PlantProfileGardenRepository,
+    canonical_identity_fields,
+)
 from app.profile_garden.schemas import (
     GardenDeleteResponse,
     GardenPlantCreate,
@@ -51,6 +54,7 @@ async def get_plant_profile(
         region=region,
         country=country,
         language=language,
+        **canonical_identity_fields(candidate),
     )
     enrichment = await JobRepository(session).get_candidate_enrichment_status(
         candidate_id=candidate_id,

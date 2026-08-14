@@ -9,6 +9,7 @@ from app.auth.tables import (
     conversations,
     garden_plants,
     identification_candidates,
+    identification_images,
     light_measurements,
     plant_profiles,
     reminders,
@@ -166,3 +167,61 @@ class AssistantRepository(RepositoryBase):
             )
         ).first()
         return dict(row._mapping) if row else None
+
+    async def resolve_candidate_context(
+        self, *, user_id: UUID, candidate_id: UUID
+    ) -> dict | None:
+        """Resolve canonical species identity from the current user's own
+        confirmed, taxonomically validated candidate.
+
+        Returns ``None`` when the candidate is owned by another user, is not
+        confirmed, is not taxonomically validated, or lacks a valid
+        normalized binomial. A client-supplied canonical key is never trusted.
+        """
+        row = (
+            await self.session.execute(
+                select(
+                    identification_candidates.c.accepted_scientific_name,
+                    identification_candidates.c.suggested_scientific_name,
+                    identification_candidates.c.gbif_accepted_key,
+                    identification_candidates.c.binomial_name,
+                    identification_candidates.c.validation_status,
+                    identification_candidates.c.confirmed_at,
+                )
+                .join(
+                    identification_images,
+                    identification_images.c.id
+                    == identification_candidates.c.identification_id,
+                )
+                .where(
+                    identification_candidates.c.id == candidate_id,
+                    identification_images.c.user_id == user_id,
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        if row._mapping["validation_status"] != "validated":
+            return None
+        if row._mapping["confirmed_at"] is None:
+            return None
+        from app.enrichment.identity import CanonicalSpeciesIdentity
+
+        try:
+            identity = CanonicalSpeciesIdentity(
+                accepted_gbif_key=row._mapping["gbif_accepted_key"],
+                normalized_binomial=row._mapping["binomial_name"],
+                taxonomy_validated=True,
+            )
+        except (TypeError, ValueError):
+            return None
+        assert identity.normalized_binomial is not None
+        return {
+            "canonical_species_key": identity.key,
+            "accepted_gbif_key": identity.accepted_gbif_key,
+            "normalized_binomial": identity.normalized_binomial,
+            "accepted_scientific_name": (
+                row._mapping["accepted_scientific_name"]
+                or row._mapping["suggested_scientific_name"]
+            ),
+        }
