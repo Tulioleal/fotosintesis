@@ -85,6 +85,8 @@ class AssistantState(TypedDict, total=False):
     reminder_recurrence: str | None
     reminder_due_at: datetime | None
     reminder_suggestion_requested: bool
+    light_context_relevant: bool
+    light_context: dict | None
     tool_failures: list[str]
     provider_fallbacks: list[dict]
     total_generation_failure: bool

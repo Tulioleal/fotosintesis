@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     assistant_strong_answer_validation_threshold: float = 0.30
     assistant_judge_timeout_seconds: float = 25.0
     assistant_web_search_timeout_seconds: float = 20.0
+    light_measurement_freshness_sensor_days: int = 7
+    light_measurement_freshness_camera_days: int = 14
+    light_measurement_freshness_manual_days: int = 30
+    light_measurement_freshness_default_days: int = 14
+    light_measurement_min_reliability: str = "medium"
     model_provider_attempt_timeout_seconds: float = 30.0
     judge_provider_attempt_timeout_seconds: float = 30.0
     search_provider_attempt_timeout_seconds: float = 25.0

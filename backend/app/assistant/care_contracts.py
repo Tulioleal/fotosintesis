@@ -133,6 +133,7 @@ class CareClassification(BaseModel):
     plant_reference: str | None = None
     confidence: float = Field(ge=0, le=1)
     needs_retrieval: bool = False
+    light_context_relevant: bool = False
     source: Literal["llm", "deterministic"] = "llm"
 
     @field_validator("language", "answer_language")

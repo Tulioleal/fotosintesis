@@ -10,6 +10,11 @@ from app.assistant.graph.plant_resolution import (
 )
 from app.assistant.graph.types import AssistantState
 from app.assistant.graph_shared import _extract_due_at
+from app.assistant.light_context import (
+    is_light_measurement_eligible,
+    light_context_from_measurement,
+    light_reading_facts,
+)
 from app.observability.tracing import get_trace_id
 
 
@@ -25,6 +30,33 @@ def _log_missing_taxonomy(state: AssistantState) -> None:
         "assistant care answer missing confirmed taxonomy",
         extra={"ctx_trace_id": get_trace_id(), "ctx_plant_hint": state.get("plant_hint")},
     )
+
+
+async def _resolve_light_context(owner, state: AssistantState) -> dict:
+    """Retrieve and retain an eligible light measurement when the classifier
+    signals relevance. Skips the lookup for non-relevant requests."""
+    if not state.get("light_context_relevant"):
+        return {}
+    selected = state.get("selected_plant")
+    if not selected or selected.get("id") is None:
+        return {"light_context": None}
+    result = await owner.tools.light_measurement_lookup(
+        user_id=state["user_id"], garden_plant_id=selected.get("id")
+    )
+    if not result.ok:
+        return {
+            "light_context": None,
+            "tool_failures": state.get("tool_failures", []) + [result.error or "light lookup failed"],
+        }
+    measurement = result.data
+    if not is_light_measurement_eligible(
+        measurement,
+        owner.settings,
+        user_id=state["user_id"],
+        garden_plant_id=selected.get("id"),
+    ):
+        return {"light_context": None}
+    return {"light_context": light_context_from_measurement(measurement, owner.settings)}
 
 
 async def load_user_context(owner, state: AssistantState) -> dict:
@@ -44,6 +76,7 @@ async def load_user_context(owner, state: AssistantState) -> dict:
         if selected_key:
             update["canonical_species_key"] = selected_key
             update["accepted_gbif_key"] = selected.get("accepted_gbif_key")
+    update.update(await _resolve_light_context(owner, {**state, **update}))
     return update
 
 
@@ -100,16 +133,25 @@ async def handle_action(owner, state: AssistantState) -> dict:
         result = await owner.tools.light_measurement_lookup(user_id=state["user_id"], garden_plant_id=selected.get("id"))
         if not result.ok:
             return {"tool_failures": state.get("tool_failures", []) + [result.error or "light lookup failed"]}
-        if not result.data:
-            return await owner._generate_fallback_response(
+        if is_light_measurement_eligible(
+            result.data,
+            owner.settings,
+            user_id=state["user_id"],
+            garden_plant_id=selected.get("id"),
+        ):
+            return {
+                "light_context": light_context_from_measurement(result.data, owner.settings),
+                "light_context_relevant": True,
+            }
+        return await owner._generate_fallback_response(
+            state,
+            _simple_fallback_draft(
                 state,
-                _simple_fallback_draft(
-                    state,
-                    intent="light_measurement_missing",
-                    required_points=["State that no saved light measurements were found for that plant.", "Tell the user they can measure light from the Light section."],
-                    prohibited_points=["Do not invent any light level or plant-specific recommendation."],
-                ),
-            )
+                intent="light_measurement_missing",
+                required_points=["State that no saved light measurements were found for that plant.", "Tell the user they can measure light from the Light section."],
+                prohibited_points=["Do not invent any light level or plant-specific recommendation."],
+            ),
+        )
     if state.get("intent") == "reminder":
         return await _handle_reminder(owner, state)
     return {}
@@ -140,6 +182,9 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
         )
         return {"requires_confirmation": True, **rendered}
     justification = "Suggested by the assistant from the conversation. Requires confirmation before being created."
+    if state.get("light_context_relevant") and state.get("light_context"):
+        light_facts = "; ".join(light_reading_facts(state.get("light_context")))
+        justification += f" Light context: {light_facts}."
     if state.get("reminder_suggestion_requested"):
         rendered = await owner._generate_fallback_response(
             state,
@@ -226,6 +271,7 @@ async def failure(owner, state: AssistantState) -> dict:
 __all__ = [
     "_append_reason",
     "_handle_reminder",
+    "_resolve_light_context",
     "clarify",
     "failure",
     "handle_action",

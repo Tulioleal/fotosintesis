@@ -66,6 +66,8 @@ class FakeTools:
         fail_classifier: bool = False,
         knowledge_content: str = "Requires moderate watering and well-draining substrate.",
         judge_scores: list[float] | None = None,
+        light_measurement: dict | None = None,
+        light_measurement_foreign: bool = False,
     ) -> None:
         self.fail_reminder = fail_reminder
         self.degraded_knowledge = degraded_knowledge
@@ -97,6 +99,9 @@ class FakeTools:
         self.call_order: list[str] = []
         self.judge_calls: list[dict] = []
         self.judge_scores = list(judge_scores or [])
+        self.light_measurement = light_measurement
+        self.light_measurement_foreign = light_measurement_foreign
+        self.light_measurement_lookup_kwargs = None
         self.providers = SimpleNamespace(judge=self)
 
     async def generate_json(self, prompt: str, schema: dict, **kwargs) -> ToolResult:
@@ -118,6 +123,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.95,
                 "needs_retrieval": False,
+                "light_context_relevant": False,
             }
         elif "recordatorio" in lowered or "recordame" in lowered:
             data = {
@@ -129,6 +135,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.92,
                 "needs_retrieval": False,
+                "light_context_relevant": False,
             }
         elif "mascota" in lowered or "gato" in lowered or "perro" in lowered or "tox" in lowered:
             data = {
@@ -140,6 +147,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.92,
                 "needs_retrieval": True,
+                "light_context_relevant": False,
             }
         elif "luz" in lowered or "sol" in lowered or "sombra" in lowered or "light" in lowered:
             data = {
@@ -151,6 +159,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.92,
                 "needs_retrieval": True,
+                "light_context_relevant": True,
             }
         elif "nativa" in lowered:
             data = {
@@ -162,6 +171,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.92,
                 "needs_retrieval": True,
+                "light_context_relevant": False,
             }
         else:
             data = {
@@ -173,6 +183,7 @@ class FakeTools:
                 "plant_reference": "Pata",
                 "confidence": 0.92,
                 "needs_retrieval": True,
+                "light_context_relevant": False,
             }
         return ToolResult(ok=True, data=data)
 
@@ -255,7 +266,14 @@ class FakeTools:
         return ToolResult(ok=True, data={"id": str(uuid4())})
 
     async def light_measurement_lookup(self, **kwargs) -> ToolResult:
-        return ToolResult(ok=True, data=None)
+        self.light_measurement_lookup_kwargs = kwargs
+        if self.light_measurement is None:
+            return ToolResult(ok=True, data=None)
+        measurement = dict(self.light_measurement)
+        if not self.light_measurement_foreign:
+            measurement["garden_plant_id"] = kwargs.get("garden_plant_id")
+        measurement["user_id"] = kwargs.get("user_id")
+        return ToolResult(ok=True, data=measurement)
 
     async def trusted_web_search(
         self, query: str, *, candidates: list[SearchResult] | None = None
