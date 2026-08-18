@@ -21,6 +21,15 @@ export type Reminder = components["schemas"]["ReminderDto"];
 export type ReminderCreate = components["schemas"]["ReminderCreate"];
 export type ReminderUpdate = components["schemas"]["ReminderUpdate"];
 export type ReminderDeleteResponse = components["schemas"]["ReminderDeleteResponse"];
+export type ReminderSuggestionRequest = components["schemas"]["ReminderSuggestionRequest"];
+export type ReminderSuggestionMetricRequest = components["schemas"]["ReminderSuggestionMetricRequest"];
+export type ReminderSuggestionResult = components["schemas"]["ReminderSuggestionResult"];
+export type ReminderClarificationResult = components["schemas"]["ReminderClarificationResult"];
+export type ReminderDuplicateResult = components["schemas"]["ReminderDuplicateResult"];
+export type ReminderSuggestionOutcome =
+  | ReminderSuggestionResult
+  | ReminderClarificationResult
+  | ReminderDuplicateResult;
 export type LightClassification = components["schemas"]["LightClassification"];
 export type MeasurementReliability = components["schemas"]["MeasurementReliability"];
 export type MeasurementSource = components["schemas"]["MeasurementSource"];
@@ -162,6 +171,20 @@ export const apiClient = {
   },
   createReminder(body: ReminderCreate) {
     return frontendRequest<Reminder>("/api/reminders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  suggestReminder(body: ReminderSuggestionRequest) {
+    return frontendRequest<ReminderSuggestionOutcome>("/api/reminders/suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  recordSuggestionMetric(body: ReminderSuggestionMetricRequest) {
+    return frontendRequest<{ status: string }>("/api/reminders/suggestions/metrics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

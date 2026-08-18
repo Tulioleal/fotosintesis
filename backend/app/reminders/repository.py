@@ -34,12 +34,58 @@ class ReminderRepository(RepositoryBase):
         ).all()
         return [_reminder_from_row(row._mapping) for row in rows]
 
+    async def find_equivalent(
+        self,
+        *,
+        user_id: UUID,
+        garden_plant_id: UUID,
+        action: str,
+        due_at: datetime,
+        recurrence: str | None,
+    ) -> UUID | None:
+        """Return the id of an equivalent pending reminder, if one exists.
+
+        Equivalence considers the garden plant, the schema-validated action
+        intent (compared case-insensitively after whitespace normalization),
+        and schedule overlap (same recurrence and the same due date). Only
+        pending reminders are considered to avoid suppressing the creation of
+        a new reminder after an old one is completed.
+        """
+        rows = (
+            await self.session.execute(
+                select(reminders.c.id, reminders.c.action, reminders.c.due_at, reminders.c.recurrence)
+                .where(
+                    reminders.c.user_id == user_id,
+                    reminders.c.garden_plant_id == garden_plant_id,
+                    reminders.c.status == ReminderStatus.pending.value,
+                )
+            )
+        ).all()
+        normalized_action = _normalize_action(action)
+        for row in rows:
+            if not _actions_equivalent(normalized_action, _normalize_action(row.action or "")):
+                continue
+            if _schedule_overlaps(
+                row.due_at, row.recurrence, due_at, recurrence
+            ):
+                return row.id
+        return None
+
     async def create_reminder(self, *, user_id: UUID, payload: ReminderCreate) -> ReminderDto | None:
         if not await self._plant_exists(user_id=user_id, garden_plant_id=payload.garden_plant_id):
             return None
         zone = await self._resolve_effective_timezone(user_id, payload.timezone)
-        reminder_id = uuid4()
         due_at = _to_utc(payload.date, payload.time, zone)
+        duplicate_id = await self.find_equivalent(
+            user_id=user_id,
+            garden_plant_id=payload.garden_plant_id,
+            action=payload.action,
+            due_at=due_at,
+            recurrence=payload.recurrence.value,
+        )
+        if duplicate_id is not None:
+            return await self.get_reminder(user_id=user_id, reminder_id=duplicate_id)
+        reminder_id = uuid4()
         await self.session.execute(
             insert(reminders).values(
                 id=reminder_id,
@@ -234,6 +280,39 @@ async def _updated_due_at(existing, payload: ReminderUpdate, user_id: UUID, repo
 
 def _to_utc(due_date: date, due_time: time, zone) -> datetime:
     return local_datetime_to_utc(due_date, due_time, zone)
+
+
+def _normalize_action(action: str) -> str:
+    return " ".join(str(action).strip().casefold().split())
+
+
+def _actions_equivalent(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return left == right
+
+
+def _stored_recurrence_value(recurrence: str | None) -> str | None:
+    if recurrence in {item.value for item in ReminderRecurrence}:
+        return recurrence
+    return None
+
+
+def _schedule_overlaps(
+    existing_due_at: datetime,
+    existing_recurrence: str | None,
+    new_due_at: datetime,
+    new_recurrence: str | None,
+) -> bool:
+    if existing_due_at.tzinfo is None:
+        existing_due_at = existing_due_at.replace(tzinfo=timezone.utc)
+    if new_due_at.tzinfo is None:
+        new_due_at = new_due_at.replace(tzinfo=timezone.utc)
+    existing_recurrence = _stored_recurrence_value(existing_recurrence) or "none"
+    new_recurrence = _stored_recurrence_value(new_recurrence) or "none"
+    if existing_recurrence != new_recurrence:
+        return False
+    return existing_due_at.date() == new_due_at.date()
 
 
 def _next_occurrence(due_at: datetime, recurrence: str | None, tz_key: str | None):

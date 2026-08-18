@@ -12,7 +12,21 @@ from app.reminders.repository import (
     MissingTimezoneError,
     ReminderRepository,
 )
-from app.schemas.reminders import ReminderCreate, ReminderDeleteResponse, ReminderDto, ReminderUpdate
+from app.reminders.suggestions import (
+    PlantNotFoundError,
+    ProviderFailureError,
+    ReminderSuggestionService,
+)
+from app.schemas.reminders import (
+    ReminderCreate,
+    ReminderDeleteResponse,
+    ReminderDto,
+    ReminderSuggestionMetricRequest,
+    ReminderSuggestionOutcome,
+    ReminderSuggestionRequest,
+    ReminderUpdate,
+)
+from app.observability.metrics import metrics_registry
 from app.scheduling.timezone import (
     InvalidTimezoneError,
     NonexistentLocalTimeError,
@@ -58,6 +72,31 @@ async def create_reminder(
     if reminder is None:
         raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     return reminder
+
+
+@router.post("/suggestions", response_model=ReminderSuggestionOutcome)
+async def suggest_reminder(
+    payload: ReminderSuggestionRequest,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> ReminderSuggestionOutcome:
+    try:
+        return await ReminderSuggestionService(session).suggest(
+            user_id=user.id, payload=payload
+        )
+    except PlantNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except ProviderFailureError as error:
+        raise HTTPException(status_code=503, detail=str(error))
+
+
+@router.post("/suggestions/metrics", response_model=dict[str, str])
+async def record_suggestion_metric(
+    payload: ReminderSuggestionMetricRequest,
+    user: AuthUser = Depends(get_current_user),
+) -> dict[str, str]:
+    metrics_registry.record_reminder_suggestion_outcome(outcome=payload.outcome)
+    return {"status": "recorded"}
 
 
 @router.patch("/{reminder_id}", response_model=ReminderDto)

@@ -392,6 +392,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reminders/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Suggest Reminder */
+        post: operations["suggest_reminder_reminders_suggestions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reminders/suggestions/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Suggestion Metric */
+        post: operations["record_suggestion_metric_reminders_suggestions_metrics_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reminders/{reminder_id}": {
         parameters: {
             query?: never;
@@ -1119,6 +1153,16 @@ export interface components {
         RegisterResponse: {
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** ReminderClarificationResult */
+        ReminderClarificationResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "clarification";
+            /** Missing Fields */
+            missing_fields: string[];
+        };
         /** ReminderCreate */
         ReminderCreate: {
             /** Action */
@@ -1180,6 +1224,19 @@ export interface components {
             /** Timezone */
             timezone?: string | null;
         };
+        /** ReminderDuplicateResult */
+        ReminderDuplicateResult: {
+            /**
+             * Existing Reminder Id
+             * Format: uuid
+             */
+            existing_reminder_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "duplicate";
+        };
         /**
          * ReminderRecurrence
          * @enum {string}
@@ -1190,6 +1247,79 @@ export interface components {
          * @enum {string}
          */
         ReminderStatus: "pending" | "completed" | "cancelled";
+        /** ReminderSuggestionEvidence */
+        ReminderSuggestionEvidence: {
+            /**
+             * Active Reminders
+             * @default 0
+             */
+            active_reminders: number;
+            /** Light Context */
+            light_context?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Profile Sections */
+            profile_sections?: string[];
+            /** Taxonomy */
+            taxonomy?: string | null;
+        };
+        /** ReminderSuggestionMetricRequest */
+        ReminderSuggestionMetricRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "accepted" | "edited" | "rejected";
+        };
+        /** ReminderSuggestionRequest */
+        ReminderSuggestionRequest: {
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** Request */
+            request?: string | null;
+        };
+        /** ReminderSuggestionResult */
+        ReminderSuggestionResult: {
+            /** Action */
+            action: string;
+            /** Confidence */
+            confidence: number;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            evidence: components["schemas"]["ReminderSuggestionEvidence"];
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** Justification */
+            justification: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "suggestion";
+            /** Limitations */
+            limitations?: string[];
+            /** Plant Name */
+            plant_name: string;
+            recurrence: components["schemas"]["ReminderRecurrence"];
+            /**
+             * Time
+             * Format: time
+             */
+            time: string;
+            /** Timezone */
+            timezone?: string | null;
+        };
         /** ReminderUpdate */
         ReminderUpdate: {
             /** Action */
@@ -2288,6 +2418,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReminderDto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    suggest_reminder_reminders_suggestions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderSuggestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderSuggestionResult"] | components["schemas"]["ReminderClarificationResult"] | components["schemas"]["ReminderDuplicateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_suggestion_metric_reminders_suggestions_metrics_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderSuggestionMetricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

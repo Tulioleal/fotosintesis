@@ -31,6 +31,9 @@ _JOB_STATUSES = frozenset(item.value for item in JobStatus)
 _SCHEDULE_OUTCOMES = frozenset({"created", "reused"})
 _LIMITER_CATEGORIES = frozenset(item.value for item in EndpointCategory)
 _LIMITER_OUTCOMES = frozenset(item.value for item in LimiterOutcome)
+_REMINDER_SUGGESTION_OUTCOMES = frozenset(
+    {"accepted", "edited", "rejected", "clarified", "duplicate"}
+)
 
 
 def _require_closed_label(*, name: str, value: str, allowed: frozenset[str]) -> None:
@@ -147,6 +150,17 @@ class MetricsRegistry:
     worker_last_successful_poll_timestamp_seconds: float | None = None
     request_latency_seconds_max_samples: int = 10_000
     limiter_outcomes: dict[tuple[str, str], int] = field(default_factory=dict)
+    reminder_suggestion_outcomes: dict[str, int] = field(default_factory=dict)
+
+    def record_reminder_suggestion_outcome(self, *, outcome: str) -> None:
+        _require_closed_label(
+            name="outcome",
+            value=outcome,
+            allowed=_REMINDER_SUGGESTION_OUTCOMES,
+        )
+        self.reminder_suggestion_outcomes[outcome] = (
+            self.reminder_suggestion_outcomes.get(outcome, 0) + 1
+        )
 
     def record_job_claim(self, *, job_type: str) -> None:
         _require_closed_label(name="job_type", value=job_type, allowed=_JOB_TYPES)
@@ -495,6 +509,15 @@ class MetricsRegistry:
             for (category, outcome), count in sorted_limiter_outcomes
         ]
 
+        sorted_suggestion_outcomes = sorted(self.reminder_suggestion_outcomes.items())
+        suggestion_outcome_lines = [
+            (
+                "fotosintesis_reminder_suggestion_outcomes_total"
+                f'{{outcome="{_escape(outcome)}"}} {count}'
+            )
+            for outcome, count in sorted_suggestion_outcomes
+        ]
+
         return "\n".join(
             [
                 "# HELP fotosintesis_requests_total Total HTTP requests handled.",
@@ -571,6 +594,9 @@ class MetricsRegistry:
                 "# HELP fotosintesis_limiter_outcomes_total Authentication limiter decisions by closed category and outcome.",
                 "# TYPE fotosintesis_limiter_outcomes_total counter",
                 *limiter_outcome_lines,
+                "# HELP fotosintesis_reminder_suggestion_outcomes_total Reminder suggestion interaction outcomes.",
+                "# TYPE fotosintesis_reminder_suggestion_outcomes_total counter",
+                *suggestion_outcome_lines,
                 "",
             ]
         )

@@ -9,6 +9,8 @@ import {
   type GardenPlant,
   type Reminder,
   type ReminderCreate,
+  type ReminderSuggestionOutcome,
+  type ReminderSuggestionResult,
 } from "@/lib/api/client";
 import { resolveImageUrl } from "@/lib/images";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
@@ -167,6 +169,10 @@ export function RemindersManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const [suggestionsVisible, setSuggestionsVisible] = useState(false);
+  const [suggestionResult, setSuggestionResult] =
+    useState<ReminderSuggestionOutcome | null>(null);
+  const [suggestionPending, setSuggestionPending] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [userTimezone, setUserTimezone] = useState<string>("");
   const [timezoneNotice, setTimezoneNotice] = useState<string | null>(null);
@@ -337,7 +343,32 @@ export function RemindersManager() {
     }));
   }
 
-  async function acceptSuggestion(suggestion: SuggestedReminder) {
+  async function generateSuggestions() {
+    const gardenPlantId =
+      form.garden_plant_id || plantHint || plants[0]?.id || "";
+    if (!gardenPlantId) return;
+    setSuggestionsVisible(true);
+    setSuggestionError(null);
+    setSuggestionResult(null);
+    setSuggestionPending(true);
+    try {
+      const outcome = await apiClient.suggestReminder({
+        garden_plant_id: gardenPlantId,
+        request: "",
+      });
+      setSuggestionResult(outcome);
+    } catch (caught) {
+      setSuggestionError(
+        caught instanceof ApiClientError
+          ? caught.message
+          : "No pudimos generar una sugerencia.",
+      );
+    } finally {
+      setSuggestionPending(false);
+    }
+  }
+
+  function acceptSuggestion(suggestion: ReminderSuggestionResult) {
     const next = {
       garden_plant_id: suggestion.garden_plant_id,
       action: suggestion.action,
@@ -347,7 +378,15 @@ export function RemindersManager() {
       suggestion_justification: suggestion.justification,
       timezone: suggestion.timezone || userTimezone || null,
     } satisfies ReminderCreate;
-    createReminder.mutate(next);
+    createReminder.mutate(next, {
+      onSuccess: () => recordSuggestionMetric("accepted"),
+    });
+  }
+
+  function dismissSuggestion() {
+    recordSuggestionMetric("rejected");
+    setSuggestionsVisible(false);
+    setSuggestionResult(null);
   }
 
   async function saveTimezonePreference(event: FormEvent<HTMLFormElement>) {
@@ -394,10 +433,6 @@ export function RemindersManager() {
     }
   }
 
-  const suggestions = useMemo(
-    () => buildSuggestions(plants, plantHint, userTimezone),
-    [plants, plantHint, userTimezone],
-  );
   const pending = createReminder.isPending || updateReminder.isPending;
   const activeCount = (reminders.data ?? []).filter(
     (reminder) => reminder.status === "pending",
@@ -605,39 +640,35 @@ export function RemindersManager() {
             description="Optimiza el cuidado de tu jardín con inteligencia artificial."
           >
             {suggestionsVisible ? (
-              suggestions.length ? (
-                <ul
-                  className={styles.suggestionList}
-                  aria-label="Sugerencias generadas"
-                  style={{
-                    padding: "0",
-                  }}
-                >
-                  {suggestions.map((suggestion) => (
-                    <li
-                      key={`${suggestion.garden_plant_id}-${suggestion.action}`}
-                      className={styles.suggestionItem}
+              suggestionPending ? (
+                <p className={styles.suggestionBody}>
+                  Generando sugerencia...
+                </p>
+              ) : suggestionError ? (
+                <>
+                  <p className={styles.suggestionBody}>{suggestionError}</p>
+                  <div className={styles.suggestionActions}>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      onClick={() => {
+                        setSuggestionsVisible(false);
+                        setSuggestionResult(null);
+                        setSuggestionError(null);
+                      }}
                     >
-                      <h3 className={styles.suggestionItemTitle}>
-                        {suggestion.action}
-                      </h3>
-                      <p className={styles.suggestionItemCopy}>
-                        {suggestion.justification}
-                      </p>
-                      <div className={styles.suggestionActions}>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="md"
-                          onClick={() => acceptSuggestion(suggestion)}
-                          disabled={createReminder.isPending}
-                        >
-                          Aceptar sugerencia
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                      Cerrar
+                    </Button>
+                  </div>
+                </>
+              ) : suggestionResult ? (
+                <SuggestionOutcomeCard
+                  outcome={suggestionResult}
+                  onAccept={acceptSuggestion}
+                  onDismiss={dismissSuggestion}
+                  pending={createReminder.isPending}
+                />
               ) : (
                 <p className={styles.suggestionBody}>
                   Añade plantas a tu jardín para empezar a generar sugerencias.
@@ -651,8 +682,8 @@ export function RemindersManager() {
                   size="md"
                   fullWidth
                   className={styles.suggestionTrigger}
-                  onClick={() => setSuggestionsVisible(true)}
-                  disabled={!plants.length}
+                  onClick={generateSuggestions}
+                  disabled={!plants.length || suggestionPending}
                 >
                   Generar con IA &nbsp;
                   <SparkleIcon aria-hidden="true" size="1rem" />
@@ -937,8 +968,6 @@ function ReminderSkeletonRows() {
   );
 }
 
-type SuggestedReminder = ReminderCreate & { justification: string };
-
 function validateForm(form: FormState): FormErrors {
   const nextErrors: FormErrors = {};
   if (!form.garden_plant_id)
@@ -958,45 +987,6 @@ function validateForm(form: FormState): FormErrors {
   return nextErrors;
 }
 
-function buildSuggestions(
-  plants: GardenPlant[],
-  plantHint: string,
-  userTimezone: string,
-): SuggestedReminder[] {
-  const selectedPlants = plantHint
-    ? plants.filter(
-        (plant) => plant.profile.scientific_name.toLowerCase() === plantHint,
-      )
-    : plants.slice(0, 2);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const date = tomorrow.toISOString().slice(0, 10);
-  return selectedPlants.map((plant) => ({
-    garden_plant_id: plant.id,
-    action: suggestActionFor(plant),
-    date,
-    time: "09:00",
-    recurrence: "weekly",
-    timezone: userTimezone || null,
-    suggestion_justification:
-      "Sugerido por el perfil de la planta y el contexto de Mi Jardín.",
-    justification: `Basado en el perfil de ${plantLabel(plant)} y su contexto guardado. Requiere confirmación antes de crearse.`,
-  }));
-}
-
-function suggestActionFor(plant: GardenPlant): TaskType {
-  const lines = (plant.profile.sections?.care ?? []).map((line) =>
-    line.toLowerCase(),
-  );
-  if (lines.some((line) => /riego|agua/.test(line))) return "Riego";
-  if (lines.some((line) => /fertiliz|abono|nutrien/.test(line)))
-    return "Fertilizante";
-  if (lines.some((line) => /podar|cortar/.test(line))) return "Poda";
-  if (lines.some((line) => /trasplante|maceta/.test(line))) return "Trasplante";
-  if (lines.some((line) => /limpiez|limpia|polvo/.test(line)))
-    return "Limpieza";
-  return "Revisión general";
-}
-
 export function normalizeReminderAction(action: string): TaskType {
   const lower = action.toLowerCase();
   if (/riego|agua|regar/.test(lower)) return "Riego";
@@ -1013,5 +1003,129 @@ function plantLabel(plant: GardenPlant) {
     plant.profile.selected_alias ??
     plant.profile.common_name ??
     plant.profile.scientific_name
+  );
+}
+
+function recordSuggestionMetric(outcome: "accepted" | "edited" | "rejected") {
+  apiClient.recordSuggestionMetric({ outcome }).catch(() => undefined);
+}
+
+type SuggestionOutcomeCardProps = {
+  outcome: ReminderSuggestionOutcome;
+  onAccept: (suggestion: ReminderSuggestionResult) => void;
+  onDismiss: () => void;
+  pending: boolean;
+};
+
+const suggestionRecurrenceLabels: Record<string, string> = {
+  none: "Personalizado",
+  daily: "Diario",
+  weekly: "Semanal",
+  monthly: "Mensual",
+};
+
+function formatSuggestionWhen(
+  suggestion: ReminderSuggestionResult,
+  timezone?: string | null,
+) {
+  const date = new Date(
+    `${suggestion.date}T${suggestion.time}`,
+  );
+  if (Number.isNaN(date.getTime())) {
+    return `${suggestion.date} ${suggestion.time}`;
+  }
+  return new Intl.DateTimeFormat("es-AR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: timezone || undefined,
+  }).format(date);
+}
+
+function SuggestionOutcomeCard({
+  outcome,
+  onAccept,
+  onDismiss,
+  pending,
+}: SuggestionOutcomeCardProps) {
+  if (outcome.kind === "clarification") {
+    const fields = outcome.missing_fields.length
+      ? outcome.missing_fields.join(", ")
+      : "fecha, hora, zona horaria o recurrencia";
+    return (
+      <>
+        <p className={styles.suggestionBody}>
+          Para generar una sugerencia concreta necesitamos que completes:{" "}
+          {fields}.
+        </p>
+        <div className={styles.suggestionActions}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            onClick={onDismiss}
+          >
+            Cerrar
+          </Button>
+        </div>
+      </>
+    );
+  }
+
+  if (outcome.kind === "duplicate") {
+    return (
+      <>
+        <p className={styles.suggestionBody}>
+          Ya existe un recordatorio equivalente para esta planta y horario.
+        </p>
+        <div className={styles.suggestionActions}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            onClick={onDismiss}
+          >
+            Cerrar
+          </Button>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <ul
+      className={styles.suggestionList}
+      aria-label="Sugerencias generadas"
+      style={{ padding: "0" }}
+    >
+      <li className={styles.suggestionItem}>
+        <h3 className={styles.suggestionItemTitle}>{outcome.action}</h3>
+        <p className={styles.suggestionItemMeta}>
+          {outcome.plant_name} &middot;{" "}
+          {formatSuggestionWhen(outcome, outcome.timezone)} &middot;{" "}
+          {suggestionRecurrenceLabels[outcome.recurrence] ?? outcome.recurrence}
+        </p>
+        <p className={styles.suggestionItemCopy}>{outcome.justification}</p>
+        <div className={styles.suggestionActions}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            onClick={() => onAccept(outcome)}
+            disabled={pending}
+          >
+            Aceptar sugerencia
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="md"
+            onClick={onDismiss}
+            disabled={pending}
+          >
+            Descartar
+          </Button>
+        </div>
+      </li>
+    </ul>
   );
 }

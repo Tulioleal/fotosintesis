@@ -1742,6 +1742,28 @@
         "title": "RegisterResponse",
         "type": "object"
       },
+      "ReminderClarificationResult": {
+        "properties": {
+          "kind": {
+            "const": "clarification",
+            "default": "clarification",
+            "title": "Kind",
+            "type": "string"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "missing_fields"
+        ],
+        "title": "ReminderClarificationResult",
+        "type": "object"
+      },
       "ReminderCreate": {
         "properties": {
           "action": {
@@ -1893,6 +1915,26 @@
         "title": "ReminderDto",
         "type": "object"
       },
+      "ReminderDuplicateResult": {
+        "properties": {
+          "existing_reminder_id": {
+            "format": "uuid",
+            "title": "Existing Reminder Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "duplicate",
+            "default": "duplicate",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "existing_reminder_id"
+        ],
+        "title": "ReminderDuplicateResult",
+        "type": "object"
+      },
       "ReminderRecurrence": {
         "enum": [
           "none",
@@ -1911,6 +1953,192 @@
         ],
         "title": "ReminderStatus",
         "type": "string"
+      },
+      "ReminderSuggestionEvidence": {
+        "properties": {
+          "active_reminders": {
+            "default": 0,
+            "title": "Active Reminders",
+            "type": "integer"
+          },
+          "light_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Light Context"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "profile_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profile Sections",
+            "type": "array"
+          },
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy"
+          }
+        },
+        "title": "ReminderSuggestionEvidence",
+        "type": "object"
+      },
+      "ReminderSuggestionMetricRequest": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "accepted",
+              "edited",
+              "rejected"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "ReminderSuggestionMetricRequest",
+        "type": "object"
+      },
+      "ReminderSuggestionRequest": {
+        "properties": {
+          "garden_plant_id": {
+            "format": "uuid",
+            "title": "Garden Plant Id",
+            "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request"
+          }
+        },
+        "required": [
+          "garden_plant_id"
+        ],
+        "title": "ReminderSuggestionRequest",
+        "type": "object"
+      },
+      "ReminderSuggestionResult": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ReminderSuggestionEvidence"
+          },
+          "garden_plant_id": {
+            "format": "uuid",
+            "title": "Garden Plant Id",
+            "type": "string"
+          },
+          "justification": {
+            "title": "Justification",
+            "type": "string"
+          },
+          "kind": {
+            "const": "suggestion",
+            "default": "suggestion",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "plant_name": {
+            "title": "Plant Name",
+            "type": "string"
+          },
+          "recurrence": {
+            "$ref": "#/components/schemas/ReminderRecurrence"
+          },
+          "time": {
+            "format": "time",
+            "title": "Time",
+            "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "garden_plant_id",
+          "plant_name",
+          "action",
+          "date",
+          "time",
+          "recurrence",
+          "evidence",
+          "confidence",
+          "justification"
+        ],
+        "title": "ReminderSuggestionResult",
+        "type": "object"
       },
       "ReminderUpdate": {
         "properties": {
@@ -4345,6 +4573,179 @@
           }
         },
         "summary": "Create Reminder",
+        "tags": [
+          "reminders"
+        ]
+      }
+    },
+    "/reminders/suggestions": {
+      "post": {
+        "operationId": "suggest_reminder_reminders_suggestions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderSuggestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "clarification": "#/components/schemas/ReminderClarificationResult",
+                      "duplicate": "#/components/schemas/ReminderDuplicateResult",
+                      "suggestion": "#/components/schemas/ReminderSuggestionResult"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ReminderSuggestionResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReminderClarificationResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReminderDuplicateResult"
+                    }
+                  ],
+                  "title": "Response Suggest Reminder Reminders Suggestions Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suggest Reminder",
+        "tags": [
+          "reminders"
+        ]
+      }
+    },
+    "/reminders/suggestions/metrics": {
+      "post": {
+        "operationId": "record_suggestion_metric_reminders_suggestions_metrics_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderSuggestionMetricRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Record Suggestion Metric Reminders Suggestions Metrics Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Suggestion Metric",
         "tags": [
           "reminders"
         ]

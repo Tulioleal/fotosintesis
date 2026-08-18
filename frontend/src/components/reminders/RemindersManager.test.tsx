@@ -39,6 +39,28 @@ const reminder = {
   timezone: "America/Argentina/Buenos_Aires",
 };
 
+const defaultSuggestion = {
+  kind: "suggestion" as const,
+  garden_plant_id: "garden-1",
+  plant_name: "Helecho",
+  action: "Riego",
+  date: "2999-01-10",
+  time: "09:00:00",
+  timezone: "America/Argentina/Buenos_Aires",
+  recurrence: "weekly" as const,
+  evidence: {
+    taxonomy: "Nephrolepis exaltata",
+    location: "Balcón",
+    notes: null,
+    profile_sections: ["Riego moderado"],
+    active_reminders: 0,
+    light_context: null,
+  },
+  confidence: 0.9,
+  limitations: [],
+  justification: "Basado en el perfil de Helecho y su contexto guardado.",
+};
+
 const mocks = vi.hoisted(() => ({
   completeReminder: vi.fn(),
   createReminder: vi.fn(),
@@ -47,6 +69,8 @@ const mocks = vi.hoisted(() => ({
   getParam: vi.fn(),
   listGardenPlants: vi.fn(),
   listReminders: vi.fn(),
+  recordSuggestionMetric: vi.fn(),
+  suggestReminder: vi.fn(),
   updateReminder: vi.fn(),
   updateTimezone: vi.fn(),
 }));
@@ -66,6 +90,8 @@ vi.mock("@/lib/api/client", async (importOriginal) => {
       getCurrentUser: mocks.getCurrentUser,
       listGardenPlants: mocks.listGardenPlants,
       listReminders: mocks.listReminders,
+      recordSuggestionMetric: mocks.recordSuggestionMetric,
+      suggestReminder: mocks.suggestReminder,
       updateReminder: mocks.updateReminder,
       updateTimezone: mocks.updateTimezone,
     },
@@ -81,6 +107,8 @@ describe("RemindersManager", () => {
     mocks.getParam.mockReset();
     mocks.listGardenPlants.mockReset();
     mocks.listReminders.mockReset();
+    mocks.recordSuggestionMetric.mockReset();
+    mocks.suggestReminder.mockReset();
     mocks.updateReminder.mockReset();
     mocks.updateTimezone.mockReset();
 
@@ -102,6 +130,8 @@ describe("RemindersManager", () => {
       status: "completed",
     });
     mocks.deleteReminder.mockResolvedValue({ status: "deleted" });
+    mocks.recordSuggestionMetric.mockResolvedValue({ status: "recorded" });
+    mocks.suggestReminder.mockResolvedValue(defaultSuggestion);
     vi.stubGlobal("Notification", { permission: "granted", requestPermission: vi.fn() });
   });
 
@@ -226,67 +256,76 @@ describe("RemindersManager", () => {
     expect(await screen.findByText("Recordatorio eliminado.")).toBeInTheDocument();
   });
 
-  it("reveals suggestions after clicking Generar con IA", async () => {
+  it("renders a backend suggestion and accepts it with the backend justification", async () => {
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
     fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
+
+    expect(
+      await screen.findByText(defaultSuggestion.justification),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Aceptar sugerencia" }));
 
     await waitFor(() => {
+      expect(mocks.suggestReminder).toHaveBeenCalledWith({
+        garden_plant_id: "garden-1",
+        request: "",
+      });
       expect(mocks.createReminder).toHaveBeenCalledWith({
         action: "Riego",
-        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        date: "2999-01-10",
         garden_plant_id: "garden-1",
         recurrence: "weekly",
-        suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
-        time: "09:00",
+        suggestion_justification: defaultSuggestion.justification,
+        time: "09:00:00",
         timezone: "America/Argentina/Buenos_Aires",
+      });
+    });
+    await waitFor(() => {
+      expect(mocks.recordSuggestionMetric).toHaveBeenCalledWith({
+        outcome: "accepted",
       });
     });
   });
 
-  it("accepts a generated suggestion when plant hint is set", async () => {
-    mocks.getParam.mockReturnValue("nephrolepis exaltata");
+  it("renders a clarification outcome with the missing fields", async () => {
+    mocks.suggestReminder.mockResolvedValueOnce({
+      kind: "clarification",
+      missing_fields: ["date", "time"],
+    });
 
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
     fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
 
-    await waitFor(() => {
-      expect(mocks.createReminder).toHaveBeenCalledWith({
-        action: "Riego",
-        date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        garden_plant_id: "garden-1",
-        recurrence: "weekly",
-        suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
-        time: "09:00",
-        timezone: "America/Argentina/Buenos_Aires",
-      });
-    });
+    expect(
+      await screen.findByText(/necesitamos que completes:/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/date, time/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Aceptar sugerencia" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("falls back to 'Revisión general' when the care plan has no specific keyword", async () => {
-    mocks.listGardenPlants.mockResolvedValueOnce([
-      {
-        ...plant,
-        id: "garden-3",
-        profile: { ...plant.profile, sections: { care: ["Inspeccion general del follaje"] } },
-      },
-    ]);
+  it("renders a duplicate outcome referencing an existing reminder", async () => {
+    mocks.suggestReminder.mockResolvedValueOnce({
+      kind: "duplicate",
+      existing_reminder_id: "reminder-1",
+    });
 
     renderWithQueryClient(<RemindersManager />);
+
     await screen.findByRole("option", { name: "Helecho" });
     fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
 
-    await waitFor(() => {
-      expect(mocks.createReminder).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "Revisión general" }),
-      );
-    });
+    expect(
+      await screen.findByText(/Ya existe un recordatorio equivalente/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Aceptar sugerencia" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders query and mutation failures", async () => {
