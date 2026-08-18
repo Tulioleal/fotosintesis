@@ -1,0 +1,295 @@
+# Network segregation for the application namespace.
+#
+# Enforcement is provided by GKE Dataplane V2 (ADVANCED_DATAPATH), enabled in
+# the GKE OpenTofu module. Standard Kubernetes NetworkPolicy is additive: the
+# namespace-level default-deny policy below blocks everything that is not
+# explicitly allowed, and each allow policy below re-opens one narrow path.
+#
+# With GKE Dataplane V2, Pod traffic is never covered by an `ipBlock` rule, so
+# the `0.0.0.0/0` egress rules below only reach non-Pod (external) endpoints.
+# Standard NetworkPolicy cannot express hostname-level allowlists; the bounded
+# HTTPS egress is a documented compromise, not FQDN isolation. See
+# docs/deployment/network-policies.md for the full policy inventory and
+# troubleshooting.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-default-deny
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-default-deny
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # Catch-all: deny ingress and egress for every Pod in the namespace. Each
+  # allow policy below adds one explicit, narrow exception.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-dns
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-dns
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # All workloads (including the deploy smoke probe Pods) must resolve Service
+  # DNS names through CoreDNS in kube-system.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-workload-identity
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-workload-identity
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # Backend-image workloads use Workload Identity to authenticate to GCP (GCS,
+  # Secret Manager, Cloud Monitoring, and the Cloud SQL Auth Proxy). Those
+  # workloads carry the iam.gke.io/workload-identity pod label and must reach
+  # the GKE metadata server. GKE requires egress to both documented addresses:
+  # the Dataplane V2 metadata endpoint and the 1.21+ workload-identity endpoint.
+  podSelector:
+    matchLabels:
+      iam.gke.io/workload-identity: fotosintesis-backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 8080
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - protocol: TCP
+          port: 988
+        - protocol: TCP
+          port: 987
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-frontend-ingress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-frontend-ingress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # Ingress reaches the frontend only through the GKE Ingress (external
+  # Application Load Balancer). Traffic and health checks originate from the
+  # documented GFE/health-check probe ranges and are forwarded directly to the
+  # frontend Pod via the NEG annotation on the frontend Service.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+        - ipBlock:
+            cidr: 209.85.152.0/22
+        - ipBlock:
+            cidr: 209.85.204.0/22
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-backend-ingress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-backend-ingress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # The backend accepts traffic only from the frontend server (server-side API
+  # calls), the in-cluster smoke probe Pod, and the Managed Prometheus collector
+  # (gmp-system) scraping /metrics.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: fotosintesis-frontend
+      ports:
+        - protocol: TCP
+          port: 8000
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: fotosintesis-smoke
+      ports:
+        - protocol: TCP
+          port: 8000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-worker-ingress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-worker-ingress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # The worker exposes only its metrics port to the Managed Prometheus
+  # collector (gmp-system). It has no Service and no other inbound traffic.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-worker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
+      ports:
+        - protocol: TCP
+          port: __JOBS_METRICS_PORT__
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-frontend-backend-egress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-frontend-backend-egress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # The Next.js server calls the backend API over the in-cluster Service
+  # (FRONTEND_SERVER_API_BASE_URL).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: fotosintesis-backend
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-smoke-egress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-smoke-egress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # The deploy in-cluster backend smoke probe Pod (and the network-policy
+  # verification probe) must reach the backend /health endpoint. DNS egress is
+  # covered by the shared allow-dns policy.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-smoke
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: fotosintesis-backend
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-cloud-sql-proxy-egress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-cloud-sql-proxy-egress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # The Cloud SQL Auth Proxy sidecar/init container connects outbound to the
+  # Cloud SQL instance proxy port (3307). The instance address is dynamic, so
+  # the egress is bounded to the proxy port only, mirroring the documented
+  # external-egress compromise: standard NetworkPolicy cannot express a
+  # hostname-level allowlist for the instance endpoint.
+  podSelector:
+    matchLabels:
+      iam.gke.io/workload-identity: fotosintesis-backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 3307
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fotosintesis-allow-external-https-egress
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-allow-external-https-egress
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # Bounded external egress for model, search, taxonomy, and evidence
+  # providers (OpenAI, Gemini, and any HTTPS evidence sources), plus Google API
+  # endpoints used by Workload Identity-backed calls (GCS, Cloud Monitoring).
+  # With GKE Dataplane V2 an ipBlock rule never covers Pod traffic, so this
+  # allows HTTPS to external endpoints only, not Pod-to-Pod traffic. This is
+  # HTTPS-bounded, not FQDN-level isolation; see docs/deployment/network-policies.md.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

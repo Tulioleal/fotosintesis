@@ -161,6 +161,223 @@ def validate_exceptions(rendered_container_names: set[str]) -> list[str]:
     return errors
 
 
+# NetworkPolicy constants for the network-segmentation baseline.
+DEFAULT_DENY_NAME = "fotosintesis-default-deny"
+WORKLOAD_LABEL = "app.kubernetes.io/name"
+# Runtime probe Pods (deploy smoke and network-policy verification) are created
+# with kubectl and are not present in the rendered manifests, but policies may
+# legitimately select them. Every other in-namespace selector must match a
+# deployed workload's pod template labels.
+KNOWN_RUNTIME_SELECTORS = {
+    frozenset({("app.kubernetes.io/name", "fotosintesis-smoke")}),
+}
+
+
+def _network_policy_pod_selector_matches(labels: dict, workload_labels: dict) -> bool:
+    """Whether ``labels`` select at least one deployed workload pod template.
+
+    A selector matches when every ``matchLabels`` key/value pair is present on
+    at least one Deployment/Job/CronJob pod template. Empty selectors and the
+    documented runtime probe labels are always accepted.
+    """
+    if not labels:
+        return True
+    if frozenset(labels.items()) in KNOWN_RUNTIME_SELECTORS:
+        return True
+    return any(
+        all(template.get(key) == value for key, value in labels.items())
+        for template in workload_labels.values()
+    )
+
+
+def validate_network_policies(directory: Path) -> list[str]:
+    """Validate rendered NetworkPolicies; return error strings.
+
+    Confirms that the namespace default-deny baseline is present, that every
+    in-namespace pod selector used by a policy matches a deployed workload's
+    pod template labels (or a documented runtime probe label), and that each
+    required allow rule is present. This validates policy structure and label
+    coupling; it does not prove live enforcement, which the connectivity probe
+    in ``deploy/scripts/verify-network-policy.sh`` covers.
+    """
+    errors: list[str] = []
+    policies: list[tuple[Path, dict]] = []
+    workload_labels: dict[str, dict] = {}
+
+    for path in sorted(
+        p for p in directory.rglob("*") if p.suffix in {".yaml", ".yml"} and p.is_file()
+    ):
+        try:
+            docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        except yaml.YAMLError as exc:
+            errors.append(f"{path}: malformed YAML: {exc}")
+            continue
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            kind = doc.get("kind")
+            if kind == "NetworkPolicy":
+                policies.append((path, doc))
+                continue
+            if kind in {"Deployment", "StatefulSet", "DaemonSet"}:
+                template = doc.get("spec", {}).get("template", {})
+            elif kind == "Job":
+                template = doc.get("spec", {}).get("template", {})
+            elif kind == "CronJob":
+                template = (
+                    doc.get("spec", {})
+                    .get("jobTemplate", {})
+                    .get("spec", {})
+                    .get("template", {})
+                )
+            else:
+                continue
+            labels = template.get("metadata", {}).get("labels", {})
+            if isinstance(labels, dict) and labels:
+                workload_labels[doc.get("metadata", {}).get("name", "")] = labels
+
+    if not policies:
+        return [f"no NetworkPolicy resources found under {directory}"]
+
+    deny = next(
+        (
+            policy
+            for _, policy in policies
+            if policy.get("metadata", {}).get("name") == DEFAULT_DENY_NAME
+        ),
+        None,
+    )
+    if deny is None:
+        errors.append(
+            f"default-deny NetworkPolicy {DEFAULT_DENY_NAME!r} is missing"
+        )
+    else:
+        spec = deny.get("spec", {})
+        policy_types = spec.get("policyTypes", []) or []
+        if "Ingress" not in policy_types or "Egress" not in policy_types:
+            errors.append(
+                "default-deny must declare both Ingress and Egress policyTypes"
+            )
+        if spec.get("podSelector") != {}:
+            errors.append("default-deny must use an empty podSelector covering the namespace")
+        if spec.get("ingress") or spec.get("egress"):
+            errors.append("default-deny must not carry allow rules")
+
+    # Selector coupling: in-namespace pod selectors must match deployed labels.
+    for path, policy in policies:
+        spec = policy.get("spec", {})
+        name = policy.get("metadata", {}).get("name", "")
+        label = f"{path}: NetworkPolicy {name!r}"
+
+        def check_selector(source: str, labels: dict) -> None:
+            if not _network_policy_pod_selector_matches(labels, workload_labels):
+                errors.append(
+                    f"{label} {source} selector {labels} matches no deployed "
+                    "workload pod label and is not a known runtime probe selector"
+                )
+
+        check_selector("pod", (spec.get("podSelector") or {}).get("matchLabels") or {})
+        for rule in spec.get("ingress") or []:
+            for src in rule.get("from") or []:
+                if src.get("podSelector") and not src.get("namespaceSelector"):
+                    check_selector(
+                        "ingress from",
+                        (src["podSelector"].get("matchLabels") or {}),
+                    )
+        for rule in spec.get("egress") or []:
+            for dst in rule.get("to") or []:
+                if dst.get("podSelector") and not dst.get("namespaceSelector"):
+                    check_selector(
+                        "egress to", (dst["podSelector"].get("matchLabels") or {})
+                    )
+
+    # Required allow rules. Each flag flips only when a structural rule is
+    # found anywhere in the rendered policy set.
+    flags = {
+        "DNS egress to kube-dns": False,
+        "metadata server egress for Workload Identity": False,
+        "frontend ingress from GFE health-check ranges": False,
+        "backend ingress from the frontend": False,
+        "backend ingress from Managed Prometheus (gmp-system)": False,
+        "worker ingress from Managed Prometheus (gmp-system)": False,
+        "frontend egress to the backend": False,
+        "smoke probe egress to the backend": False,
+        "Cloud SQL proxy egress on 3307": False,
+        "bounded external HTTPS egress on 443": False,
+    }
+    for _, policy in policies:
+        spec = policy.get("spec", {})
+        pod_sel = (spec.get("podSelector") or {}).get("matchLabels") or {}
+        pod_name = pod_sel.get(WORKLOAD_LABEL)
+
+        for rule in spec.get("egress") or []:
+            port_numbers = {
+                port.get("port")
+                for port in rule.get("ports") or []
+                if isinstance(port, dict) and port.get("port") is not None
+            }
+            for dst in rule.get("to") or []:
+                ns = (dst.get("namespaceSelector") or {}).get("matchLabels") or {}
+                ps = (dst.get("podSelector") or {}).get("matchLabels") or {}
+                if (
+                    ns.get("kubernetes.io/metadata.name") == "kube-system"
+                    and ps.get("k8s-app") == "kube-dns"
+                    and 53 in port_numbers
+                ):
+                    flags["DNS egress to kube-dns"] = True
+                cidr = (dst.get("ipBlock") or {}).get("cidr")
+                if cidr in ("169.254.169.254/32", "169.254.169.252/32"):
+                    flags["metadata server egress for Workload Identity"] = True
+                if cidr == "0.0.0.0/0":
+                    if 443 in port_numbers:
+                        flags["bounded external HTTPS egress on 443"] = True
+                    if 3307 in port_numbers:
+                        flags["Cloud SQL proxy egress on 3307"] = True
+                if (
+                    pod_name == "fotosintesis-frontend"
+                    and ps.get(WORKLOAD_LABEL) == "fotosintesis-backend"
+                ):
+                    flags["frontend egress to the backend"] = True
+                if (
+                    frozenset(pod_sel.items()) in KNOWN_RUNTIME_SELECTORS
+                    and ps.get(WORKLOAD_LABEL) == "fotosintesis-backend"
+                ):
+                    flags["smoke probe egress to the backend"] = True
+
+        for rule in spec.get("ingress") or []:
+            port_numbers = {
+                port.get("port")
+                for port in rule.get("ports") or []
+                if isinstance(port, dict) and port.get("port") is not None
+            }
+            if pod_name == "fotosintesis-frontend":
+                cidrs = {
+                    (src.get("ipBlock") or {}).get("cidr")
+                    for src in rule.get("from") or []
+                }
+                if cidrs & {"35.191.0.0/16", "130.211.0.0/22", "209.85.152.0/22", "209.85.204.0/22"}:
+                    flags["frontend ingress from GFE health-check ranges"] = True
+            if pod_name == "fotosintesis-backend":
+                for src in rule.get("from") or []:
+                    ns = (src.get("namespaceSelector") or {}).get("matchLabels") or {}
+                    ps = (src.get("podSelector") or {}).get("matchLabels") or {}
+                    if ps.get(WORKLOAD_LABEL) == "fotosintesis-frontend":
+                        flags["backend ingress from the frontend"] = True
+                    if ns.get("kubernetes.io/metadata.name") == "gmp-system":
+                        flags["backend ingress from Managed Prometheus (gmp-system)"] = True
+            if pod_name == "fotosintesis-worker":
+                for src in rule.get("from") or []:
+                    ns = (src.get("namespaceSelector") or {}).get("matchLabels") or {}
+                    if ns.get("kubernetes.io/metadata.name") == "gmp-system":
+                        flags["worker ingress from Managed Prometheus (gmp-system)"] = True
+
+    for requirement, found in flags.items():
+        if not found:
+            errors.append(f"required allow rule missing: {requirement}")
+
+    return errors
+
+
 def validate_directory(directory: Path) -> list[str]:
     """Validate all rendered manifests under ``directory``; return error strings."""
     if not directory.is_dir():
@@ -285,6 +502,7 @@ def validate_directory(directory: Path) -> list[str]:
                 if "runAsGroup" not in omit and "runAsGroup" in sec:
                     errors.append(f"{label} must not pin a numeric runAsGroup")
 
+    errors.extend(validate_network_policies(directory))
     return errors
 
 

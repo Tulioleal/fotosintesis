@@ -129,7 +129,10 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
    version are registered, so confirmation scheduling cannot lead the consumer.
 8. **Backend in-cluster smoke** - a one-off curl pod hits
    `http://fotosintesis-backend.<namespace>.svc.cluster.local:8000/health`.
-9. **Frontend public smoke** - 60 retries against the configured
+9. **Network policy verification** (dev only) - one allowed probe succeeds and
+   one denied probe fails under the namespace default-deny baseline, proving
+   Dataplane V2 enforcement is live. See `network-policies.md`.
+10. **Frontend public smoke** - 60 retries against the configured
    public URL.
 
 ## Hardening verification

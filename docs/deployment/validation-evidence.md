@@ -49,6 +49,7 @@ files.
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Required provider API keys projected | pass | <run-url> | deploy.yml required-keys step. |
 | Backend in-cluster smoke (`/health`) | pass | <run-url> | deploy.yml backend-smoke step. |
+| Network policy verification (dev) | pass | <run-url> | deploy.yml network-policy step: allowed probe succeeds, denied probe fails. |
 | Frontend public smoke (200) | pass | <run-url> | deploy.yml frontend-smoke step. hostname-https requires DNS; ip-http requires the static IP to be reachable. |
 
 ## Prod release

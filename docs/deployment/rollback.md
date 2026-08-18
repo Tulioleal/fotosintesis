@@ -67,6 +67,22 @@ This reverts each Deployment to its previous ReplicaSet's
 the Artifact Registry; if a previous release cleaned up old tags, this
 command fails with `ImagePullBackOff`.
 
+## Network policy rollback
+
+If the enforced NetworkPolicies disrupt required traffic, the fastest rollback
+is to delete the policy resources (no node churn), which restores default
+allow-all Kubernetes behavior:
+
+```bash
+kubectl delete -f ".generated/k8s/$ENVIRONMENT/rendered/05-network-policies.yaml" \
+  --ignore-not-found
+```
+
+The full disable path (set `dataplane_v2 = false`, apply, and revert) recreates
+the node pools. Both paths, plus the apply ordering and troubleshooting, are
+documented in `network-policies.md` and exercised in development before
+promotion.
+
 The default `revisionHistoryLimit` on the Deployments is `5`, so up to
 five prior revisions are available. Older revisions are garbage-collected
 by Kubernetes and require a fresh image tag.

@@ -214,6 +214,7 @@ sh ../../../deploy/k8s/render.sh values.env ../../../.generated/k8s/dev
 RENDERED=../../../.generated/k8s/dev
 
 kubectl apply -f "$RENDERED/00-namespace.yaml"
+kubectl apply -f "$RENDERED/05-network-policies.yaml"
 kubectl apply -f "$RENDERED/10-service-accounts.yaml"
 kubectl apply -f "$RENDERED/20-config.yaml"
 kubectl apply -f "$RENDERED/80-external-secrets.yaml"

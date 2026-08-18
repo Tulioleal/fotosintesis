@@ -20,6 +20,12 @@ resource "google_container_cluster" "primary" {
     channel = var.release_channel
   }
 
+  # Dataplane V2 (ADVANCED_DATAPATH) enables built-in Kubernetes NetworkPolicy
+  # enforcement with no extra addon. Enabling it on an existing cluster
+  # recreates the node pools; it cannot be toggled off in place. When enabled,
+  # GKE rejects the Calico network_policy block, so it is deliberately absent.
+  datapath_provider = var.dataplane_v2 ? "ADVANCED_DATAPATH" : null
+
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
   }

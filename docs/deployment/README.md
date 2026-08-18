@@ -22,6 +22,7 @@ change artifacts in `openspec/changes/gcp-deployment-platform/`.
 | `environment-contract.md` | Output contract between the OpenTofu roots and the deploy workflow. |
 | `authentication-abuse-limits.md` | Authentication limiter trust chain, secrets, cleanup CronJob, metrics, incident behavior, rollout, rollback, and optional Cloud Armor. |
 | `hardened-runtime.md` | Container and workload hardening baseline: fixed non-root runtime identity, writable-path inventory, security contexts, resource profiles, tuning, and policy exceptions. |
+| `network-policies.md` | GKE Dataplane V2 enforcement enablement, the NetworkPolicy inventory, connectivity verification, external-provider egress limitations, troubleshooting, and rollback. |
 
 ## Reading order
 

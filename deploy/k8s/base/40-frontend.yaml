@@ -105,6 +105,12 @@ metadata:
   labels:
     app.kubernetes.io/name: fotosintesis-frontend
     app.kubernetes.io/part-of: fotosintesis-ai
+  # GKE does not automatically add the NEG annotation when network policy
+  # enforcement is enabled. It is required so the Ingress keeps container-native
+  # load balancing (GFE -> Pod directly) and the NetworkPolicy only needs to
+  # allow the GFE health-check probe ranges, not every node IP.
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
 spec:
   type: __FRONTEND_SERVICE_TYPE__
   selector:

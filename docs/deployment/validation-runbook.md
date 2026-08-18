@@ -84,6 +84,8 @@ end-to-end evidence:
    - Worker readiness `pass`.
    - Required provider API keys `pass`.
    - Backend in-cluster smoke `pass`.
+   - Network policy verification `pass` (allowed probe succeeds and
+     denied probe fails under the default-deny baseline).
    - Frontend public smoke `pass` (or document the DNS gap when
      `ip-http` is in use).
 4. Save the workflow run URLs and the per-step `pass`/`fail` results
@@ -133,6 +135,11 @@ The prod operator must confirm:
      `frontend_smoke=pass`.
 4. Save the run URLs and per-gate results in `validation-evidence.md`
    under "Prod release."
+
+Network policy verification runs in the dev deploy (the connectivity probe
+step). Prod enforces the same rendered policies; the dev allowed/denied probe
+evidence plus the offline rendered-manifest validation satisfy the network
+policy enforcement requirement before promotion.
 
 The prod evidence satisfies task 7.8 only when every gate reports
 `pass` and the live run URLs are recorded.

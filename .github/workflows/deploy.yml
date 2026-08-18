@@ -689,6 +689,11 @@ jobs:
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/00-namespace.yaml"
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/10-service-accounts.yaml"
           kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/20-config.yaml"
+      - name: Apply network policies
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          kubectl apply -f ".generated/k8s/$ENVIRONMENT/rendered/05-network-policies.yaml"
       - name: Install or upgrade External Secrets Operator
         env:
           ESO_VERSION: ${{ vars.EXTERNAL_SECRETS_OPERATOR_VERSION || '0.10.4' }}
@@ -874,6 +879,7 @@ jobs:
           set -euo pipefail
 
           for manifest in \
+            05-network-policies.yaml \
             30-backend.yaml \
             40-frontend.yaml \
             50-migrations.yaml \
@@ -1073,6 +1079,7 @@ jobs:
               -n "$TF_OUT_NAMESPACE" \
               --image=curlimages/curl:8.10.1 \
               --restart=Never \
+              --labels="app.kubernetes.io/name=fotosintesis-smoke" \
               --attach=true \
               --pod-running-timeout=120s \
               --command -- curl \
@@ -1104,6 +1111,20 @@ jobs:
           fi
 
           echo "Backend health check passed"
+          echo "result=pass" >> "$GITHUB_OUTPUT"
+      - id: network-policy
+        name: Verify network policy enforcement (allowed and denied probes)
+        if: ${{ inputs.environment == 'dev' }}
+        env:
+          TF_OUT_NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
+        run: |
+          set -euo pipefail
+          if ! sh deploy/scripts/verify-network-policy.sh \
+              "$TF_OUT_NAMESPACE" \
+              "http://fotosintesis-backend.$TF_OUT_NAMESPACE.svc.cluster.local:8000/health"; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "result=pass" >> "$GITHUB_OUTPUT"
       - id: frontend-smoke
         name: Frontend public smoke check
@@ -1204,6 +1225,7 @@ jobs:
           REQUIRED_KEYS: ${{ steps.required-keys.outputs.result || 'skipped' }}
           BACKEND_SMOKE: ${{ steps.backend-smoke.outputs.result || 'skipped' }}
           FRONTEND_SMOKE: ${{ steps.frontend-smoke.outputs.result || 'skipped' }}
+          NETWORK_POLICY: ${{ steps.network-policy.outputs.result || 'skipped' }}
           GKE_CLUSTER_NAME: ${{ steps.tofu-outputs.outputs.gke_cluster_name }}
           GKE_CLUSTER_LOCATION: ${{ steps.tofu-outputs.outputs.gke_cluster_location }}
           NAMESPACE: ${{ steps.tofu-outputs.outputs.kubernetes_namespace }}
@@ -1239,5 +1261,6 @@ jobs:
             echo "| Worker readiness | ${WORKER_READINESS} |"
             echo "| Required provider API keys | ${REQUIRED_KEYS} |"
             echo "| Backend in-cluster smoke | ${BACKEND_SMOKE} |"
+            echo "| Network policy verification (dev) | ${NETWORK_POLICY} |"
             echo "| Frontend public smoke | ${FRONTEND_SMOKE} |"
           } >> "$GITHUB_STEP_SUMMARY"
