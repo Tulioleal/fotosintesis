@@ -1,6 +1,6 @@
 """reminder timezone scheduling integrity
 
-Revision ID: 0016_reminder_timezone_scheduling
+Revision ID: 0016_reminder_timezone
 Revises: 0015_auth_limiter_state
 Create Date: 2026-08-18
 
@@ -15,7 +15,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0016_reminder_timezone_scheduling"
+revision: str = "0016_reminder_timezone"
 down_revision: Union[str, None] = "0015_auth_limiter_state"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

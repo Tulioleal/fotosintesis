@@ -13,6 +13,7 @@ const state = {
   sessions: new Map(),
   logoutEvents: [],
   nextId: 1,
+  recoveryTokens: new Map(),
   // Independent per-target rate-limit controls. Each target defaults to
   // status 200 (no limiting) and can be set to 429 or 503 independently so
   // journeys exercise the outer Auth.js wrapper and the inner credential
@@ -59,6 +60,7 @@ function reset() {
   state.users.clear();
   state.sessions.clear();
   state.logoutEvents.length = 0;
+  state.recoveryTokens.clear();
   state.nextId = 1;
   for (const target of Object.keys(state.targets)) {
     state.targets[target].status = 200;
@@ -171,6 +173,11 @@ async function handle(req, res, url) {
         .filter(([, session]) => session.active)
         .map(([token, session]) => ({ token, userId: session.userId, expiresAt: session.expiresAt })),
       logoutEvents: state.logoutEvents,
+      recoveryTokens: [...state.recoveryTokens.values()].map((entry) => ({
+        token: entry.token,
+        email: entry.email,
+        used: entry.used,
+      })),
     });
   }
 
@@ -239,10 +246,33 @@ async function handle(req, res, url) {
   if (req.method === "POST" && pathname === "/auth/recovery/request") {
     const limited = applyTarget(res, "recovery");
     if (limited) return limited;
+    const body = await readBody(req);
+    const email = String(body.email ?? "");
+    // Only an existing account produces a token; the response stays neutral
+    // for both known and unknown emails.
+    if (state.users.has(email)) {
+      const token = randomUUID();
+      state.recoveryTokens.set(token, { token, email, used: false });
+    }
     return sendJson(res, 200, {
       status: "ok",
       message: "Si el correo existe, te enviaremos instrucciones.",
     });
+  }
+
+  if (req.method === "POST" && pathname === "/auth/recovery/confirm") {
+    const limited = applyTarget(res, "recovery");
+    if (limited) return limited;
+    const body = await readBody(req);
+    const token = String(body.token ?? "");
+    const entry = state.recoveryTokens.get(token);
+    const password = String(body.password ?? "");
+    if (entry && !entry.used && state.users.has(entry.email)) {
+      const user = state.users.get(entry.email);
+      user.password = password;
+      entry.used = true;
+    }
+    return sendJson(res, 200, { status: "ok" });
   }
 
   if (req.method === "GET" && pathname === "/home/summary") {

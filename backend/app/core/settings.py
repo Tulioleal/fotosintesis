@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     session_idle_ttl_minutes: int = 30
     session_absolute_ttl_days: int = 7
     recovery_token_ttl_minutes: int = 30
+    recovery_delivery_provider: str = Field(
+        default="sink", validation_alias="RECOVERY_DELIVERY_PROVIDER"
+    )
+    public_origin_url: str = Field(
+        default="http://localhost:3000", validation_alias="PUBLIC_ORIGIN_URL"
+    )
     knowledge_vector_table: str = "knowledge_embeddings"
     embedding_dimension: int = 8
     assistant_classifier_timeout_seconds: float = 8.0

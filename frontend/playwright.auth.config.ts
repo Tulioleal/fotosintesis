@@ -7,7 +7,7 @@ const APP_URL = `http://localhost:${APP_PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: ["auth-home.spec.ts", "auth-rate-limit.spec.ts"],
+  testMatch: ["auth-home.spec.ts", "auth-rate-limit.spec.ts", "password-recovery.spec.ts"],
   testIgnore: ["**/*.setup.ts"],
   workers: 1,
   fullyParallel: false,

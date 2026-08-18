@@ -10,6 +10,8 @@ export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type RegisterResponse = components["schemas"]["RegisterResponse"];
 export type RecoveryRequest = components["schemas"]["RecoveryRequest"];
 export type RecoveryResponse = components["schemas"]["RecoveryResponse"];
+export type RecoveryConfirmRequest = components["schemas"]["RecoveryConfirmRequest"];
+export type RecoveryConfirmResponse = { status: string };
 export type PublicAuthUser = components["schemas"]["PublicAuthUser"];
 export type HomeSummaryResponse = components["schemas"]["HomeSummaryResponse"];
 export type GardenPlantCard = components["schemas"]["GardenPlantCard"];
@@ -94,6 +96,12 @@ export const apiClient = {
     }),
   requestRecovery: (body: RecoveryRequest) =>
     frontendRequest<RecoveryResponse>("/api/auth/recovery/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  confirmRecovery: (body: RecoveryConfirmRequest) =>
+    frontendRequest<RecoveryConfirmResponse>("/api/auth/recovery/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

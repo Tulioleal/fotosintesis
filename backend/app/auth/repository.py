@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import AuthSession, AuthUser, RecoveryToken
-from app.auth.passwords import hash_password, verify_password
+from app.auth.passwords import hash_password, hash_token, verify_password
 from app.auth.tables import recovery_tokens, sessions, users
 from app.db.repository import RepositoryBase
 
@@ -187,21 +187,96 @@ class DatabaseAuthRepository(RepositoryBase):
         ).first()
         user = _user_from_row(user_row) if user_row else None
         now = datetime.now(timezone.utc)
+        raw_token = token_urlsafe(32)
         recovery = RecoveryToken(
             id=uuid4(),
             user_id=user.id if user else None,
-            token=token_urlsafe(32),
+            token_hash=hash_token(raw_token),
             expires_at=now + ttl,
             created_at=now,
         )
+        if user is not None:
+            # Invalidate any prior active tokens for the same account so only
+            # the most recent link can be used.
+            await self.session.execute(
+                update(recovery_tokens)
+                .where(
+                    recovery_tokens.c.user_id == user.id,
+                    recovery_tokens.c.used_at.is_(None),
+                    recovery_tokens.c.invalidated_at.is_(None),
+                )
+                .values(invalidated_at=now)
+            )
         await self.session.execute(
             insert(recovery_tokens).values(
                 id=recovery.id,
                 user_id=recovery.user_id,
-                token=recovery.token,
+                token_hash=recovery.token_hash,
                 expires_at=recovery.expires_at,
                 created_at=recovery.created_at,
             )
         )
         await self.session.commit()
+        # Attach the raw token transiently so the delivery boundary can build
+        # the link; it is never persisted.
+        recovery.token = raw_token
         return recovery
+
+    async def consume_recovery_token(self, raw_token: str, new_password: str) -> bool:
+        """Atomically consume a valid token and update the password.
+
+        Returns True only if a single eligible token was consumed and the
+        password updated in the same transaction. The conditional
+        ``UPDATE ... WHERE used_at IS NULL`` ensures concurrent attempts with
+        the same token yield at most one success. A neutral False is returned
+        for unknown, expired, used, or invalidated tokens.
+        """
+        token_hash = hash_token(raw_token)
+        now = datetime.now(timezone.utc)
+        row = (
+            await self.session.execute(
+                select(recovery_tokens).where(recovery_tokens.c.token_hash == token_hash)
+            )
+        ).first()
+        if row is None:
+            await self.session.rollback()
+            return False
+
+        user_id = row.user_id
+        expires_at = _utc(row.expires_at)
+        if user_id is None or expires_at is None or expires_at <= now:
+            await self.session.rollback()
+            return False
+
+        result = await self.session.execute(
+            update(recovery_tokens)
+            .where(
+                recovery_tokens.c.token_hash == token_hash,
+                recovery_tokens.c.used_at.is_(None),
+                recovery_tokens.c.invalidated_at.is_(None),
+                recovery_tokens.c.expires_at > now,
+            )
+            .values(used_at=now)
+        )
+        if result.rowcount == 0:
+            await self.session.rollback()
+            return False
+
+        await self.session.execute(
+            update(users)
+            .where(users.c.id == user_id)
+            .values(password_hash=hash_password(new_password), updated_at=now)
+        )
+        await self._revoke_all_sessions(user_id, now)
+        await self.session.commit()
+        return True
+
+    async def _revoke_all_sessions(self, user_id: UUID, now: datetime) -> None:
+        await self.session.execute(
+            update(sessions)
+            .where(
+                sessions.c.user_id == user_id,
+                sessions.c.invalidated_at.is_(None),
+            )
+            .values(invalidated_at=now, updated_at=now)
+        )

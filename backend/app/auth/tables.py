@@ -42,10 +42,24 @@ recovery_tokens = sa.Table(
     metadata,
     sa.Column("id", sa.Uuid(), primary_key=True),
     sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
-    sa.Column("token", sa.String(length=255), nullable=False, unique=True, index=True),
+    sa.Column("token_hash", sa.String(length=64), nullable=False, unique=True, index=True),
     sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("invalidated_at", sa.DateTime(timezone=True), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+)
+sa.Index(
+    "ix_recovery_tokens_user_active",
+    recovery_tokens.c.user_id,
+    postgresql_where=sa.and_(
+        recovery_tokens.c.used_at.is_(None),
+        recovery_tokens.c.invalidated_at.is_(None),
+    ),
+    sqlite_where=sa.and_(
+        recovery_tokens.c.used_at.is_(None),
+        recovery_tokens.c.invalidated_at.is_(None),
     ),
 )
 

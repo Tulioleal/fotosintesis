@@ -406,7 +406,7 @@ async def test_recovery_confirmation_different_unknown_tokens_get_equivalent_beh
         assert first.status_code == 200
         assert second.status_code == 200
         assert first.json() == second.json()
-        assert first.json() == {"status": "prepared"}
+        assert first.json() == {"status": "ok"}
 
 
 @pytest.mark.asyncio

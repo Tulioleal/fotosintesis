@@ -11,6 +11,7 @@ from app.auth.dependencies import (
     get_current_user,
     set_session_cookie,
 )
+from app.auth.delivery import build_recovery_link, get_delivery_provider
 from app.auth.models import AuthUser
 from app.auth.repository import DatabaseAuthRepository, DuplicateEmailError, InvalidCredentialsError
 from app.auth.schemas import (
@@ -183,9 +184,18 @@ async def request_recovery(
     )
     enforce_outcome(outcome, category="recovery", recovery=True)
     settings = get_settings()
-    await repository.create_recovery_token(
+    recovery = await repository.create_recovery_token(
         str(payload.email), ttl=timedelta(minutes=settings.recovery_token_ttl_minutes)
     )
+    if recovery.user_id is not None and recovery.token is not None:
+        # A link is only delivered when an account actually exists. A missing
+        # account still persists a user_id IS NULL token row (to keep timing
+        # consistent), but no link is delivered, preserving neutrality.
+        provider = get_delivery_provider()
+        provider.deliver(
+            str(payload.email),
+            build_recovery_link(recovery.token),
+        )
     return RecoveryResponse(
         status="ok",
         message="If an account with that email exists, we will send you instructions to recover access.",
@@ -195,6 +205,7 @@ async def request_recovery(
 @router.post("/recovery/confirm", responses=RATE_LIMIT_RESPONSES)
 async def confirm_recovery(
     payload: RecoveryConfirmRequest,
+    repository: AuthRepo,
     limiter: Limiter,
     source_key: SourceKey,
 ) -> dict[str, str]:
@@ -213,7 +224,12 @@ async def confirm_recovery(
         account_identifier=str(payload.token),
     )
     enforce_outcome(outcome, category="recovery confirmation", recovery=True)
-    return {"status": "prepared"}
+    # The token is consumed (or rejected) atomically in the repository, but the
+    # response body stays fully neutral: it is identical whether the token was
+    # valid, unknown, expired, used, or invalidated, so no token or account
+    # state is revealed.
+    await repository.consume_recovery_token(payload.token, payload.password)
+    return {"status": "ok"}
 
 
 @router.post("/admit/authjs_post", responses=RATE_LIMIT_RESPONSES)
