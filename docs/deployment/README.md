@@ -20,6 +20,7 @@ change artifacts in `openspec/changes/gcp-deployment-platform/`.
 | `validation-runbook.md` | Operator procedure for collecting dev end-to-end and prod release evidence. |
 | `validation-evidence.md` | Evidence template used by the validation runbook. |
 | `environment-contract.md` | Output contract between the OpenTofu roots and the deploy workflow. |
+| `authentication-abuse-limits.md` | Authentication limiter trust chain, secrets, cleanup CronJob, metrics, incident behavior, rollout, rollback, and optional Cloud Armor. |
 
 ## Reading order
 

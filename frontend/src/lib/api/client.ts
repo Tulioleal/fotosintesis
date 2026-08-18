@@ -1,6 +1,10 @@
 import type { components } from "@/lib/generated/openapi";
 import type { operations } from "@/lib/generated/openapi";
-import { API_BASE_URL } from "./config";
+import {
+  AUTH_RETRY_AFTER_MAX_SECONDS,
+  clampRetryAfter,
+  parseRetryAfter,
+} from "@/lib/server/auth-rate-limit";
 
 export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type RegisterResponse = components["schemas"]["RegisterResponse"];
@@ -39,27 +43,11 @@ export class ApiClientError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = "ApiClientError";
   }
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Backend request failed with status ${response.status}`);
-  }
-
-  return response.json() as Promise<T>;
 }
 
 async function frontendRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -74,7 +62,14 @@ async function frontendRequest<T>(path: string, init: RequestInit = {}): Promise
 
   if (!response.ok) {
     const detail = typeof (payload as ErrorPayload | null)?.detail === "string" ? (payload as ErrorPayload).detail : null;
-    throw new ApiClientError(detail ?? `Request failed with status ${response.status}`, response.status);
+    const retryAfterRaw = parseRetryAfter(response.headers.get("retry-after"));
+    const retryAfterSeconds =
+      retryAfterRaw === null ? null : clampRetryAfter(retryAfterRaw, AUTH_RETRY_AFTER_MAX_SECONDS);
+    throw new ApiClientError(
+      detail ?? `Request failed with status ${response.status}`,
+      response.status,
+      retryAfterSeconds,
+    );
   }
 
   return payload as T;
@@ -88,8 +83,9 @@ export const apiClient = {
       body: JSON.stringify(body),
     }),
   requestRecovery: (body: RecoveryRequest) =>
-    request<RecoveryResponse>("/auth/recovery/request", {
+    frontendRequest<RecoveryResponse>("/api/auth/recovery/request", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   async getHomeSummary() {

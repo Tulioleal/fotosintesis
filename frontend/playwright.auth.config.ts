@@ -7,7 +7,7 @@ const APP_URL = `http://localhost:${APP_PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: ["auth-home.spec.ts"],
+  testMatch: ["auth-home.spec.ts", "auth-rate-limit.spec.ts"],
   testIgnore: ["**/*.setup.ts"],
   workers: 1,
   fullyParallel: false,
@@ -37,6 +37,12 @@ export default defineConfig({
         AUTH_SECRET: "e2e-auth-secret-for-playwright",
         AUTH_URL: APP_URL,
         AUTH_TRUST_HOST: "true",
+        // Limiter source-derivation configuration so the Auth.js wrapper and
+        // route handlers can produce a trusted source key/assertion.
+        AUTH_LIMITER_HMAC_SECRET: "e2e-limiter-hmac-secret",
+        AUTH_LIMITER_ASSERTION_SECRET: "e2e-limiter-assertion-secret",
+        AUTH_LIMITER_HMAC_KEY_VERSION: "1",
+        AUTH_LIMITER_TRUSTED_FORWARDED_HOPS: "2",
         NEXT_TELEMETRY_DISABLED: "1",
       },
     },

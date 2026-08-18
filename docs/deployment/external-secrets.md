@@ -12,6 +12,12 @@ and matches the `80-external-secrets.yaml` manifest exactly:
 
 - `fotosintesis-database-url` -> `database-url` in the runtime Secret.
 - `fotosintesis-auth-secret` -> `auth-secret` in the runtime Secret.
+- `fotosintesis-auth-limiter-hmac-secret` -> `auth-limiter-hmac-secret` in the
+  runtime Secret. Shared by the frontend (source-key derivation) and backend
+  (keyed digests); must be identical across replicas.
+- `fotosintesis-auth-limiter-assertion-secret` -> `auth-limiter-assertion-secret`
+  in the runtime Secret. Shared by the frontend (assertion signing) and backend
+  (assertion validation) for the internal source trust boundary.
 - `fotosintesis-openai-api-key` -> `openai-api-key` in the runtime
   Secret (required when an OpenAI family provider is configured;
   operators populate a `mock-not-used` placeholder for mock providers).
@@ -44,11 +50,29 @@ printf '%s' "$DATABASE_URL" | gcloud secrets versions add fotosintesis-database-
   --project="$PROJECT_ID" --data-file=-
 printf '%s' "$AUTH_SECRET" | gcloud secrets versions add fotosintesis-auth-secret \
   --project="$PROJECT_ID" --data-file=-
+printf '%s' "$AUTH_LIMITER_HMAC_SECRET" | gcloud secrets versions add fotosintesis-auth-limiter-hmac-secret \
+  --project="$PROJECT_ID" --data-file=-
+printf '%s' "$AUTH_LIMITER_ASSERTION_SECRET" | gcloud secrets versions add fotosintesis-auth-limiter-assertion-secret \
+  --project="$PROJECT_ID" --data-file=-
 printf '%s' "$OPENAI_API_KEY" | gcloud secrets versions add fotosintesis-openai-api-key \
   --project="$PROJECT_ID" --data-file=-
 printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add fotosintesis-gemini-api-key \
   --project="$PROJECT_ID" --data-file=-
 ```
+
+The limiter HMAC and assertion secrets MUST be identical across every frontend
+and backend replica, and each container must have at least one version before
+`AUTH_LIMITER_ENABLED=true` is deployed. Generate high-entropy values, for
+example:
+
+```bash
+export AUTH_LIMITER_HMAC_SECRET="$(openssl rand -hex 32)"
+export AUTH_LIMITER_ASSERTION_SECRET="$(openssl rand -hex 32)"
+```
+
+The deploy workflow fails before rollout when either projected value is absent
+from the runtime Secret (see the "Verify limiter HMAC and assertion secrets are
+projected before rollout" step).
 
 The deploy workflow waits for the runtime Secret to be projected before
 applying workloads, and the `Verify required provider API key secrets`

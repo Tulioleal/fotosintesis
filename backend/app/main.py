@@ -39,6 +39,9 @@ class CorsApplication:
 def create_app() -> CorsApplication:
     settings = get_settings()
     configure_logging(settings.log_level)
+    # Validate the complete limiter policy at startup so an invalid production
+    # profile prevents boot rather than failing on the first auth request.
+    settings.limiter_policy()
     app = FastAPI(title=settings.app_name)
 
     app.middleware("http")(request_observability_middleware)

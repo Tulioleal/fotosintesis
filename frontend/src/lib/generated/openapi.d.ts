@@ -21,6 +21,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/admit/authjs_post": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit Authjs Post
+         * @description Narrow internal admission endpoint for relevant unauthenticated Auth.js POST operations.
+         *
+         *     The frontend Auth.js boundary calls this endpoint (protected by the same
+         *     signed source assertion used by every other limiter header) before
+         *     invoking Auth.js work. A rejected or storage-failed outcome is translated
+         *     into the bounded retry contract so the distributed ``authjs_post`` policy
+         *     has a real runtime call site and session reads and authenticated logout
+         *     remain unchanged.
+         */
+        post: operations["admit_authjs_post_auth_admit_authjs_post_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/credentials/verify": {
         parameters: {
             query?: never;
@@ -970,6 +997,18 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * RateLimitResponse
+         * @description Bounded authentication rate-limit response body.
+         *
+         *     The JSON body contains only a generic ``detail``; the whole-second retry
+         *     delay is carried by the ``Retry-After`` response header declared on the
+         *     relevant routes. Never include account, source, or storage details.
+         */
+        RateLimitResponse: {
+            /** Detail */
+            detail: string;
+        };
         /** ReadJobError */
         ReadJobError: {
             category: components["schemas"]["JobFailureCategory"];
@@ -1222,10 +1261,69 @@ export interface operations {
             };
         };
     };
+    admit_authjs_post_auth_admit_authjs_post_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+        };
+    };
     verify_credentials_auth_credentials_verify_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1251,6 +1349,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
                 };
             };
         };
@@ -1293,7 +1413,10 @@ export interface operations {
     confirm_recovery_auth_recovery_confirm_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1323,12 +1446,37 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
         };
     };
     request_recovery_auth_recovery_request_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1356,12 +1504,37 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
         };
     };
     register_auth_register_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1387,6 +1560,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
                 };
             };
         };

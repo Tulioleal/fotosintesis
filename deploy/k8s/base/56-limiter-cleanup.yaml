@@ -1,0 +1,119 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fotosintesis-limiter-cleanup
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-limiter-cleanup
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  # Runs the bounded cleanup of expired limiter windows. Retention is far
+  # shorter than HMAC secret retirement, so stale rows cannot outlive keys.
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: fotosintesis-limiter-cleanup
+            app.kubernetes.io/part-of: fotosintesis-ai
+            iam.gke.io/workload-identity: fotosintesis-backend
+        spec:
+          serviceAccountName: fotosintesis-backend
+          restartPolicy: OnFailure
+          # A native sidecar exits with the Pod after the cleanup command,
+          # allowing the CronJob to reach Complete without workflow-managed
+          # deletion. This mirrors the migration-job proxy pattern so the
+          # cleanup process can reach Cloud SQL.
+          initContainers:
+            - name: cloud-sql-proxy
+              restartPolicy: Always
+              image: __CLOUD_SQL_PROXY_IMAGE__
+              imagePullPolicy: IfNotPresent
+              args:
+                - "--structured-logs"
+                - "--port=__CLOUD_SQL_PROXY_PORT__"
+                - "__CLOUD_SQL_INSTANCE_CONNECTION_NAME__"
+              ports:
+                - name: cloudsql
+                  containerPort: __CLOUD_SQL_PROXY_PORT__
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+          containers:
+            - name: limiter-cleanup
+              image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - |
+                  python - <<'PY'
+                  import socket
+                  import time
+
+                  deadline = time.monotonic() + 60
+                  while True:
+                      try:
+                          with socket.create_connection(
+                              ("127.0.0.1", __CLOUD_SQL_PROXY_PORT__),
+                              timeout=1,
+                          ):
+                              break
+                      except OSError:
+                          if time.monotonic() >= deadline:
+                              raise SystemExit(
+                                  "Cloud SQL Proxy did not become ready within 60 seconds"
+                              )
+                          time.sleep(1)
+                  PY
+                  python -m scripts.cleanup_limiter_state
+              env:
+                - name: APP_ENV
+                  valueFrom:
+                    configMapKeyRef:
+                      name: fotosintesis-runtime-config
+                      key: APP_ENV
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: __RUNTIME_SECRET_NAME__
+                      key: __DATABASE_URL_SECRET_KEY__
+                - name: AUTH_LIMITER_ENABLED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: fotosintesis-runtime-config
+                      key: AUTH_LIMITER_ENABLED
+                - name: AUTH_LIMITER_CLEANUP_BATCH_SIZE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: fotosintesis-runtime-config
+                      key: AUTH_LIMITER_CLEANUP_BATCH_SIZE
+                - name: AUTH_LIMITER_RETENTION_SECONDS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: fotosintesis-runtime-config
+                      key: AUTH_LIMITER_RETENTION_SECONDS
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi

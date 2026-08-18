@@ -167,7 +167,14 @@ async def test_confirmation_requires_scheduling_and_rolls_back_on_failure(
 @pytest.mark.asyncio
 async def test_confirmation_is_unavailable_when_producer_is_disabled(
     session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The producer must be explicitly disabled: this test sets its own
+    # precondition instead of depending on the ambient environment, so the
+    # suite is reproducible in any container (e.g. docker compose, whose
+    # backend service defaults JOBS_PRODUCER_ENABLED to true).
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "false")
+    get_settings.cache_clear()
     token, identification_id, candidate_id = await _candidate(
         session_factory, email="producer-disabled@example.com"
     )

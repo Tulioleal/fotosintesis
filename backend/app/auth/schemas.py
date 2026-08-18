@@ -64,6 +64,17 @@ class RecoveryResponse(BaseModel):
     message: str
 
 
+class RateLimitResponse(BaseModel):
+    """Bounded authentication rate-limit response body.
+
+    The JSON body contains only a generic ``detail``; the whole-second retry
+    delay is carried by the ``Retry-After`` response header declared on the
+    relevant routes. Never include account, source, or storage details.
+    """
+
+    detail: str
+
+
 class RecoveryConfirmRequest(BaseModel):
     token: str = Field(min_length=16)
     password: str = Field(min_length=8)

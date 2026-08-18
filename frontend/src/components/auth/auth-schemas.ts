@@ -18,3 +18,7 @@ export const recoverySchema = z.object({
 export type RegisterFormValues = z.infer<typeof registerSchema>;
 export type LoginFormValues = z.infer<typeof loginSchema>;
 export type RecoveryFormValues = z.infer<typeof recoverySchema>;
+
+export function nowMs(): number {
+  return Date.now();
+}

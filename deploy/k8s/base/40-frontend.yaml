@@ -49,6 +49,26 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: AUTH_URL
+            - name: AUTH_LIMITER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: __AUTH_LIMITER_HMAC_SECRET_KEY__
+            - name: AUTH_LIMITER_ASSERTION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: __AUTH_LIMITER_ASSERTION_SECRET_KEY__
+            - name: AUTH_LIMITER_HMAC_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_HMAC_KEY_VERSION
+            - name: AUTH_LIMITER_TRUSTED_FORWARDED_HOPS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_TRUSTED_FORWARDED_HOPS
 ---
 apiVersion: v1
 kind: Service

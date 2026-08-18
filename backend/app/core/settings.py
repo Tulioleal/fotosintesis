@@ -1,7 +1,16 @@
+import json
 from functools import lru_cache
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.limiter.policy import (
+    EndpointCategory,
+    EndpointPolicy,
+    LimitProfile,
+    LimiterPolicy,
+    StorageFailureMode,
+)
 
 
 class Settings(BaseSettings):
@@ -94,6 +103,36 @@ class Settings(BaseSettings):
         validation_alias="JOBS_REQUIRED_CONTRACTS",
     )
 
+    auth_limiter_enabled: bool = Field(default=False, validation_alias="AUTH_LIMITER_ENABLED")
+    auth_limiter_hmac_secret: str | None = Field(
+        default=None, validation_alias="AUTH_LIMITER_HMAC_SECRET"
+    )
+    auth_limiter_hmac_key_version: int = Field(
+        default=1, ge=1, validation_alias="AUTH_LIMITER_HMAC_KEY_VERSION"
+    )
+    auth_limiter_assertion_secret: str | None = Field(
+        default=None, validation_alias="AUTH_LIMITER_ASSERTION_SECRET"
+    )
+    auth_limiter_max_retry_after_seconds: int = Field(
+        default=3600, ge=1, validation_alias="AUTH_LIMITER_MAX_RETRY_AFTER_SECONDS"
+    )
+    auth_limiter_retention_seconds: int = Field(
+        default=86400, gt=0, validation_alias="AUTH_LIMITER_RETENTION_SECONDS"
+    )
+    auth_limiter_cleanup_batch_size: int = Field(
+        default=1000, gt=0, validation_alias="AUTH_LIMITER_CLEANUP_BATCH_SIZE"
+    )
+    auth_limiter_profiles: str = Field(
+        default="",
+        validation_alias="AUTH_LIMITER_PROFILES",
+        description=(
+            "JSON mapping of endpoint category to {source, account, storage_failure_mode} "
+            "limit profiles; e.g. "
+            '{"registration":{"source":{"limit":10,"window_seconds":3600},'
+            '"account":null,"storage_failure_mode":"fail_closed"}}'
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_job_settings(self) -> "Settings":
         if self.jobs_lease_renewal_interval_seconds >= self.jobs_lease_duration_seconds:
@@ -101,6 +140,100 @@ class Settings(BaseSettings):
                 "jobs_lease_renewal_interval_seconds must be less than jobs_lease_duration_seconds"
             )
         return self
+
+    def limiter_policy(self) -> LimiterPolicy:
+        """Build the validated limiter policy from configured profiles.
+
+        When enforcement is disabled, an empty but structurally complete
+        policy is returned so callers can gate on ``auth_limiter_enabled``
+        without special-casing construction. When enforcement is enabled, the
+        policy must cover every closed endpoint category and use safe
+        production values, otherwise a ``ValueError`` is raised.
+        """
+        parsed: dict[str, object] = {}
+        if self.auth_limiter_profiles:
+            try:
+                parsed = json.loads(self.auth_limiter_profiles)
+            except json.JSONDecodeError as error:
+                raise ValueError("auth_limiter_profiles is not valid JSON") from error
+
+        # The distributed authentication boundary is mandatory in production: a
+        # missing or incorrect setting must fail startup rather than silently
+        # removing the whole abuse boundary. Disabled mode stays available only
+        # outside production (local, test, dev).
+        if self.environment in {"prod", "production"} and not self.auth_limiter_enabled:
+            raise ValueError(
+                "auth_limiter_enabled must be true when APP_ENV is prod or production"
+            )
+
+        endpoints: dict[EndpointCategory, EndpointPolicy] = {}
+        for raw_category, raw_policy in parsed.items():
+            if raw_category not in EndpointCategory.__members__:
+                raise ValueError(f"unknown auth limiter endpoint category: {raw_category}")
+            category = EndpointCategory[raw_category]
+            if not isinstance(raw_policy, dict):
+                raise ValueError(f"auth limiter policy for {raw_category} must be an object")
+            source = raw_policy.get("source")
+            if not isinstance(source, dict):
+                raise ValueError(f"auth limiter policy for {raw_category} requires a source rule")
+            account = raw_policy.get("account")
+            failure_mode = raw_policy.get("storage_failure_mode", "fail_closed")
+            if failure_mode not in StorageFailureMode.__members__:
+                raise ValueError(
+                    f"unknown storage_failure_mode for {raw_category}: {failure_mode!r}"
+                )
+            endpoints[category] = EndpointPolicy(
+                source=LimitProfile.model_validate(source),
+                account=LimitProfile.model_validate(account) if account else None,
+                storage_failure_mode=StorageFailureMode[failure_mode],
+            )
+
+        if self.auth_limiter_enabled:
+            if not self.auth_limiter_hmac_secret:
+                raise ValueError("auth_limiter_hmac_secret is required when auth_limiter_enabled")
+            if not self.auth_limiter_assertion_secret:
+                raise ValueError(
+                    "auth_limiter_assertion_secret is required when auth_limiter_enabled"
+                )
+            # Account-aware categories must reject unsafe source-only profiles
+            # when enforcement is enabled. Registration and authjs_post may
+            # legitimately stay source-only. A fully absent category is handled
+            # by the policy's coverage validation below.
+            account_sensitive = {
+                EndpointCategory.credential_verification,
+                EndpointCategory.recovery_initiation,
+                EndpointCategory.recovery_confirmation,
+            }
+            missing_account = [
+                category.value
+                for category in account_sensitive
+                if category in endpoints and endpoints[category].account is None
+            ]
+            if missing_account:
+                raise ValueError(
+                    "account profile required when auth_limiter_enabled for: "
+                    + ", ".join(sorted(missing_account))
+                )
+            return LimiterPolicy(
+                endpoints=endpoints,
+                max_retry_after_seconds=self.auth_limiter_max_retry_after_seconds,
+                retention_seconds=self.auth_limiter_retention_seconds,
+                hmac_key_version=self.auth_limiter_hmac_key_version,
+            )
+        return LimiterPolicy(
+            endpoints={
+                category: EndpointPolicy(
+                    source=LimitProfile(limit=1, window_seconds=3600),
+                    account=LimitProfile(limit=1, window_seconds=3600)
+                    if category in (EndpointCategory.credential_verification, EndpointCategory.recovery_initiation, EndpointCategory.recovery_confirmation)
+                    else None,
+                )
+                for category in EndpointCategory
+            },
+            max_retry_after_seconds=self.auth_limiter_max_retry_after_seconds,
+            retention_seconds=self.auth_limiter_retention_seconds,
+            hmac_key_version=self.auth_limiter_hmac_key_version,
+        )
 
     trusted_source_domains: list[str] = [
         "rhs.org.uk",

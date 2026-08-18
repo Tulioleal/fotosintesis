@@ -3,11 +3,23 @@ import {
   AUTHENTICATION_ERROR,
   createBrowserSession,
   createJwtToken,
+  mapVerifyCredentialsResult,
   verifyCredentials,
 } from "./auth";
 
+const authMocks = vi.hoisted(() => {
+  class MockAuthError extends Error {}
+  return {
+    MockAuthError,
+    CredentialsSignin: class extends MockAuthError {
+      code = "credentials";
+    },
+  };
+});
+
 vi.mock("next-auth", () => ({
   default: () => ({ handlers: {}, signIn: () => {}, signOut: () => {}, auth: () => {} }),
+  CredentialsSignin: authMocks.CredentialsSignin,
 }));
 
 vi.mock("next-auth/providers/credentials", () => ({
@@ -36,18 +48,20 @@ const VALID_USER = {
 
 const VALID_CREDENTIALS = { email: "sentinel@example.com", password: "sentinel-password" };
 
-function mockFetch(response: { ok: boolean; json: () => Promise<unknown> }) {
+function mockFetch(response: Response) {
   const fetchMock = vi.fn().mockResolvedValue(response);
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
 function mockValidVerifyResponse() {
-  return mockFetch({ ok: true, json: () => Promise.resolve(VALID_VERIFY_RESPONSE) });
+  return mockFetch(
+    Response.json(VALID_VERIFY_RESPONSE, { status: 200, headers: { "content-type": "application/json" } }),
+  );
 }
 
 function mockInvalidJson() {
-  return mockFetch({ ok: true, json: () => Promise.reject(new SyntaxError("sentinel-parse-error")) });
+  return mockFetch(new Response("not-json", { status: 200 }));
 }
 
 describe("verifyCredentials", () => {
@@ -62,13 +76,13 @@ describe("verifyCredentials", () => {
   it("accepts a complete valid credentials response and returns the concrete server-only state", async () => {
     const result = await verifyCredentials(VALID_CREDENTIALS);
 
-    expect(result).toEqual(VALID_USER);
+    expect(result).toEqual({ status: "ok", user: VALID_USER });
   });
 
-  it("returns null for invalid JSON without creating partial authenticated state", async () => {
+  it("returns invalid for invalid JSON without creating partial authenticated state", async () => {
     mockInvalidJson();
 
-    expect(await verifyCredentials(VALID_CREDENTIALS)).toBeNull();
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({ status: "invalid" });
   });
 
   it.each([
@@ -79,9 +93,9 @@ describe("verifyCredentials", () => {
     ["missing session_token", { ...VALID_VERIFY_RESPONSE, session_token: "" }],
     ["invalid session_expires_at", { ...VALID_VERIFY_RESPONSE, session_expires_at: "not-a-date" }],
   ])("denies a successful response with %s", async (_label, malformedResponse) => {
-    mockFetch({ ok: true, json: () => Promise.resolve(malformedResponse) });
+    mockFetch(Response.json(malformedResponse, { status: 200 }));
 
-    expect(await verifyCredentials(VALID_CREDENTIALS)).toBeNull();
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({ status: "invalid" });
   });
 
   type JsonObject = Record<string, unknown>;
@@ -105,19 +119,45 @@ describe("verifyCredentials", () => {
     ["absent session_expires_at", ["session_expires_at"]],
   ])("denies a successful response with a genuinely %s field", async (_label, path) => {
     const malformedResponse = withoutFields(VALID_VERIFY_RESPONSE, path);
-    mockFetch({ ok: true, json: () => Promise.resolve(malformedResponse) });
+    mockFetch(Response.json(malformedResponse, { status: 200 }));
 
-    expect(await verifyCredentials(VALID_CREDENTIALS)).toBeNull();
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({ status: "invalid" });
   });
 
-  it("returns null when the backend does not respond ok", async () => {
-    mockFetch({ ok: false, json: () => Promise.reject(new Error("sentinel-backend-error")) });
+  it("returns invalid when the backend does not respond ok", async () => {
+    mockFetch(new Response(null, { status: 401 }));
 
-    expect(await verifyCredentials(VALID_CREDENTIALS)).toBeNull();
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({ status: "invalid" });
   });
 
-  it("returns null for invalid credentials input", async () => {
-    expect(await verifyCredentials({ email: "not-an-email", password: "" })).toBeNull();
+  it("returns rate_limited with the bounded retry delay when the backend returns 429", async () => {
+    mockFetch(new Response(null, { status: 429, headers: { "retry-after": "42" } }));
+
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({
+      status: "rate_limited",
+      retryAfterSeconds: 42,
+    });
+  });
+
+  it("returns unavailable when the backend fails closed on limiter storage", async () => {
+    mockFetch(new Response(null, { status: 503 }));
+
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({ status: "unavailable" });
+  });
+
+  it("returns unavailable with a bounded retry delay when the backend emits one", async () => {
+    mockFetch(new Response(null, { status: 503, headers: { "retry-after": "30" } }));
+
+    expect(await verifyCredentials(VALID_CREDENTIALS)).toEqual({
+      status: "unavailable",
+      retryAfterSeconds: 30,
+    });
+  });
+
+  it("returns invalid for invalid credentials input", async () => {
+    expect(await verifyCredentials({ email: "not-an-email", password: "" })).toEqual({
+      status: "invalid",
+    });
   });
 
   it("propagates network transport failures to Auth.js error handling", async () => {
@@ -125,6 +165,41 @@ describe("verifyCredentials", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(sentinelError));
 
     await expect(verifyCredentials(VALID_CREDENTIALS)).rejects.toThrow("sentinel-network-error");
+  });
+});
+
+describe("mapVerifyCredentialsResult", () => {
+  it("maps a successful result to the concrete server-only user state", () => {
+    expect(mapVerifyCredentialsResult({ status: "ok", user: VALID_USER })).toEqual(VALID_USER);
+  });
+
+  it("maps invalid credentials to the neutral null without an error code", () => {
+    expect(mapVerifyCredentialsResult({ status: "invalid" })).toBeNull();
+  });
+
+  it("traverses the real CredentialsRateLimited path with the bounded retry code", () => {
+    expect(() => mapVerifyCredentialsResult({ status: "rate_limited", retryAfterSeconds: 42 })).toThrowError(
+      expect.objectContaining({
+        code: "credentials_rate_limited:42",
+        retryAfterSeconds: 42,
+      }),
+    );
+  });
+
+  it("traverses the CredentialsUnavailable path with the bounded unavailable code", () => {
+    expect(() => mapVerifyCredentialsResult({ status: "unavailable", retryAfterSeconds: 30 })).toThrowError(
+      expect.objectContaining({
+        code: "temporarily_unavailable:30",
+      }),
+    );
+  });
+
+  it("throws a bounded unavailable code even when the backend omits a retry delay", () => {
+    expect(() => mapVerifyCredentialsResult({ status: "unavailable" })).toThrowError(
+      expect.objectContaining({
+        code: expect.stringMatching(/^temporarily_unavailable:\d+$/),
+      }),
+    );
   });
 });
 

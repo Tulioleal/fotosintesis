@@ -13,7 +13,27 @@ const state = {
   sessions: new Map(),
   logoutEvents: [],
   nextId: 1,
+  // Independent per-target rate-limit controls. Each target defaults to
+  // status 200 (no limiting) and can be set to 429 or 503 independently so
+  // journeys exercise the outer Auth.js wrapper and the inner credential
+  // backend separately.
+  targets: {
+    authjsAdmission: { status: 200, retryAfterSeconds: 1, detail: "Too many requests" },
+    credentialsVerification: { status: 200, retryAfterSeconds: 1, detail: "Too many requests" },
+    registration: { status: 200, retryAfterSeconds: 1, detail: "Too many requests" },
+    recovery: { status: 200, retryAfterSeconds: 1, detail: "Si el correo existe, te enviaremos instrucciones." },
+  },
 };
+
+function setTarget(target, { status, retryAfterSeconds, detail }) {
+  if (!Object.hasOwn(state.targets, target)) {
+    throw new Error(`unknown rate-limit target: ${target}`);
+  }
+  state.targets[target].status = Number(status) || 200;
+  state.targets[target].retryAfterSeconds = Math.max(1, Number(retryAfterSeconds) || 1);
+  state.targets[target].detail =
+    typeof detail === "string" && detail ? detail : "Too many requests";
+}
 
 function publicUser(user) {
   return {
@@ -40,7 +60,26 @@ function reset() {
   state.sessions.clear();
   state.logoutEvents.length = 0;
   state.nextId = 1;
+  for (const target of Object.keys(state.targets)) {
+    state.targets[target].status = 200;
+    state.targets[target].retryAfterSeconds = 1;
+  }
   seed();
+}
+
+// Returns true when the target is limiting (the response is already sent);
+// false means the handler should proceed normally.
+function applyTarget(res, target) {
+  const t = state.targets[target];
+  if (t.status === 429) {
+    sendJson(res, 429, { detail: t.detail }, t.retryAfterSeconds);
+    return true;
+  }
+  if (t.status === 503) {
+    sendJson(res, 503, { detail: "Temporarily unavailable" }, t.retryAfterSeconds);
+    return true;
+  }
+  return false;
 }
 
 function createSession(userId) {
@@ -78,9 +117,13 @@ function setCorsHeaders(req, res) {
   }
 }
 
-function sendJson(res, status, payload) {
+function sendJson(res, status, payload, retryAfterSeconds) {
   const body = JSON.stringify(payload);
-  res.writeHead(status, { "Content-Type": "application/json" });
+  const headers = { "Content-Type": "application/json" };
+  if (retryAfterSeconds !== undefined) {
+    headers["Retry-After"] = String(retryAfterSeconds);
+  }
+  res.writeHead(status, headers);
   res.end(body);
 }
 
@@ -110,6 +153,16 @@ async function handle(req, res, url) {
     return sendJson(res, 200, { status: "ok" });
   }
 
+  if (req.method === "POST" && pathname === "/__test__/ratelimit") {
+    const body = await readBody(req);
+    const { target } = body;
+    if (!target || !Object.hasOwn(state.targets, target)) {
+      return sendJson(res, 400, { detail: "a valid target is required" });
+    }
+    setTarget(target, body);
+    return sendJson(res, 200, { status: "ok", target, ...state.targets[target] });
+  }
+
   if (req.method === "GET" && pathname === "/__test__/state") {
     return sendJson(res, 200, {
       seededEmail: SEED_EMAIL,
@@ -121,7 +174,15 @@ async function handle(req, res, url) {
     });
   }
 
+  if (req.method === "POST" && pathname === "/auth/admit/authjs_post") {
+    const limited = applyTarget(res, "authjsAdmission");
+    if (limited) return limited;
+    return sendJson(res, 200, { status: "ok" });
+  }
+
   if (req.method === "POST" && pathname === "/auth/register") {
+    const limited = applyTarget(res, "registration");
+    if (limited) return limited;
     const body = await readBody(req);
     const email = typeof body.email === "string" ? body.email : "";
     const password = typeof body.password === "string" ? body.password : "";
@@ -144,6 +205,8 @@ async function handle(req, res, url) {
   }
 
   if (req.method === "POST" && pathname === "/auth/credentials/verify") {
+    const limited = applyTarget(res, "credentialsVerification");
+    if (limited) return limited;
     const body = await readBody(req);
     const user = state.users.get(String(body.email ?? ""));
     if (!user || user.password !== String(body.password ?? "")) {
@@ -174,6 +237,8 @@ async function handle(req, res, url) {
   }
 
   if (req.method === "POST" && pathname === "/auth/recovery/request") {
+    const limited = applyTarget(res, "recovery");
+    if (limited) return limited;
     return sendJson(res, 200, {
       status: "ok",
       message: "Si el correo existe, te enviaremos instrucciones.",

@@ -536,6 +536,20 @@ class TestTelemetrySafety:
             "0.0", "2", "2.0", "3", "3.0", "4", "4.0", "6", "6.0", "8", "8.0", "12", "12.0", "17", "17.0",
         }
         closed_label_values.update(item.value for item in JobFailureCategory)
+        # Authentication limiter metric uses only closed endpoint-category and
+        # outcome labels; no account, source, digest, or count values may appear.
+        closed_label_values.update(
+            {
+                "registration",
+                "credential_verification",
+                "recovery_initiation",
+                "recovery_confirmation",
+                "authjs_post",
+                "allowed",
+                "rejected",
+                "storage_failure",
+            }
+        )
         import re
         for value in re.findall(r'"([^"]*)"', text):
             assert value in closed_label_values, value

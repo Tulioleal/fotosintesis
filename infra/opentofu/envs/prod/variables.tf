@@ -111,6 +111,8 @@ variable "secret_ids" {
   default = [
     "fotosintesis-database-url",
     "fotosintesis-auth-secret",
+    "fotosintesis-auth-limiter-hmac-secret",
+    "fotosintesis-auth-limiter-assertion-secret",
     "fotosintesis-openai-api-key",
     "fotosintesis-gemini-api-key",
   ]

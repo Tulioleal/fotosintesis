@@ -3,8 +3,18 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AUTHENTICATION_ERROR, createBrowserSession, createJwtToken } from "../auth";
 
+const boundaryMocks = vi.hoisted(() => {
+  class MockAuthError extends Error {}
+  return {
+    CredentialsSignin: class extends MockAuthError {
+      code = "credentials";
+    },
+  };
+});
+
 vi.mock("next-auth", () => ({
   default: () => ({ handlers: {}, signIn: () => {}, signOut: () => {}, auth: () => {} }),
+  CredentialsSignin: boundaryMocks.CredentialsSignin,
 }));
 
 vi.mock("next-auth/providers/credentials", () => ({

@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass, field
 
 from app.jobs.schemas import JobFailureCategory, JobStatus, JobType
+from app.limiter.policy import EndpointCategory, LimiterOutcome
 
 JOB_DURATION_BUCKETS: tuple[float, ...] = (
     0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 300.0,
@@ -28,6 +29,8 @@ _RECOVERY_OUTCOMES = frozenset({"lease_expired", "attempts_exhausted"})
 _BACKLOG_STATUSES = frozenset({JobStatus.pending.value, JobStatus.processing.value})
 _JOB_STATUSES = frozenset(item.value for item in JobStatus)
 _SCHEDULE_OUTCOMES = frozenset({"created", "reused"})
+_LIMITER_CATEGORIES = frozenset(item.value for item in EndpointCategory)
+_LIMITER_OUTCOMES = frozenset(item.value for item in LimiterOutcome)
 
 
 def _require_closed_label(*, name: str, value: str, allowed: frozenset[str]) -> None:
@@ -143,6 +146,7 @@ class MetricsRegistry:
     job_oldest_eligible_age_seconds: float | None = None
     worker_last_successful_poll_timestamp_seconds: float | None = None
     request_latency_seconds_max_samples: int = 10_000
+    limiter_outcomes: dict[tuple[str, str], int] = field(default_factory=dict)
 
     def record_job_claim(self, *, job_type: str) -> None:
         _require_closed_label(name="job_type", value=job_type, allowed=_JOB_TYPES)
@@ -298,6 +302,18 @@ class MetricsRegistry:
         self.worker_last_successful_poll_timestamp_seconds = (
             timestamp_seconds if timestamp_seconds is not None else time.time()
         )
+
+    def record_limiter_outcome(
+        self,
+        *,
+        category: EndpointCategory,
+        outcome: LimiterOutcome,
+    ) -> None:
+        """Record one limiter decision with only closed labels."""
+        _require_closed_label(name="category", value=category.value, allowed=_LIMITER_CATEGORIES)
+        _require_closed_label(name="outcome", value=outcome.value, allowed=_LIMITER_OUTCOMES)
+        key = (category.value, outcome.value)
+        self.limiter_outcomes[key] = self.limiter_outcomes.get(key, 0) + 1
 
     def record_request(self, latency_seconds: float, failed: bool) -> None:
         self.requests_total += 1
@@ -469,6 +485,16 @@ class MetricsRegistry:
             else "fotosintesis_worker_last_successful_poll_timestamp_seconds 0"
         )
 
+        sorted_limiter_outcomes = sorted(self.limiter_outcomes.items())
+        limiter_outcome_lines = [
+            (
+                "fotosintesis_limiter_outcomes_total"
+                f'{{category="{_escape(category)}",'
+                f'outcome="{_escape(outcome)}"}} {count}'
+            )
+            for (category, outcome), count in sorted_limiter_outcomes
+        ]
+
         return "\n".join(
             [
                 "# HELP fotosintesis_requests_total Total HTTP requests handled.",
@@ -542,6 +568,9 @@ class MetricsRegistry:
                 *efficacy_count_lines,
                 "# HELP fotosintesis_enrichment_efficacy_* Bounded coverage and search-count distributions per terminal enrichment outcome.",
                 *efficacy_histogram_lines,
+                "# HELP fotosintesis_limiter_outcomes_total Authentication limiter decisions by closed category and outcome.",
+                "# TYPE fotosintesis_limiter_outcomes_total counter",
+                *limiter_outcome_lines,
                 "",
             ]
         )

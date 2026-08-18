@@ -78,6 +78,86 @@ describe("LoginForm", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows generic retry timing and prevents resubmission when the credentials flow is rate limited", async () => {
+    mocks.signIn.mockResolvedValue({
+      code: "credentials_rate_limited:37",
+      error: "CredentialsSignin",
+    });
+    render(<LoginForm />);
+
+    fireEvent.change(screen.getByLabelText("Correo"), {
+      target: { value: "tuli@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ingresar" }));
+
+    expect(
+      await screen.findByText(
+        "Intentá de nuevo en unos minutos. Demasiados intentos desde esta conexión.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ingresar" })).toBeDisabled();
+    expect(screen.getByLabelText("Correo")).toBeDisabled();
+    expect(screen.getByLabelText("Contraseña")).toBeDisabled();
+  });
+
+  it("shows generic temporary-unavailability feedback without claiming a limit was reached", async () => {
+    mocks.signIn.mockResolvedValue({
+      code: "temporarily_unavailable:5",
+      error: "CredentialsSignin",
+    });
+    render(<LoginForm />);
+
+    fireEvent.change(screen.getByLabelText("Correo"), {
+      target: { value: "tuli@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ingresar" }));
+
+    expect(
+      await screen.findByText(
+        "El servicio de inicio de sesión está temporalmente no disponible. Intentá de nuevo en unos minutos.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Demasiados intentos desde esta conexión/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ingresar" })).toBeDisabled();
+    expect(screen.getByLabelText("Contraseña")).toBeDisabled();
+  });
+
+  it("does not treat an unrelated string as a limiter code", async () => {
+    mocks.signIn.mockResolvedValue({
+      code: "credentials_rate_limited_some_other_thing",
+      error: "CredentialsSignin",
+    });
+    render(<LoginForm />);
+
+    fireEvent.change(screen.getByLabelText("Correo"), {
+      target: { value: "tuli@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), {
+      target: { value: "secret123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ingresar" }));
+
+    // A malformed or unrelated code must fall back to the neutral invalid
+    // credentials message and never start a rate-limit countdown.
+    expect(
+      await screen.findByText(
+        "No pudimos iniciar sesión con esos datos. Revisalos e intentá otra vez.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Demasiados intentos desde esta conexión/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ingresar" })).toBeEnabled();
+  });
+
   it("exposes the existing auth links for navigation", () => {
     render(<LoginForm />);
 

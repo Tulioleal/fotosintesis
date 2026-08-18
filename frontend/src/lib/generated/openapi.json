@@ -1559,6 +1559,20 @@
         "title": "PublicAuthUser",
         "type": "object"
       },
+      "RateLimitResponse": {
+        "description": "Bounded authentication rate-limit response body.\n\nThe JSON body contains only a generic ``detail``; the whole-second retry\ndelay is carried by the ``Retry-After`` response header declared on the\nrelevant routes. Never include account, source, or storage details.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "RateLimitResponse",
+        "type": "object"
+      },
       "ReadJobError": {
         "properties": {
           "category": {
@@ -2221,9 +2235,151 @@
         ]
       }
     },
+    "/auth/admit/authjs_post": {
+      "post": {
+        "description": "Narrow internal admission endpoint for relevant unauthenticated Auth.js POST operations.\n\nThe frontend Auth.js boundary calls this endpoint (protected by the same\nsigned source assertion used by every other limiter header) before\ninvoking Auth.js work. A rejected or storage-failed outcome is translated\ninto the bounded retry contract so the distributed ``authjs_post`` policy\nhas a real runtime call site and session reads and authenticated logout\nremain unchanged.",
+        "operationId": "admit_authjs_post_auth_admit_authjs_post_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Admit Authjs Post Auth Admit Authjs Post Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Admit Authjs Post",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/auth/credentials/verify": {
       "post": {
         "operationId": "verify_credentials_auth_credentials_verify_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2254,6 +2410,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Verify Credentials",
@@ -2334,6 +2528,40 @@
     "/auth/recovery/confirm": {
       "post": {
         "operationId": "confirm_recovery_auth_recovery_confirm_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2368,6 +2596,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Confirm Recovery",
@@ -2379,6 +2645,40 @@
     "/auth/recovery/request": {
       "post": {
         "operationId": "request_recovery_auth_recovery_request_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2409,6 +2709,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Request Recovery",
@@ -2420,6 +2758,40 @@
     "/auth/register": {
       "post": {
         "operationId": "register_auth_register_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2450,6 +2822,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Register",
