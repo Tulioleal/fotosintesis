@@ -10,6 +10,7 @@ export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type RegisterResponse = components["schemas"]["RegisterResponse"];
 export type RecoveryRequest = components["schemas"]["RecoveryRequest"];
 export type RecoveryResponse = components["schemas"]["RecoveryResponse"];
+export type PublicAuthUser = components["schemas"]["PublicAuthUser"];
 export type HomeSummaryResponse = components["schemas"]["HomeSummaryResponse"];
 export type GardenPlantCard = components["schemas"]["GardenPlantCard"];
 export type GardenPlant = operations["get_garden_plant_garden__garden_id__get"]["responses"][200]["content"]["application/json"];
@@ -96,6 +97,16 @@ export const apiClient = {
       throw new Error(`Home summary request failed with status ${response.status}`);
     }
     return response.json() as Promise<HomeSummaryResponse>;
+  },
+  getCurrentUser() {
+    return frontendRequest<PublicAuthUser>("/api/auth/me");
+  },
+  updateTimezone(timezone: string | null) {
+    return frontendRequest<PublicAuthUser>("/api/auth/me/timezone", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timezone }),
+    });
   },
   listGardenPlants(search = "") {
     const params = new URLSearchParams();

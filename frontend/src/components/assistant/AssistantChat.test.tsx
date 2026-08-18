@@ -41,6 +41,7 @@ describe("AssistantChat", () => {
         due_at: "2026-06-01T10:30:00Z",
         recurrence: "weekly",
         suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+        timezone: "America/Argentina/Buenos_Aires",
       },
       tool_failures: [],
     });
@@ -81,6 +82,7 @@ describe("AssistantChat", () => {
       time: "10:30",
       recurrence: "weekly",
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+      timezone: "America/Argentina/Buenos_Aires",
     });
     expect(await screen.findByRole("button", { name: "Recordatorio creado" })).toBeDisabled();
   });

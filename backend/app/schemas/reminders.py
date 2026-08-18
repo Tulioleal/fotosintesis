@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field, field_validator
 
 from app.schemas.common import ApiSchema
+from app.scheduling.timezone import resolve_timezone
 
 
 class ReminderStatus(str, Enum):
@@ -30,6 +31,7 @@ class ReminderBase(ApiSchema):
     time: Time
     recurrence: ReminderRecurrence = ReminderRecurrence.none
     suggestion_justification: str | None = Field(default=None, max_length=1000)
+    timezone: str | None = None
 
     @field_validator("action")
     @classmethod
@@ -47,6 +49,16 @@ class ReminderBase(ApiSchema):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        zone = resolve_timezone(value)
+        if zone is None:
+            raise ValueError("Provide a valid IANA timezone.")
+        return value.strip()
+
 
 class ReminderCreate(ReminderBase):
     pass
@@ -59,6 +71,7 @@ class ReminderUpdate(ApiSchema):
     time: Time | None = None
     recurrence: ReminderRecurrence | None = None
     suggestion_justification: str | None = Field(default=None, max_length=1000)
+    timezone: str | None = None
 
     @field_validator("action")
     @classmethod
@@ -70,6 +83,16 @@ class ReminderUpdate(ApiSchema):
             raise ValueError("Specify a care action.")
         return stripped
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        zone = resolve_timezone(value)
+        if zone is None:
+            raise ValueError("Provide a valid IANA timezone.")
+        return value.strip()
+
 
 class ReminderDto(ApiSchema):
     id: UUID
@@ -80,6 +103,7 @@ class ReminderDto(ApiSchema):
     recurrence: ReminderRecurrence
     status: ReminderStatus
     suggestion_justification: str | None = None
+    timezone: str | None = None
     next_occurrence_at: datetime | None = None
 
 

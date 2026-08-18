@@ -136,6 +136,7 @@ export function AssistantChat() {
         time: suggestion.due_at.slice(11, 16),
         recurrence: suggestion.recurrence,
         suggestion_justification: suggestion.suggestion_justification,
+        timezone: suggestion.timezone ?? null,
       });
       setMessages((current) =>
         current.map((item, index) =>
@@ -315,7 +316,10 @@ export function AssistantChat() {
                     description={
                       <>
                         {item.reminderSuggestion.plant_name} &middot;{" "}
-                        {formatDateTime(item.reminderSuggestion.due_at)}{" "}
+                        {formatDateTime(
+                          item.reminderSuggestion.due_at,
+                          item.reminderSuggestion.timezone,
+                        )}{" "}
                         &middot;{" "}
                         {recurrenceLabels[item.reminderSuggestion.recurrence]}
                       </>
@@ -457,9 +461,10 @@ export function AssistantMessageContent({
   return <span className={styles.messageContent}>{content}</span>;
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, timezone?: string | null) {
   return new Intl.DateTimeFormat("es-AR", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: timezone || undefined,
   }).format(new Date(value));
 }

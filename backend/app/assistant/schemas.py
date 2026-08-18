@@ -47,6 +47,7 @@ class AssistantReminderSuggestion(ApiSchema):
     due_at: datetime
     recurrence: ReminderRecurrence
     suggestion_justification: str
+    timezone: str | None = None
 
 
 class AssistantChatRequest(ApiSchema):

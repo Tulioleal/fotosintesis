@@ -205,6 +205,7 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
                 "due_at": due_at,
                 "recurrence": recurrence,
                 "suggestion_justification": justification,
+                "timezone": state.get("user_timezone"),
             },
             **rendered,
         }
@@ -215,6 +216,7 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
         due_at=due_at,
         recurrence=recurrence,
         justification="Created by explicit request in the assistant.",
+        timezone=state.get("user_timezone"),
     )
     if not result.ok:
         rendered = await owner._generate_fallback_response(

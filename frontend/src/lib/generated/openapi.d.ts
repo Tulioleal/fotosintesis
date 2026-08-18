@@ -82,6 +82,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Current Profile */
+        get: operations["get_current_profile_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me/timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Timezone */
+        patch: operations["update_timezone_auth_me_timezone_patch"];
+        trace?: never;
+    };
     "/auth/recovery/confirm": {
         parameters: {
             query?: never;
@@ -519,6 +553,8 @@ export interface components {
             recurrence: components["schemas"]["ReminderRecurrence"];
             /** Suggestion Justification */
             suggestion_justification: string;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** AssistantRetryableError */
         AssistantRetryableError: {
@@ -996,6 +1032,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Timezone */
+            timezone?: string | null;
         };
         /**
          * RateLimitResponse
@@ -1104,6 +1142,8 @@ export interface components {
              * Format: time
              */
             time: string;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** ReminderDeleteResponse */
         ReminderDeleteResponse: {
@@ -1137,6 +1177,8 @@ export interface components {
             status: components["schemas"]["ReminderStatus"];
             /** Suggestion Justification */
             suggestion_justification?: string | null;
+            /** Timezone */
+            timezone?: string | null;
         };
         /**
          * ReminderRecurrence
@@ -1161,6 +1203,8 @@ export interface components {
             suggestion_justification?: string | null;
             /** Time */
             time?: string | null;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** TaxonomyCandidate */
         TaxonomyCandidate: {
@@ -1200,6 +1244,11 @@ export interface components {
             validation_status: components["schemas"]["ValidationStatus"];
             /** Visible Traits */
             visible_traits?: string[];
+        };
+        /** TimezoneUpdateRequest */
+        TimezoneUpdateRequest: {
+            /** Timezone */
+            timezone?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1397,6 +1446,76 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_profile_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAuthUser"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_timezone_auth_me_timezone_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TimezoneUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAuthUser"];
                 };
             };
             /** @description Validation Error */

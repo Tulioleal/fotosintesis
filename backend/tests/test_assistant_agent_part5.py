@@ -507,6 +507,7 @@ async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
             user_id: UUID,
             message: str,
             plant_hint: str | None,
+            user_timezone: str | None = None,
             plant_binomial_name: str | None = None,
             plant_scientific_name: str | None = None,
             canonical_species_key: str | None = None,

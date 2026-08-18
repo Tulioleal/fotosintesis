@@ -2,10 +2,12 @@ from uuid import UUID
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assistant.graph import AssistantGraph, _diagnostics, display_plant_name, operational_plant_name
 from app.assistant.repository import AssistantRepository
+from app.auth.tables import users
 from app.assistant.schemas import (
     DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
     AssistantChatRequest,
@@ -36,6 +38,10 @@ class AssistantService:
         self.job_repo = JobRepository(session)
         self.tools = AssistantTools(self.repository, KnowledgeRepository(session))
         self.graph = AssistantGraph(self.tools)
+        self._session = session
+
+    async def _user_timezone(self, user_id: UUID) -> str | None:
+        return await self._session.scalar(select(users.c.timezone).where(users.c.id == user_id))
 
     async def chat(
         self, *, user_id: UUID, payload: AssistantChatRequest
@@ -95,6 +101,7 @@ class AssistantService:
             user_id=user_id,
             message=payload.message,
             plant_hint=payload.plant,
+            user_timezone=await self._user_timezone(user_id),
             plant_binomial_name=payload.plant_binomial_name,
             plant_scientific_name=payload.plant_scientific_name,
             canonical_species_key=(

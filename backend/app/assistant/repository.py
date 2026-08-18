@@ -15,6 +15,7 @@ from app.auth.tables import (
     reminders,
 )
 from app.db.repository import RepositoryBase
+from app.scheduling.timezone import local_datetime_to_utc, resolve_timezone
 
 
 class AssistantRepository(RepositoryBase):
@@ -120,6 +121,7 @@ class AssistantRepository(RepositoryBase):
         due_at: datetime,
         recurrence: str | None,
         justification: str | None,
+        timezone: str | None = None,
     ) -> UUID:
         plant = (
             await self.session.execute(
@@ -133,15 +135,22 @@ class AssistantRepository(RepositoryBase):
             raise ValueError("The selected plant does not exist in your garden.")
 
         reminder_id = uuid4()
+        zone = resolve_timezone(timezone)
+        due_at_utc = (
+            local_datetime_to_utc(due_at.date(), due_at.time(), zone)
+            if zone is not None
+            else due_at
+        )
         await self.session.execute(
             insert(reminders).values(
                 id=reminder_id,
                 user_id=user_id,
                 garden_plant_id=garden_plant_id,
                 action=action,
-                due_at=due_at,
+                due_at=due_at_utc,
                 recurrence=recurrence,
                 suggestion_justification=justification,
+                timezone=timezone,
             )
         )
         await self.session.execute(

@@ -33,6 +33,7 @@ def _user_from_row(row) -> AuthUser:
         email=row.email,
         password_hash=row.password_hash,
         email_verified=row.email_verified,
+        timezone=row.timezone,
         created_at=_utc(row.created_at),
         updated_at=_utc(row.updated_at),
     )
@@ -168,6 +169,15 @@ class DatabaseAuthRepository(RepositoryBase):
             .values(invalidated_at=now, updated_at=now)
         )
         await self.session.commit()
+
+    async def update_timezone(self, user_id: UUID, tz: str | None) -> AuthUser | None:
+        now = datetime.now(timezone.utc)
+        await self.session.execute(
+            update(users).where(users.c.id == user_id).values(timezone=tz, updated_at=now)
+        )
+        await self.session.commit()
+        row = (await self.session.execute(select(users).where(users.c.id == user_id))).first()
+        return _user_from_row(row) if row else None
 
     async def create_recovery_token(self, email: str, ttl: timedelta) -> RecoveryToken:
         user_row = (

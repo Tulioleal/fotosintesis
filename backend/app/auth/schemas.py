@@ -3,12 +3,29 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.scheduling.timezone import resolve_timezone
+
 
 class PublicAuthUser(BaseModel):
     id: UUID
     name: str
     email: EmailStr
     email_verified: bool
+    timezone: str | None = None
+
+
+class TimezoneUpdateRequest(BaseModel):
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        zone = resolve_timezone(value)
+        if zone is None:
+            raise ValueError("Provide a valid IANA timezone.")
+        return value.strip()
 
 
 class RegisterRequest(BaseModel):

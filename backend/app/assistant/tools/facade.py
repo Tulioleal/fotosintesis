@@ -187,6 +187,7 @@ class AssistantTools:
         due_at: datetime,
         recurrence: str | None,
         justification: str | None,
+        timezone: str | None = None,
     ) -> ToolResult:
         try:
             reminder_id = await self.repository.create_reminder(
@@ -196,6 +197,7 @@ class AssistantTools:
                 due_at=due_at,
                 recurrence=recurrence,
                 justification=justification,
+                timezone=timezone,
             )
         except Exception as exc:
             return ToolResult(ok=False, error=f"reminder_create failed: {exc}")

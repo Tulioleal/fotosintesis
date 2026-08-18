@@ -12,6 +12,7 @@ users = sa.Table(
     sa.Column("email", sa.String(length=320), nullable=False, unique=True, index=True),
     sa.Column("email_verified", sa.Boolean(), nullable=False, server_default=sa.false()),
     sa.Column("password_hash", sa.Text(), nullable=True),
+    sa.Column("timezone", sa.String(length=80), nullable=True),
     sa.Column("image", sa.Text(), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -335,6 +336,7 @@ reminders = sa.Table(
     sa.Column("recurrence", sa.String(length=80), nullable=True),
     sa.Column("status", sa.String(length=40), nullable=False, server_default="pending"),
     sa.Column("suggestion_justification", sa.Text(), nullable=True),
+    sa.Column("timezone", sa.String(length=80), nullable=True),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
 )
 

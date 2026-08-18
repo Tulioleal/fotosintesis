@@ -8,10 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
 from app.db.session import get_async_session
-from app.reminders.repository import ReminderRepository
+from app.reminders.repository import (
+    MissingTimezoneError,
+    ReminderRepository,
+)
 from app.schemas.reminders import ReminderCreate, ReminderDeleteResponse, ReminderDto, ReminderUpdate
+from app.scheduling.timezone import (
+    InvalidTimezoneError,
+    NonexistentLocalTimeError,
+    local_datetime_to_utc,
+    resolve_timezone,
+)
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
+
+
+def _scheduling_error(status_code: int, error: Exception) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=str(error))
 
 
 @router.get("", response_model=list[ReminderDto])
@@ -31,8 +44,17 @@ async def create_reminder(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> ReminderDto:
-    _ensure_future_due(payload)
-    reminder = await ReminderRepository(session).create_reminder(user_id=user.id, payload=payload)
+    try:
+        _ensure_future_due(payload, user)
+        reminder = await ReminderRepository(session).create_reminder(
+            user_id=user.id, payload=payload
+        )
+    except MissingTimezoneError as error:
+        raise _scheduling_error(422, error)
+    except NonexistentLocalTimeError as error:
+        raise _scheduling_error(422, error)
+    except InvalidTimezoneError as error:
+        raise _scheduling_error(422, error)
     if reminder is None:
         raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     return reminder
@@ -45,11 +67,18 @@ async def update_reminder(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> ReminderDto:
-    if payload.date is not None or payload.time is not None:
-        _ensure_future_due(payload)
-    reminder = await ReminderRepository(session).update_reminder(
-        user_id=user.id, reminder_id=reminder_id, payload=payload
-    )
+    try:
+        if payload.date is not None or payload.time is not None:
+            _ensure_future_due(payload, user)
+        reminder = await ReminderRepository(session).update_reminder(
+            user_id=user.id, reminder_id=reminder_id, payload=payload
+        )
+    except MissingTimezoneError as error:
+        raise _scheduling_error(422, error)
+    except NonexistentLocalTimeError as error:
+        raise _scheduling_error(422, error)
+    except InvalidTimezoneError as error:
+        raise _scheduling_error(422, error)
     if reminder is None:
         raise HTTPException(status_code=404, detail="Reminder not found.")
     return reminder
@@ -81,9 +110,15 @@ async def delete_reminder(
     return ReminderDeleteResponse(status="deleted")
 
 
-def _ensure_future_due(payload: ReminderCreate | ReminderUpdate) -> None:
+def _ensure_future_due(payload: ReminderCreate | ReminderUpdate, user: AuthUser) -> None:
     if payload.date is None or payload.time is None:
         return
-    due_at = datetime.combine(payload.date, payload.time, tzinfo=timezone.utc)
+    zone_key = payload.timezone or user.timezone
+    zone = resolve_timezone(zone_key)
+    if zone is None:
+        raise MissingTimezoneError(
+            "Provide a timezone on your account or on this reminder to schedule it."
+        )
+    due_at = local_datetime_to_utc(payload.date, payload.time, zone)
     if due_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=422, detail="The date and time must be in the future.")

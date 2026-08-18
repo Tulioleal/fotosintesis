@@ -36,16 +36,19 @@ const reminder = {
   recurrence: "weekly" as const,
   status: "pending" as const,
   suggestion_justification: null,
+  timezone: "America/Argentina/Buenos_Aires",
 };
 
 const mocks = vi.hoisted(() => ({
   completeReminder: vi.fn(),
   createReminder: vi.fn(),
   deleteReminder: vi.fn(),
+  getCurrentUser: vi.fn(),
   getParam: vi.fn(),
   listGardenPlants: vi.fn(),
   listReminders: vi.fn(),
   updateReminder: vi.fn(),
+  updateTimezone: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -60,9 +63,11 @@ vi.mock("@/lib/api/client", async (importOriginal) => {
       completeReminder: mocks.completeReminder,
       createReminder: mocks.createReminder,
       deleteReminder: mocks.deleteReminder,
+      getCurrentUser: mocks.getCurrentUser,
       listGardenPlants: mocks.listGardenPlants,
       listReminders: mocks.listReminders,
       updateReminder: mocks.updateReminder,
+      updateTimezone: mocks.updateTimezone,
     },
   };
 });
@@ -72,12 +77,21 @@ describe("RemindersManager", () => {
     mocks.completeReminder.mockReset();
     mocks.createReminder.mockReset();
     mocks.deleteReminder.mockReset();
+    mocks.getCurrentUser.mockReset();
     mocks.getParam.mockReset();
     mocks.listGardenPlants.mockReset();
     mocks.listReminders.mockReset();
     mocks.updateReminder.mockReset();
+    mocks.updateTimezone.mockReset();
 
     mocks.getParam.mockReturnValue(null);
+    mocks.getCurrentUser.mockResolvedValue({
+      id: "user-1",
+      name: "Ada",
+      email: "ada@example.com",
+      email_verified: true,
+      timezone: "America/Argentina/Buenos_Aires",
+    });
     mocks.listGardenPlants.mockResolvedValue([plant]);
     mocks.listReminders.mockResolvedValue([reminder]);
     mocks.createReminder.mockResolvedValue(reminder);
@@ -142,6 +156,7 @@ describe("RemindersManager", () => {
         recurrence: "weekly",
         suggestion_justification: null,
         time: "09:00",
+        timezone: "America/Argentina/Buenos_Aires",
       });
     });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reminders", "list"] });
@@ -166,11 +181,29 @@ describe("RemindersManager", () => {
         garden_plant_id: "garden-1",
         recurrence: "weekly",
         suggestion_justification: null,
-        time: "09:00",
+        time: "06:00",
+        timezone: "America/Argentina/Buenos_Aires",
       });
     });
     expect(await screen.findByText("Recordatorio actualizado.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Guardar recordatorio" })).toBeInTheDocument();
+  });
+
+  it("prefills the edit form with the reminder's local date and time, not UTC", async () => {
+    mocks.listReminders.mockResolvedValue([
+      {
+        ...reminder,
+        due_at: "2999-01-10T09:00:00Z",
+        timezone: "America/Argentina/Buenos_Aires",
+      },
+    ]);
+    renderWithQueryClient(<RemindersManager />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Abrir acciones del recordatorio" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Editar" }));
+
+    expect(screen.getByLabelText(/^Fecha/)).toHaveValue("2999-01-10");
+    expect(screen.getByLabelText(/^Hora/)).toHaveValue("06:00");
   });
 
   it("completes and deletes reminders from the popover", async () => {
@@ -208,6 +241,7 @@ describe("RemindersManager", () => {
         recurrence: "weekly",
         suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
         time: "09:00",
+        timezone: "America/Argentina/Buenos_Aires",
       });
     });
   });
@@ -229,6 +263,7 @@ describe("RemindersManager", () => {
         recurrence: "weekly",
         suggestion_justification: expect.stringContaining("Basado en el perfil de Helecho"),
         time: "09:00",
+        timezone: "America/Argentina/Buenos_Aires",
       });
     });
   });

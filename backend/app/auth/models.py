@@ -12,6 +12,7 @@ class AuthUser:
     email_verified: bool
     created_at: datetime
     updated_at: datetime
+    timezone: str | None = None
 
 
 @dataclass

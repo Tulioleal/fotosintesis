@@ -8,6 +8,7 @@ from app.auth.dependencies import (
     clear_session_cookie,
     get_auth_repository,
     get_current_session,
+    get_current_user,
     set_session_cookie,
 )
 from app.auth.models import AuthUser
@@ -22,6 +23,7 @@ from app.auth.schemas import (
     RecoveryResponse,
     RegisterRequest,
     RegisterResponse,
+    TimezoneUpdateRequest,
 )
 from app.core.settings import get_settings
 from app.limiter.dependencies import get_limiter_service, validate_source_assertion
@@ -44,6 +46,7 @@ def to_public_user(user: AuthUser) -> PublicAuthUser:
         name=user.name,
         email=user.email,
         email_verified=user.email_verified,
+        timezone=user.timezone,
     )
 
 
@@ -145,6 +148,25 @@ async def logout(
 @router.get("/session")
 async def validate_session(_current: tuple = Depends(get_current_session)) -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/me", response_model=PublicAuthUser)
+async def get_current_profile(
+    user: AuthUser = Depends(get_current_user),
+) -> PublicAuthUser:
+    return to_public_user(user)
+
+
+@router.patch("/me/timezone", response_model=PublicAuthUser)
+async def update_timezone(
+    payload: TimezoneUpdateRequest,
+    repository: AuthRepo,
+    user: AuthUser = Depends(get_current_user),
+) -> PublicAuthUser:
+    updated = await repository.update_timezone(user.id, payload.timezone)
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return to_public_user(updated)
 
 
 @router.post("/recovery/request", response_model=RecoveryResponse, responses=RATE_LIMIT_RESPONSES)

@@ -42,6 +42,7 @@ class FallbackResponseDraft:
 
 class AssistantState(TypedDict, total=False):
     user_id: UUID
+    user_timezone: str | None
     message: str
     plant_hint: str | None
     plant_binomial_name: str | None

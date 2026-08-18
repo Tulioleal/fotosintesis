@@ -23,6 +23,7 @@ class AssistantGraph:
         user_id: UUID,
         message: str,
         plant_hint: str | None,
+        user_timezone: str | None = None,
         plant_binomial_name: str | None = None,
         plant_scientific_name: str | None = None,
         canonical_species_key: str | None = None,
@@ -30,6 +31,7 @@ class AssistantGraph:
     ) -> AssistantState:
         state: AssistantState = {
             "user_id": user_id,
+            "user_timezone": user_timezone,
             "message": message.strip(),
             "plant_hint": _normalize_plant_name(plant_hint),
             "plant_binomial_name": _normalize_plant_name(plant_binomial_name),

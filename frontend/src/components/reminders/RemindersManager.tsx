@@ -11,6 +11,7 @@ import {
   type ReminderCreate,
 } from "@/lib/api/client";
 import { resolveImageUrl } from "@/lib/images";
+import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 import {
   BellIcon,
   DotsThreeVerticalIcon,
@@ -36,6 +37,7 @@ type FormState = {
   date: string;
   time: string;
   recurrence: ReminderCreate["recurrence"];
+  timezone: string;
 };
 
 type FormErrors = Partial<Record<keyof FormState, string>>;
@@ -79,19 +81,29 @@ function TaskIcon() {
   );
 }
 
-function formatReminderDate(iso: string): { primary: string; meta?: string } {
+function formatReminderDate(iso: string, timezone?: string | null): { primary: string; meta?: string } {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
     return { primary: iso };
   }
+  const timeZone = timezone || undefined;
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
+  const nowInTz = new Date(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || undefined,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now),
+  );
+  const tomorrow = new Date(nowInTz);
+  tomorrow.setDate(nowInTz.getDate() + 1);
   const sameDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate();
   const time = date.toLocaleTimeString("es-AR", {
+    timeZone,
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -99,16 +111,43 @@ function formatReminderDate(iso: string): { primary: string; meta?: string } {
     return { primary: `Mañana, ${time}` };
   }
   const dayMonth = date
-    .toLocaleDateString("es-AR", { day: "2-digit", month: "short" })
+    .toLocaleDateString("es-AR", { timeZone, day: "2-digit", month: "short" })
     .replace(".", "");
   return { primary: `${dayMonth}, ${time}` };
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, timezone?: string | null) {
   return new Intl.DateTimeFormat("es-AR", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: timezone || undefined,
   }).format(new Date(value));
+}
+
+function toLocalDateInput(value: string, timezone?: string | null): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone || undefined,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function toLocalTimeInput(value: string, timezone?: string | null): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(11, 16);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone || undefined,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("hour")}:${get("minute")}`;
 }
 
 export function RemindersManager() {
@@ -121,6 +160,7 @@ export function RemindersManager() {
     date: "",
     time: "",
     recurrence: "none",
+    timezone: "",
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [editing, setEditing] = useState<Reminder | null>(null);
@@ -128,6 +168,8 @@ export function RemindersManager() {
   const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
   const [suggestionsVisible, setSuggestionsVisible] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [userTimezone, setUserTimezone] = useState<string>("");
+  const [timezoneNotice, setTimezoneNotice] = useState<string | null>(null);
 
   const garden = useQuery({
     queryKey: ["garden", "list", ""],
@@ -136,6 +178,10 @@ export function RemindersManager() {
   const reminders = useQuery({
     queryKey: ["reminders", "list"],
     queryFn: () => apiClient.listReminders(),
+  });
+  const currentUser = useQuery({
+    queryKey: ["user", "me"],
+    queryFn: () => apiClient.getCurrentUser(),
   });
   const plants = useMemo(() => garden.data ?? [], [garden.data]);
   const plantById = useMemo(() => {
@@ -154,6 +200,12 @@ export function RemindersManager() {
       garden_plant_id: hinted?.id ?? plants[0].id,
     }));
   }, [form.garden_plant_id, plantHint, plants]);
+
+  useEffect(() => {
+    const tz = currentUser.data?.timezone ?? "";
+    setUserTimezone(tz);
+    setForm((current) => ({ ...current, timezone: current.timezone || tz }));
+  }, [currentUser.data]);
 
   const createReminder = useMutation({
     mutationFn: (payload: ReminderCreate) => apiClient.createReminder(payload),
@@ -184,7 +236,7 @@ export function RemindersManager() {
       setOpenMenuId(null);
       setNotice(
         reminder.next_occurrence_at
-          ? `Completado. Próximo recordatorio: ${formatDateTime(reminder.next_occurrence_at)}.`
+          ? `Completado. Próximo recordatorio: ${formatDateTime(reminder.next_occurrence_at, reminder.timezone)}.`
           : "Recordatorio completado.",
       );
     },
@@ -238,6 +290,7 @@ export function RemindersManager() {
       time: form.time,
       recurrence: form.recurrence,
       suggestion_justification: editing?.suggestion_justification ?? null,
+      timezone: form.timezone || userTimezone || null,
     };
     if (editing) updateReminder.mutate({ id: editing.id, payload });
     else createReminder.mutate(payload);
@@ -249,9 +302,10 @@ export function RemindersManager() {
     setForm({
       garden_plant_id: reminder.garden_plant_id,
       taskType: reminder.action,
-      date: reminder.due_at.slice(0, 10),
-      time: reminder.due_at.slice(11, 16),
+      date: toLocalDateInput(reminder.due_at, reminder.timezone),
+      time: toLocalTimeInput(reminder.due_at, reminder.timezone),
       recurrence: reminder.recurrence,
+      timezone: reminder.timezone ?? "",
     });
     setNotice(null);
   }
@@ -266,6 +320,7 @@ export function RemindersManager() {
       date: "",
       time: "",
       recurrence: "none",
+      timezone: userTimezone,
     }));
   }
 
@@ -278,6 +333,7 @@ export function RemindersManager() {
       date: "",
       time: "",
       recurrence: "none",
+      timezone: userTimezone,
     }));
   }
 
@@ -289,8 +345,26 @@ export function RemindersManager() {
       time: suggestion.time,
       recurrence: suggestion.recurrence,
       suggestion_justification: suggestion.justification,
+      timezone: suggestion.timezone || userTimezone || null,
     } satisfies ReminderCreate;
     createReminder.mutate(next);
+  }
+
+  async function saveTimezonePreference(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTimezoneNotice(null);
+    try {
+      const updated = await apiClient.updateTimezone(userTimezone || null);
+      setUserTimezone(updated.timezone ?? "");
+      setForm((current) => ({ ...current, timezone: updated.timezone ?? "" }));
+      setTimezoneNotice("Zona horaria guardada.");
+    } catch (caught) {
+      setTimezoneNotice(
+        caught instanceof ApiClientError
+          ? caught.message
+          : "No pudimos guardar la zona horaria.",
+      );
+    }
   }
 
   async function requestNotificationPermission() {
@@ -321,8 +395,8 @@ export function RemindersManager() {
   }
 
   const suggestions = useMemo(
-    () => buildSuggestions(plants, plantHint),
-    [plants, plantHint],
+    () => buildSuggestions(plants, plantHint, userTimezone),
+    [plants, plantHint, userTimezone],
   );
   const pending = createReminder.isPending || updateReminder.isPending;
   const activeCount = (reminders.data ?? []).filter(
@@ -445,6 +519,23 @@ export function RemindersManager() {
                 ) : null}
               </div>
 
+              <SelectField
+                kind="select"
+                label="Zona horaria"
+                hint="Hora local de esta recordatorio."
+                value={form.timezone}
+                onChange={(event) => setField("timezone", event.target.value)}
+                error={errors.timezone}
+                optionalLabel="opcional"
+              >
+                <option value="">Usar mi zona horaria</option>
+                {TIMEZONE_OPTIONS.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </SelectField>
+
               <div className={styles.formActions}>
                 <Button
                   type="submit"
@@ -457,6 +548,52 @@ export function RemindersManager() {
                   {submitLabel}
                 </Button>
               </div>
+            </form>
+          </Card>
+
+          <Card
+            variant="tonal"
+            padding="md"
+            className={styles.formCard}
+            aria-labelledby="timezone-preference-heading"
+          >
+            <h2 id="timezone-preference-heading" className={styles.formHeading}>
+              Mi Zona Horaria
+            </h2>
+            <p className={styles.recurrenceLabel}>
+              Se usa como zona por defecto para tus recordatorios.
+            </p>
+            <form className={styles.form} onSubmit={saveTimezonePreference} noValidate>
+              <SelectField
+                kind="select"
+                label="Zona horaria"
+                value={userTimezone}
+                onChange={(event) => setUserTimezone(event.target.value)}
+                optionalLabel="opcional"
+              >
+                <option value="">Sin definir</option>
+                {TIMEZONE_OPTIONS.map((tz) => (
+                  <option key={tz.value} value={tz.value}>
+                    {tz.label}
+                  </option>
+                ))}
+              </SelectField>
+              <div className={styles.formActions}>
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="md"
+                  fullWidth
+                  className={styles.formSubmit}
+                >
+                  Guardar zona horaria
+                </Button>
+              </div>
+              {timezoneNotice ? (
+                <p className={styles.recurrenceLabel} role="status">
+                  {timezoneNotice}
+                </p>
+              ) : null}
             </form>
           </Card>
 
@@ -656,7 +793,7 @@ function ReminderRow({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const isPending = reminder.status === "pending";
   const plantImage = resolveImageUrl(plant?.image_path ?? null);
-  const dateInfo = formatReminderDate(reminder.due_at);
+  const dateInfo = formatReminderDate(reminder.due_at, reminder.timezone);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -708,7 +845,8 @@ function ReminderRow({
         <span className={styles.listDatePrimary}>{dateInfo.primary}</span>
         {reminder.next_occurrence_at ? (
           <span className={styles.listDateMeta}>
-            Próxima: {formatReminderDate(reminder.next_occurrence_at).primary}
+            Próxima:{" "}
+            {formatReminderDate(reminder.next_occurrence_at, reminder.timezone).primary}
           </span>
         ) : null}
       </div>
@@ -823,6 +961,7 @@ function validateForm(form: FormState): FormErrors {
 function buildSuggestions(
   plants: GardenPlant[],
   plantHint: string,
+  userTimezone: string,
 ): SuggestedReminder[] {
   const selectedPlants = plantHint
     ? plants.filter(
@@ -837,6 +976,7 @@ function buildSuggestions(
     date,
     time: "09:00",
     recurrence: "weekly",
+    timezone: userTimezone || null,
     suggestion_justification:
       "Sugerido por el perfil de la planta y el contexto de Mi Jardín.",
     justification: `Basado en el perfil de ${plantLabel(plant)} y su contexto guardado. Requiere confirmación antes de crearse.`,
