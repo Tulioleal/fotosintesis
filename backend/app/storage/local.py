@@ -6,7 +6,7 @@ from app.storage.models import ObjectUpload, StoredObject
 
 
 class LocalObjectStorage(ObjectStorage):
-    def __init__(self, bucket: str, root: Path | str = "storage-data") -> None:
+    def __init__(self, bucket: str, root: Path | str = "/tmp/storage-data") -> None:
         self.bucket = bucket
         self.root = Path(root)
 

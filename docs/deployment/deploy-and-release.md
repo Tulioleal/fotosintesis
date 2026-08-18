@@ -132,6 +132,30 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
 9. **Frontend public smoke** - 60 retries against the configured
    public URL.
 
+## Hardening verification
+
+The hardening baseline is verified both before and during deployment:
+
+- **Image identity check** (`backend/scripts/check-image-runtime.sh`) runs in
+  `backend-ci.yml` after the image is built. It rejects any image that defaults
+  to UID 0 and asserts the documented `10001:10001` non-root identity.
+- **Bounded production-command smoke tests**
+  (`backend/scripts/smoke-image-commands.sh`) run the API, worker, and migration
+  commands under the image's default user with a strict timeout.
+- **Rendered-manifest policy** (`tests/deployment/test_render_hardening.py`) and
+  the Checkov manifest-policy job enumerate every regular container, init
+  container, and native sidecar in both dev and prod and fail on any missing
+  security-context, writable-volume, or CPU/memory declaration. The only
+  policy exception is the `cloud-sql-proxy` supporting container, documented in
+  `hardened-runtime.md`.
+- The deploy workflow's server-side dry-run applies every workload manifest to
+  the Kubernetes API before rollout, so the hardened security contexts and
+  resource fields are validated against the live cluster schema.
+
+The writable-path inventory, resource profiles, tuning process, and the
+rollback guarantee that the non-root and resource baseline is retained are
+documented in `hardened-runtime.md` and `rollback.md`.
+
 The `release.yml` summary step also includes the per-gate results from
 `deploy.yml` (`migration_result`, `rollout_result`,
 `required_keys_result`, `backend_smoke_result`, `frontend_smoke_result`)

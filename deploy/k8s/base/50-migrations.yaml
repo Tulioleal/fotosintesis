@@ -18,6 +18,10 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: fotosintesis-backend
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       # A native sidecar exits with the Pod after Alembic, allowing the Job to
       # reach Complete without workflow-managed deletion.
       initContainers:
@@ -35,45 +39,39 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: __PROXY_CPU_REQUEST__
+              memory: __PROXY_MEM_REQUEST__
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: __PROXY_CPU_LIMIT__
+              memory: __PROXY_MEM_LIMIT__
       containers:
         - name: migrations
           image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           command:
             - sh
             - -c
-            - |
-              python - <<'PY'
-              import socket
-              import time
-
-              deadline = time.monotonic() + 60
-              while True:
-                  try:
-                      with socket.create_connection(
-                          ("127.0.0.1", __CLOUD_SQL_PROXY_PORT__),
-                          timeout=1,
-                      ):
-                          break
-                  except OSError:
-                      if time.monotonic() >= deadline:
-                          raise SystemExit(
-                              "Cloud SQL Proxy did not become ready within 60 seconds"
-                          )
-                      time.sleep(1)
-              PY
-              exec alembic upgrade head
+            - exec /app/scripts/run-migrations.sh __CLOUD_SQL_PROXY_PORT__
           env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONPYCACHEPREFIX
+              value: /tmp/pycache
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -81,3 +79,16 @@ spec:
                   key: __DATABASE_URL_SECRET_KEY__
             - name: OBJECT_STORAGE_PROVIDER
               value: __OBJECT_STORAGE_PROVIDER__
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: __MIGRATION_CPU_REQUEST__
+              memory: __MIGRATION_MEM_REQUEST__
+            limits:
+              cpu: __MIGRATION_CPU_LIMIT__
+              memory: __MIGRATION_MEM_LIMIT__
+      volumes:
+        - name: tmp
+          emptyDir: {}

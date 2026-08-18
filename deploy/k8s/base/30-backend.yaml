@@ -20,14 +20,31 @@ spec:
         iam.gke.io/workload-identity: fotosintesis-backend
     spec:
       serviceAccountName: fotosintesis-backend
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8000
           env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONPYCACHEPREFIX
+              value: /tmp/pycache
             - name: APP_ENV
               valueFrom:
                 configMapKeyRef:
@@ -209,6 +226,16 @@ spec:
               value: "__JOBS_PRODUCER_ENABLED__"
             - name: JOBS_MAX_ATTEMPTS_DEFAULT
               value: "__JOBS_MAX_ATTEMPTS_DEFAULT__"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: __BACKEND_CPU_REQUEST__
+              memory: __BACKEND_MEM_REQUEST__
+            limits:
+              cpu: __BACKEND_CPU_LIMIT__
+              memory: __BACKEND_MEM_LIMIT__
           readinessProbe:
             httpGet:
               path: /health
@@ -226,16 +253,20 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: __PROXY_CPU_REQUEST__
+              memory: __PROXY_MEM_REQUEST__
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: __PROXY_CPU_LIMIT__
+              memory: __PROXY_MEM_LIMIT__
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

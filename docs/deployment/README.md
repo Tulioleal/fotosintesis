@@ -21,6 +21,7 @@ change artifacts in `openspec/changes/gcp-deployment-platform/`.
 | `validation-evidence.md` | Evidence template used by the validation runbook. |
 | `environment-contract.md` | Output contract between the OpenTofu roots and the deploy workflow. |
 | `authentication-abuse-limits.md` | Authentication limiter trust chain, secrets, cleanup CronJob, metrics, incident behavior, rollout, rollback, and optional Cloud Armor. |
+| `hardened-runtime.md` | Container and workload hardening baseline: fixed non-root runtime identity, writable-path inventory, security contexts, resource profiles, tuning, and policy exceptions. |
 
 ## Reading order
 

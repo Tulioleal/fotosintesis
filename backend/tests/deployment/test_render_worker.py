@@ -102,8 +102,8 @@ class TestRenderedWorkerContract:
             "port": "metrics",
         }
         assert worker_container["resources"] == {
-            "requests": {"cpu": "100m", "memory": "128Mi"},
-            "limits": {"cpu": "500m", "memory": "512Mi"},
+            "requests": {"cpu": "200m", "memory": "256Mi"},
+            "limits": {"cpu": "1000m", "memory": "1536Mi"},
         }
 
         env_entries = {item["name"]: item for item in worker_container["env"]}
@@ -290,9 +290,13 @@ class TestRenderedWorkerContract:
         assert [container["name"] for container in pod_spec["containers"]] == [
             "migrations"
         ]
-        assert "exec alembic upgrade head" in "\n".join(
-            pod_spec["containers"][0]["command"]
-        )
+        migration_command = " ".join(pod_spec["containers"][0]["command"])
+        # The migration Job invokes the single committed migration entrypoint
+        # (which contains the proxy wait and `alembic upgrade head`) rather
+        # than duplicating the wrapper inline.
+        assert "/app/scripts/run-migrations.sh" in migration_command
+        assert "alembic" not in migration_command
+        assert "upgrade" not in migration_command
         proxy = next(
             container
             for container in pod_spec["initContainers"]
@@ -336,6 +340,104 @@ class TestRenderedWorkerContract:
 
         assert result.returncode != 0
         assert message in result.stderr
+
+    def test_resource_values_render_from_env_per_role(
+        self, tmp_path: Path
+    ) -> None:
+        overrides = (
+            "BACKEND_CPU_REQUEST=111m\n"
+            "BACKEND_MEM_REQUEST=111Mi\n"
+            "BACKEND_CPU_LIMIT=222m\n"
+            "BACKEND_MEM_LIMIT=222Mi\n"
+            "FRONTEND_CPU_REQUEST=333m\n"
+            "FRONTEND_MEM_REQUEST=333Mi\n"
+            "FRONTEND_CPU_LIMIT=444m\n"
+            "FRONTEND_MEM_LIMIT=444Mi\n"
+            "WORKER_CPU_REQUEST=555m\n"
+            "WORKER_MEM_REQUEST=555Mi\n"
+            "WORKER_CPU_LIMIT=666m\n"
+            "WORKER_MEM_LIMIT=666Mi\n"
+            "MIGRATION_CPU_REQUEST=777m\n"
+            "MIGRATION_MEM_REQUEST=777Mi\n"
+            "MIGRATION_CPU_LIMIT=888m\n"
+            "MIGRATION_MEM_LIMIT=888Mi\n"
+            "LIMITER_CLEANUP_CPU_REQUEST=999m\n"
+            "LIMITER_CLEANUP_MEM_REQUEST=999Mi\n"
+            "LIMITER_CLEANUP_CPU_LIMIT=1110m\n"
+            "LIMITER_CLEANUP_MEM_LIMIT=1110Mi\n"
+            "PROXY_CPU_REQUEST=1111m\n"
+            "PROXY_MEM_REQUEST=1111Mi\n"
+            "PROXY_CPU_LIMIT=1212m\n"
+            "PROXY_MEM_LIMIT=1212Mi\n"
+        )
+        env_file = tmp_path / "values.env"
+        env_file.write_text(
+            DEV_VALUES.read_text(encoding="utf-8") + "\n" + overrides,
+            encoding="utf-8",
+        )
+        rendered = _render(tmp_path, env_file)
+
+        expectations = [
+            # (manifest, kind, name, container, cpu_req, mem_req, cpu_lim, mem_lim)
+            (
+                "30-backend.yaml", "Deployment", "fotosintesis-backend",
+                "backend", "111m", "111Mi", "222m", "222Mi",
+            ),
+            (
+                "30-backend.yaml", "Deployment", "fotosintesis-backend",
+                "cloud-sql-proxy", "1111m", "1111Mi", "1212m", "1212Mi",
+            ),
+            (
+                "40-frontend.yaml", "Deployment", "fotosintesis-frontend",
+                "frontend", "333m", "333Mi", "444m", "444Mi",
+            ),
+            (
+                "50-migrations.yaml", "Job", "fotosintesis-migrations",
+                "migrations", "777m", "777Mi", "888m", "888Mi",
+            ),
+            (
+                "50-migrations.yaml", "Job", "fotosintesis-migrations",
+                "cloud-sql-proxy", "1111m", "1111Mi", "1212m", "1212Mi",
+            ),
+            (
+                "55-worker.yaml", "Deployment", "fotosintesis-worker",
+                "worker", "555m", "555Mi", "666m", "666Mi",
+            ),
+            (
+                "55-worker.yaml", "Deployment", "fotosintesis-worker",
+                "cloud-sql-proxy", "1111m", "1111Mi", "1212m", "1212Mi",
+            ),
+            (
+                "56-limiter-cleanup.yaml", "CronJob", "fotosintesis-limiter-cleanup",
+                "limiter-cleanup", "999m", "999Mi", "1110m", "1110Mi",
+            ),
+            (
+                "56-limiter-cleanup.yaml", "CronJob", "fotosintesis-limiter-cleanup",
+                "cloud-sql-proxy", "1111m", "1111Mi", "1212m", "1212Mi",
+            ),
+        ]
+        for (
+            manifest, kind, name, container_name,
+            cpu_req, mem_req, cpu_lim, mem_lim,
+        ) in expectations:
+            docs = _load_yaml(rendered / manifest)
+            obj = _find_kind(docs, kind, name)
+            if kind == "CronJob":
+                pod_spec = obj["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+            else:
+                pod_spec = obj["spec"]["template"]["spec"]
+            containers = (
+                pod_spec.get("containers", [])
+                + pod_spec.get("initContainers", [])
+            )
+            container = next(
+                c for c in containers if c["name"] == container_name
+            )
+            resources = container["resources"]
+            assert resources["requests"]["cpu"] == cpu_req, (container_name, resources)
+            assert resources["requests"]["memory"] == mem_req, (container_name, resources)
+            assert resources["limits"]["cpu"] == cpu_lim, (container_name, resources)
+            assert resources["limits"]["memory"] == mem_lim, (container_name, resources)
 
 
 def selector_matches_labels(

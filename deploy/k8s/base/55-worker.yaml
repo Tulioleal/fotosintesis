@@ -20,16 +20,33 @@ spec:
         iam.gke.io/workload-identity: fotosintesis-backend
     spec:
       serviceAccountName: fotosintesis-backend
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       terminationGracePeriodSeconds: __JOBS_TERMINATION_GRACE_PERIOD_SECONDS__
       containers:
         - name: worker
           image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           command:
             - python
             - -m
             - app.jobs.worker
           env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONPYCACHEPREFIX
+              value: /tmp/pycache
             - name: APP_ENV
               valueFrom:
                 configMapKeyRef:
@@ -204,13 +221,16 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: __WORKER_CPU_REQUEST__
+              memory: __WORKER_MEM_REQUEST__
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: __WORKER_CPU_LIMIT__
+              memory: __WORKER_MEM_LIMIT__
         - name: cloud-sql-proxy
           image: __CLOUD_SQL_PROXY_IMAGE__
           imagePullPolicy: IfNotPresent
@@ -224,16 +244,20 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: __PROXY_CPU_REQUEST__
+              memory: __PROXY_MEM_REQUEST__
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: __PROXY_CPU_LIMIT__
+              memory: __PROXY_MEM_LIMIT__
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring

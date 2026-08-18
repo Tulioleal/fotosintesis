@@ -143,6 +143,33 @@ env:
   JOBS_METRICS_PORT: ${{ vars.JOBS_METRICS_PORT || '9100' }}
   JOBS_REQUIRED_CONTRACTS: enrich_confirmed_plant:1
   JOBS_TERMINATION_GRACE_PERIOD_SECONDS: ${{ vars.JOBS_TERMINATION_GRACE_PERIOD_SECONDS || '90' }}
+  # Container resource profiles (requests/limits). The renderer fails when any
+  # is absent, so no container relies on an implicit default. Set via repo vars
+  # when they need to diverge from these per-environment defaults.
+  BACKEND_CPU_REQUEST: ${{ vars.BACKEND_CPU_REQUEST || '200m' }}
+  BACKEND_MEM_REQUEST: ${{ vars.BACKEND_MEM_REQUEST || '256Mi' }}
+  BACKEND_CPU_LIMIT: ${{ vars.BACKEND_CPU_LIMIT || '1000m' }}
+  BACKEND_MEM_LIMIT: ${{ vars.BACKEND_MEM_LIMIT || '1024Mi' }}
+  FRONTEND_CPU_REQUEST: ${{ vars.FRONTEND_CPU_REQUEST || '100m' }}
+  FRONTEND_MEM_REQUEST: ${{ vars.FRONTEND_MEM_REQUEST || '128Mi' }}
+  FRONTEND_CPU_LIMIT: ${{ vars.FRONTEND_CPU_LIMIT || '500m' }}
+  FRONTEND_MEM_LIMIT: ${{ vars.FRONTEND_MEM_LIMIT || '512Mi' }}
+  WORKER_CPU_REQUEST: ${{ vars.WORKER_CPU_REQUEST || '200m' }}
+  WORKER_MEM_REQUEST: ${{ vars.WORKER_MEM_REQUEST || '256Mi' }}
+  WORKER_CPU_LIMIT: ${{ vars.WORKER_CPU_LIMIT || '1000m' }}
+  WORKER_MEM_LIMIT: ${{ vars.WORKER_MEM_LIMIT || '1536Mi' }}
+  MIGRATION_CPU_REQUEST: ${{ vars.MIGRATION_CPU_REQUEST || '200m' }}
+  MIGRATION_MEM_REQUEST: ${{ vars.MIGRATION_MEM_REQUEST || '256Mi' }}
+  MIGRATION_CPU_LIMIT: ${{ vars.MIGRATION_CPU_LIMIT || '1000m' }}
+  MIGRATION_MEM_LIMIT: ${{ vars.MIGRATION_MEM_LIMIT || '1024Mi' }}
+  LIMITER_CLEANUP_CPU_REQUEST: ${{ vars.LIMITER_CLEANUP_CPU_REQUEST || '50m' }}
+  LIMITER_CLEANUP_MEM_REQUEST: ${{ vars.LIMITER_CLEANUP_MEM_REQUEST || '64Mi' }}
+  LIMITER_CLEANUP_CPU_LIMIT: ${{ vars.LIMITER_CLEANUP_CPU_LIMIT || '500m' }}
+  LIMITER_CLEANUP_MEM_LIMIT: ${{ vars.LIMITER_CLEANUP_MEM_LIMIT || '256Mi' }}
+  PROXY_CPU_REQUEST: ${{ vars.PROXY_CPU_REQUEST || '100m' }}
+  PROXY_MEM_REQUEST: ${{ vars.PROXY_MEM_REQUEST || '64Mi' }}
+  PROXY_CPU_LIMIT: ${{ vars.PROXY_CPU_LIMIT || '500m' }}
+  PROXY_MEM_LIMIT: ${{ vars.PROXY_MEM_LIMIT || '256Mi' }}
   # Service-account -> namespace service-account allow-list for one-off
   # kubectl runs (e.g. backend smoke check pods). The cluster's IAM
   # configuration still governs what the SA can do in GCP.
@@ -567,6 +594,30 @@ jobs:
             echo "JOBS_METRICS_PORT=${JOBS_METRICS_PORT}"
             echo "JOBS_REQUIRED_CONTRACTS=${JOBS_REQUIRED_CONTRACTS}"
             echo "JOBS_TERMINATION_GRACE_PERIOD_SECONDS=${JOBS_TERMINATION_GRACE_PERIOD_SECONDS}"
+            echo "BACKEND_CPU_REQUEST=${BACKEND_CPU_REQUEST}"
+            echo "BACKEND_MEM_REQUEST=${BACKEND_MEM_REQUEST}"
+            echo "BACKEND_CPU_LIMIT=${BACKEND_CPU_LIMIT}"
+            echo "BACKEND_MEM_LIMIT=${BACKEND_MEM_LIMIT}"
+            echo "FRONTEND_CPU_REQUEST=${FRONTEND_CPU_REQUEST}"
+            echo "FRONTEND_MEM_REQUEST=${FRONTEND_MEM_REQUEST}"
+            echo "FRONTEND_CPU_LIMIT=${FRONTEND_CPU_LIMIT}"
+            echo "FRONTEND_MEM_LIMIT=${FRONTEND_MEM_LIMIT}"
+            echo "WORKER_CPU_REQUEST=${WORKER_CPU_REQUEST}"
+            echo "WORKER_MEM_REQUEST=${WORKER_MEM_REQUEST}"
+            echo "WORKER_CPU_LIMIT=${WORKER_CPU_LIMIT}"
+            echo "WORKER_MEM_LIMIT=${WORKER_MEM_LIMIT}"
+            echo "MIGRATION_CPU_REQUEST=${MIGRATION_CPU_REQUEST}"
+            echo "MIGRATION_MEM_REQUEST=${MIGRATION_MEM_REQUEST}"
+            echo "MIGRATION_CPU_LIMIT=${MIGRATION_CPU_LIMIT}"
+            echo "MIGRATION_MEM_LIMIT=${MIGRATION_MEM_LIMIT}"
+            echo "LIMITER_CLEANUP_CPU_REQUEST=${LIMITER_CLEANUP_CPU_REQUEST}"
+            echo "LIMITER_CLEANUP_MEM_REQUEST=${LIMITER_CLEANUP_MEM_REQUEST}"
+            echo "LIMITER_CLEANUP_CPU_LIMIT=${LIMITER_CLEANUP_CPU_LIMIT}"
+            echo "LIMITER_CLEANUP_MEM_LIMIT=${LIMITER_CLEANUP_MEM_LIMIT}"
+            echo "PROXY_CPU_REQUEST=${PROXY_CPU_REQUEST}"
+            echo "PROXY_MEM_REQUEST=${PROXY_MEM_REQUEST}"
+            echo "PROXY_CPU_LIMIT=${PROXY_CPU_LIMIT}"
+            echo "PROXY_MEM_LIMIT=${PROXY_MEM_LIMIT}"
           } > "$values_file"
           sh deploy/k8s/render.sh "$values_file" .generated/k8s/"$ENVIRONMENT"/rendered
 

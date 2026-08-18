@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "fotosintesis-local"
     object_storage_provider: str = Field(default="local", validation_alias="OBJECT_STORAGE_PROVIDER")
     object_storage_local_root: str = Field(
-        default="storage-data", validation_alias="OBJECT_STORAGE_LOCAL_ROOT"
+        default="/tmp/storage-data", validation_alias="OBJECT_STORAGE_LOCAL_ROOT"
     )
     object_storage_access_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_ACCESS_KEY")
     object_storage_secret_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_SECRET_KEY")

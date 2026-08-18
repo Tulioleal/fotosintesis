@@ -19,14 +19,28 @@ spec:
         app.kubernetes.io/part-of: fotosintesis-ai
     spec:
       serviceAccountName: fotosintesis-frontend
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: __IMAGE_REGISTRY__/frontend:__FRONTEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 3000
           env:
+            - name: HOME
+              value: /tmp
             - name: API_BASE_URL
               valueFrom:
                 configMapKeyRef:
@@ -69,6 +83,19 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: AUTH_LIMITER_TRUSTED_FORWARDED_HOPS
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: __FRONTEND_CPU_REQUEST__
+              memory: __FRONTEND_MEM_REQUEST__
+            limits:
+              cpu: __FRONTEND_CPU_LIMIT__
+              memory: __FRONTEND_MEM_LIMIT__
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

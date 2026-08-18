@@ -5,6 +5,23 @@ Database migrations are forward-only for this round; incompatible
 migration failures require a database restore or a reviewed
 forward-fix migration.
 
+## Hardened runtime baseline is retained on rollback
+
+Rollback always redeploys a prior reviewed immutable image and its compatible
+rendered manifests. Because the non-root runtime identity is enforced in both
+the Dockerfile and the Kubernetes security contexts, and because every
+container declares explicit CPU and memory bounds, a rollback to a prior
+reviewed image retains the same non-root execution and resource-governance
+baseline. A rollback never reverts to an unbounded or root-running workload.
+
+If a rolled-back image cannot satisfy a newly incompatible read-only-path
+setting (a library that began writing to a previously read-only root), apply a
+documented emergency exception for that specific workload and path rather than
+removing the baseline entirely. See `hardened-runtime.md` for the writable-path
+inventory and the exception process. The image identity check and the
+rendered-manifest policy checks run against every release, so a rollback image
+is held to the same baseline as any other image.
+
 The image-listing command below uses `PROD_ARTIFACT_REGISTRY_URL` and
 `PROD_GCP_PROJECT_ID`. Bootstrap publishes the project ID, and a
 successful prod `iac.yml` apply publishes the registry URL. Run that
