@@ -66,6 +66,7 @@ class AssistantState(TypedDict, total=False):
     out_of_domain: bool
     unsafe: bool
     retrieval: Any
+    retrieved_evidence_ids: list[str]
     web_search_candidates: list[Any]
     web_results: list[Any]
     web_source_validations: list[dict[str, object]]
@@ -89,6 +90,7 @@ class AssistantState(TypedDict, total=False):
     light_context_relevant: bool
     light_context: dict | None
     tool_failures: list[str]
+    tool_calls: list[dict[str, object]]
     provider_fallbacks: list[dict]
     total_generation_failure: bool
     generation_failure: Any

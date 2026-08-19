@@ -25,6 +25,33 @@ def _append_reason(state: AssistantState | dict, reason: str) -> list[str]:
     return reasons
 
 
+def _retrieval_evidence_ids(retrieval: object) -> list[str]:
+    """Return bounded, redacted evidence identifiers from a retrieval result.
+
+    Only chunk ids and source-url slugs are exposed; chunk text, prompts, and
+    user notes are never included.
+    """
+    chunks = list(getattr(retrieval, "chunks", []) or [])
+    ids: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        for candidate in (
+            str(chunk.id) if chunk.id is not None else None,
+            _source_slug(chunk.source_url),
+        ):
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                ids.append(candidate)
+    return ids
+
+
+def _source_slug(url: str | None) -> str | None:
+    if not url:
+        return None
+    slug = url.rstrip("/").rsplit("/", 1)[-1].strip()
+    return slug or None
+
+
 def _log_missing_taxonomy(state: AssistantState) -> None:
     logger.warning(
         "assistant care answer missing confirmed taxonomy",
@@ -110,6 +137,7 @@ async def retrieve(owner, state: AssistantState) -> dict:
     retrieval = result.data
     return {
         "retrieval": retrieval,
+        "retrieved_evidence_ids": _retrieval_evidence_ids(retrieval),
         "sources": _sources_from_retrieval(retrieval),
         "web_search_candidates": list(getattr(retrieval, "search_candidates", []) or []),
     }
@@ -274,6 +302,7 @@ __all__ = [
     "_append_reason",
     "_handle_reminder",
     "_resolve_light_context",
+    "_retrieval_evidence_ids",
     "clarify",
     "failure",
     "handle_action",

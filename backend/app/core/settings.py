@@ -133,6 +133,20 @@ class Settings(BaseSettings):
     auth_limiter_cleanup_batch_size: int = Field(
         default=1000, gt=0, validation_alias="AUTH_LIMITER_CLEANUP_BATCH_SIZE"
     )
+    evaluation_mode: str = Field(
+        default="recorded",
+        validation_alias="EVALUATION_MODE",
+        description=(
+            "Evaluation execution mode: 'recorded' (default/CI), 'live' (opt-in "
+            "non-deterministic), or 'reference' (debugging only, non-passing)."
+        ),
+    )
+    evaluation_recording_path: str | None = Field(
+        default=None,
+        validation_alias="EVALUATION_RECORDING_PATH",
+        description="Path to the versioned provider recording set for recorded/replay mode.",
+    )
+
     auth_limiter_profiles: str = Field(
         default="",
         validation_alias="AUTH_LIMITER_PROFILES",

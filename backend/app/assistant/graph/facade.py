@@ -60,6 +60,7 @@ class AssistantGraph:
         if provider_fallbacks:
             result["provider_fallbacks"] = list(result.get("provider_fallbacks", [])) + provider_fallbacks
             result["fallback_reasons"] = list(result.get("fallback_reasons", []))
+        result["tool_calls"] = list(getattr(self.tools, "tool_calls", []))
         return result
 
     async def classify_intent(self, state: AssistantState) -> dict:
