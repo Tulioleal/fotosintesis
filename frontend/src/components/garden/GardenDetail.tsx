@@ -17,11 +17,14 @@ import { useState } from "react";
 import {
   ApiClientError,
   apiClient,
+  type GardenPlant,
   type LightClassification,
   type LightMeasurement,
+  type MeasurementSource,
 } from "@/lib/api/client";
 import { buildAssistantHref } from "@/lib/assistant";
 import { resolveImageUrl } from "@/lib/images";
+import { formatDueDate } from "@/lib/timezones";
 import { AppLink, Button, Card, Chip, Notice } from "@/components/ui";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./GardenDetail.module.scss";
@@ -33,6 +36,12 @@ const classificationLabel: Record<LightClassification, string> = {
   media: "Media",
   alta: "Alta",
   directa: "Directa",
+};
+
+const sourceLabel: Record<MeasurementSource, string> = {
+  sensor: "sensor",
+  camera: "cámara",
+  manual: "manual",
 };
 
 const classificationToWidth: Record<LightClassification, string> = {
@@ -124,10 +133,15 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   const imageSrc = resolveImageUrl(plant.image_path);
   const location = plant.location ?? "Sin ubicacion";
   const notes = plant.notes ?? "Todavia no agregaste notas personalizadas.";
-  const reminderLabel =
-    plant.active_reminders > 0
-      ? `${plant.active_reminders} recordatorio${plant.active_reminders === 1 ? "" : "s"} activo${plant.active_reminders === 1 ? "" : "s"}`
-      : "Sin recordatorios";
+  const nextReminderLabel = plant.next_reminder
+    ? `${plant.next_reminder.action} · ${formatDueDate(
+        plant.next_reminder.due_at,
+        plant.next_reminder.timezone,
+      )}`
+    : "Sin cuidados pendientes";
+  const lightChipLabel = plant.light_summary
+    ? `${classificationLabel[plant.light_summary.classification]} · ${sourceLabel[plant.light_summary.source]}`
+    : "Sin datos de luz";
   const assistantHref = buildAssistantHref({
     plant: plant.nickname ?? displayName,
     binomial: binomialName,
@@ -168,19 +182,23 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
               />
             }
           >
-            {reminderLabel}
+            {nextReminderLabel}
           </Chip>
           <Chip
-            tone="primary"
+            tone={plant.light_summary ? "primary" : "neutral"}
             icon={
               <SunIcon
                 aria-hidden="true"
                 size="1rem"
-                className={iconStyles.toneOnPrimary}
+                className={
+                  plant.light_summary
+                    ? iconStyles.toneOnPrimary
+                    : iconStyles.toneOnSurfaceVariant
+                }
               />
             }
           >
-            Luz Indirecta
+            {lightChipLabel}
           </Chip>
         </div>
       </header>
@@ -237,6 +255,8 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
                         </span>
                         <span className={styles.readingLabel}>
                           {classificationLabel[reading.classification]}
+                          {reading.source === "camera" ? " (aprox.)" : ""} ·{" "}
+                          {sourceLabel[reading.source]}
                         </span>
                       </div>
                       <div
@@ -327,6 +347,26 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
           </div>
         </Card>
 
+        <Card variant="tonal" padding="md" className={styles.infoCard}>
+          <div className={styles.cardHeading}>
+            <span className={styles.kicker}>
+              Recomendación del perfil
+              {plant.profile.confidence !== undefined
+                ? ` · confianza ${Math.round(plant.profile.confidence * 100)}%`
+                : ""}
+            </span>
+          </div>
+          {profileGuidance(plant).length > 0 ? (
+            <ul className={styles.profileList}>
+              {profileGuidance(plant).map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className={styles.cardCopy}>Sin recomendaciones del perfil.</p>
+          )}
+        </Card>
+
         <div className={styles.dangerColumn}>
           {error ? (
             <Notice tone="error" role="alert">
@@ -363,4 +403,13 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
 
 function profileBinomialName(profile: PlantProfile) {
   return profile.binomial_name ?? null;
+}
+
+function profileGuidance(plant: GardenPlant): string[] {
+  const care = plant.profile.sections?.care ?? [];
+  const recommendations = plant.profile.sections?.recommendations ?? [];
+  const guidance = [...care, ...recommendations].filter(
+    (item) => !item.toLowerCase().startsWith("insufficient evidence"),
+  );
+  return guidance.slice(0, 4);
 }

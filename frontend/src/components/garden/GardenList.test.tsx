@@ -11,7 +11,9 @@ const plant = {
   id: "garden-1",
   image_path: "garden-plants/helecho.jpg",
   location: "Balcón",
+  light_summary: null,
   nickname: "Helecho",
+  next_reminder: null,
   notes: "Pulverizar hojas",
   profile: {
     aliases: [],
@@ -100,7 +102,36 @@ describe("GardenList", () => {
       expect.stringContaining("garden-plants/helecho.jpg"),
     );
 
-    expect(screen.getByText("Balcón • Luz indirecta")).toBeInTheDocument();
+    expect(screen.getByText("Balcón")).toBeInTheDocument();
+    expect(screen.queryByText("Luz indirecta")).not.toBeInTheDocument();
+    expect(screen.queryByText("Último riego")).not.toBeInTheDocument();
+  });
+
+  it("renders a no-care state on cards without a pending reminder", async () => {
+    renderWithQueryClient(<GardenList />);
+
+    const noCare = await screen.findByText("Sin cuidados pendientes");
+    expect(noCare).toBeInTheDocument();
+    expect(noCare.closest("a")).toHaveAttribute("href", "/garden/garden-1");
+  });
+
+  it("renders the next pending reminder action and timezone-aware due date", async () => {
+    mocks.listGardenPlants.mockResolvedValue([
+      {
+        ...plant,
+        next_reminder: {
+          id: "reminder-1",
+          action: "Regar",
+          due_at: "2026-06-10T12:00:00Z",
+          timezone: "America/Argentina/Buenos_Aires",
+        },
+      },
+    ]);
+
+    renderWithQueryClient(<GardenList />);
+
+    expect(await screen.findByText(/Regar/)).toBeInTheDocument();
+    expect(screen.queryByText("Sin cuidados pendientes")).not.toBeInTheDocument();
   });
 
   it("renders the plant icon fallback when no image is available", async () => {

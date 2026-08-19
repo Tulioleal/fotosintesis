@@ -16,7 +16,9 @@ from app.auth.tables import (
     knowledge_document_aspect_supports,
     knowledge_documents,
     knowledge_sources,
+    light_measurements,
     plant_profiles,
+    reminders,
 )
 from app.db.repository import RepositoryBase
 from app.enrichment.identity import CanonicalSpeciesIdentity
@@ -26,11 +28,14 @@ from app.profile_garden.fingerprint import fingerprint_for_section
 from app.profile_garden.schemas import (
     GardenPlantCreate,
     GardenPlantResponse,
+    LightSummary,
     PlantProfileResponse,
     ProfileAlias,
     ProfileSectionStatus,
     ProfileSource,
+    ReminderSummary,
 )
+from app.schemas.reminders import ReminderStatus
 from app.profile_garden.versions import (
     CURRENT,
     PARTIAL,
@@ -191,7 +196,21 @@ class PlantProfileGardenRepository(RepositoryBase):
                 )
             )
         rows = (await self.session.execute(statement)).all()
-        return [_garden_from_row(row._mapping) for row in rows]
+        plant_ids = [row._mapping[garden_plants.c.id] for row in rows]
+        next_reminders = await self.next_pending_reminder_summaries(
+            user_id=user_id, plant_ids=plant_ids
+        )
+        light_summaries = await self.latest_light_summaries(
+            user_id=user_id, plant_ids=plant_ids
+        )
+        return [
+            _garden_from_row(
+                row._mapping,
+                next_reminders=next_reminders,
+                light_summaries=light_summaries,
+            )
+            for row in rows
+        ]
 
     async def get_garden_plant(self, garden_id: UUID, user_id: UUID) -> GardenPlantResponse | None:
         row = (
@@ -201,7 +220,110 @@ class PlantProfileGardenRepository(RepositoryBase):
                 .where(garden_plants.c.id == garden_id, garden_plants.c.user_id == user_id)
             )
         ).first()
-        return _garden_from_row(row._mapping) if row else None
+        if row is None:
+            return None
+        mapping = row._mapping
+        garden_id = mapping[garden_plants.c.id]
+        next_reminders = await self.next_pending_reminder_summaries(
+            user_id=user_id, plant_ids=[garden_id]
+        )
+        light_summaries = await self.latest_light_summaries(
+            user_id=user_id, plant_ids=[garden_id]
+        )
+        return _garden_from_row(
+            mapping,
+            next_reminders=next_reminders,
+            light_summaries=light_summaries,
+        )
+
+    async def next_pending_reminder_summaries(
+        self, *, user_id: UUID, plant_ids: list[UUID] | None = None
+    ) -> dict[UUID, ReminderSummary]:
+        """Return the earliest pending reminder per garden plant in one query.
+
+        Uses a row-number window instead of Postgres ``DISTINCT ON`` so the
+        same query runs on the SQLite test backend and the production
+        Postgres backend without per-plant requests.
+        """
+        subquery = (
+            select(
+                reminders.c.garden_plant_id,
+                reminders.c.id,
+                reminders.c.action,
+                reminders.c.due_at,
+                reminders.c.timezone,
+                func.row_number()
+                .over(
+                    partition_by=reminders.c.garden_plant_id,
+                    order_by=reminders.c.due_at.asc(),
+                )
+                .label("_row_number"),
+            )
+            .where(
+                reminders.c.user_id == user_id,
+                reminders.c.status == ReminderStatus.pending.value,
+            )
+            .subquery()
+        )
+        statement = select(subquery).where(subquery.c._row_number == 1)
+        if plant_ids is not None:
+            statement = statement.where(subquery.c.garden_plant_id.in_(plant_ids))
+        rows = (await self.session.execute(statement)).all()
+        return {
+            row.garden_plant_id: ReminderSummary(
+                id=row.id,
+                action=row.action,
+                due_at=row.due_at,
+                timezone=row.timezone,
+            )
+            for row in rows
+        }
+
+    async def latest_light_summaries(
+        self, *, user_id: UUID, plant_ids: list[UUID] | None = None
+    ) -> dict[UUID, LightSummary]:
+        """Return the latest light measurement per garden plant in one query.
+
+        Row-number window keeps the batched selection portable across the
+        SQLite test backend and the production Postgres backend.
+        """
+        subquery = (
+            select(
+                light_measurements.c.garden_plant_id,
+                light_measurements.c.id,
+                light_measurements.c.classification,
+                light_measurements.c.lux,
+                light_measurements.c.reliability,
+                light_measurements.c.source,
+                light_measurements.c.measured_at,
+                func.row_number()
+                .over(
+                    partition_by=light_measurements.c.garden_plant_id,
+                    order_by=light_measurements.c.measured_at.desc(),
+                )
+                .label("_row_number"),
+            )
+            .where(
+                light_measurements.c.user_id == user_id,
+                light_measurements.c.garden_plant_id.is_not(None),
+            )
+            .subquery()
+        )
+        statement = select(subquery).where(subquery.c._row_number == 1)
+        if plant_ids is not None:
+            statement = statement.where(subquery.c.garden_plant_id.in_(plant_ids))
+        rows = (await self.session.execute(statement)).all()
+        return {
+            row.garden_plant_id: LightSummary(
+                id=row.id,
+                classification=row.classification,
+                lux=row.lux,
+                reliability=row.reliability,
+                source=row.source,
+                measured_at=row.measured_at,
+            )
+            for row in rows
+        }
 
     async def delete_garden_plant(
         self, *, garden_id: UUID, user_id: UUID, confirm_reminders: bool
@@ -652,7 +774,12 @@ def _select_alias(
     return aliases[0].name if aliases else None
 
 
-def _garden_from_row(row) -> GardenPlantResponse:
+def _garden_from_row(
+    row,
+    *,
+    next_reminders: dict[UUID, ReminderSummary] | None = None,
+    light_summaries: dict[UUID, LightSummary] | None = None,
+) -> GardenPlantResponse:
     profile = PlantProfileResponse(
         id=row[plant_profiles.c.id],
         scientific_name=row[plant_profiles.c.scientific_name],
@@ -675,8 +802,9 @@ def _garden_from_row(row) -> GardenPlantResponse:
         generation_policy_version=row[plant_profiles.c.generation_policy_version],
         section_status=_section_status(row[plant_profiles.c.section_versions]),
     )
+    garden_id = row[garden_plants.c.id]
     return GardenPlantResponse(
-        id=row[garden_plants.c.id],
+        id=garden_id,
         profile=profile,
         confirmed_candidate_id=row[garden_plants.c.confirmed_candidate_id],
         nickname=row[garden_plants.c.nickname],
@@ -685,6 +813,8 @@ def _garden_from_row(row) -> GardenPlantResponse:
         image_path=row[garden_plants.c.image_path],
         custom_data=row[garden_plants.c.custom_data],
         active_reminders=row[garden_plants.c.active_reminders],
+        next_reminder=next_reminders.get(garden_id) if next_reminders else None,
+        light_summary=light_summaries.get(garden_id) if light_summaries else None,
         created_at=row[garden_plants.c.created_at],
     )
 

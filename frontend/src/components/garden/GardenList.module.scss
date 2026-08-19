@@ -22,6 +22,9 @@
 }
 
 .cardFooter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   color: $color-outline;
   font-family: $font-body-stack;
   font-size: 0.78rem;

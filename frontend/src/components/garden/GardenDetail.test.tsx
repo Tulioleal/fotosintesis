@@ -11,8 +11,10 @@ const plant = {
   custom_data: {},
   id: "garden-1",
   image_path: null,
+  light_summary: null,
   location: "Balcon",
   nickname: "Helecho",
+  next_reminder: null,
   notes: "Pulverizar hojas",
   profile: {
     aliases: [],
@@ -178,8 +180,8 @@ describe("GardenDetail", () => {
     renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
 
     expect(await screen.findByText("Ultimas lecturas")).toBeInTheDocument();
-    expect(screen.getByText("Media")).toBeInTheDocument();
-    expect(screen.getByText("Alta")).toBeInTheDocument();
+    expect(screen.getByText(/Media · sensor/)).toBeInTheDocument();
+    expect(screen.getByText(/Alta \(aprox\.\) · cámara/)).toBeInTheDocument();
   });
 
   it("hides the readings section when there are no prior measurements", async () => {
@@ -189,5 +191,87 @@ describe("GardenDetail", () => {
 
     await screen.findByRole("heading", { name: "Helecho" });
     expect(screen.queryByText("Ultimas lecturas")).not.toBeInTheDocument();
+  });
+
+  it("renders a grounded next reminder with timezone-aware due date", async () => {
+    mocks.getGardenPlant.mockResolvedValue({
+      ...plant,
+      next_reminder: {
+        id: "reminder-1",
+        action: "Regar",
+        due_at: "2026-06-10T12:00:00Z",
+        timezone: "America/Argentina/Buenos_Aires",
+      },
+    });
+
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByText(/Regar/)).toBeInTheDocument();
+    expect(screen.queryByText(/Luz Indirecta/)).not.toBeInTheDocument();
+  });
+
+  it("renders a grounded light summary chip with source label", async () => {
+    mocks.getGardenPlant.mockResolvedValue({
+      ...plant,
+      light_summary: {
+        id: "measurement-1",
+        classification: "alta",
+        lux: 850,
+        reliability: "medium",
+        source: "sensor",
+        measured_at: "2026-06-08T12:00:00Z",
+      },
+    });
+
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByText(/Alta · sensor/)).toBeInTheDocument();
+  });
+
+  it("renders a missing-data light state instead of a static label", async () => {
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByText("Sin datos de luz")).toBeInTheDocument();
+    expect(screen.queryByText("Luz Indirecta")).not.toBeInTheDocument();
+  });
+
+  it("marks camera readings as approximate in text and labels the source", async () => {
+    mocks.listLightMeasurements.mockResolvedValue([
+      {
+        classification: "alta",
+        garden_plant_id: "garden-1",
+        id: "measurement-2",
+        lux: 850,
+        measured_at: "2026-06-01T12:00:00Z",
+        metadata: {},
+        reliability: "medium",
+        source: "camera",
+        user_id: "user-1",
+      },
+    ]);
+
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByText(/Alta \(aprox\.\) · cámara/)).toBeInTheDocument();
+  });
+
+  it("renders profile recommendation labeled with confidence", async () => {
+    mocks.getGardenPlant.mockResolvedValue({
+      ...plant,
+      profile: {
+        ...plant.profile,
+        confidence: 0.85,
+        sections: {
+          care: ["Regar semanalmente sin encharcar."],
+          recommendations: ["Ubicar en luz indirecta brillante."],
+        },
+      },
+    });
+
+    renderWithQueryClient(<GardenDetail gardenId="garden-1" />);
+
+    expect(await screen.findByText(/Recomendación del perfil/)).toBeInTheDocument();
+    expect(screen.getByText(/confianza 85%/)).toBeInTheDocument();
+    expect(screen.getByText("Regar semanalmente sin encharcar.")).toBeInTheDocument();
   });
 });

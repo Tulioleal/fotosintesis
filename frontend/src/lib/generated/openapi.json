@@ -821,6 +821,16 @@
             ],
             "title": "Image Path"
           },
+          "light_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LightSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "location": {
             "anyOf": [
               {
@@ -831,6 +841,16 @@
               }
             ],
             "title": "Location"
+          },
+          "next_reminder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReminderSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "nickname": {
             "anyOf": [
@@ -1255,6 +1275,49 @@
           "measured_at"
         ],
         "title": "LightMeasurementDto",
+        "type": "object"
+      },
+      "LightSummary": {
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/LightClassification"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lux": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lux"
+          },
+          "measured_at": {
+            "format": "date-time",
+            "title": "Measured At",
+            "type": "string"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/MeasurementReliability"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MeasurementSource"
+          }
+        },
+        "required": [
+          "id",
+          "classification",
+          "reliability",
+          "source",
+          "measured_at"
+        ],
+        "title": "LightSummary",
         "type": "object"
       },
       "MeasurementReliability": {
@@ -2251,6 +2314,42 @@
           "justification"
         ],
         "title": "ReminderSuggestionResult",
+        "type": "object"
+      },
+      "ReminderSummary": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "due_at": {
+            "format": "date-time",
+            "title": "Due At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "due_at"
+        ],
+        "title": "ReminderSummary",
         "type": "object"
       },
       "ReminderUpdate": {

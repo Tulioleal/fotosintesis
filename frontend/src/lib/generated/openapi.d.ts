@@ -786,8 +786,10 @@ export interface components {
             id: string;
             /** Image Path */
             image_path?: string | null;
+            light_summary?: components["schemas"]["LightSummary"] | null;
             /** Location */
             location?: string | null;
+            next_reminder?: components["schemas"]["ReminderSummary"] | null;
             /** Nickname */
             nickname?: string | null;
             /** Notes */
@@ -948,6 +950,24 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+        };
+        /** LightSummary */
+        LightSummary: {
+            classification: components["schemas"]["LightClassification"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lux */
+            lux?: number | null;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            reliability: components["schemas"]["MeasurementReliability"];
+            source: components["schemas"]["MeasurementSource"];
         };
         /**
          * MeasurementReliability
@@ -1354,6 +1374,23 @@ export interface components {
              * Format: time
              */
             time: string;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** ReminderSummary */
+        ReminderSummary: {
+            /** Action */
+            action: string;
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Timezone */
             timezone?: string | null;
         };

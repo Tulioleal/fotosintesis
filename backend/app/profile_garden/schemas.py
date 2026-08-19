@@ -4,6 +4,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.jobs.schemas import CandidateEnrichmentStatus
+from app.schemas.light_measurements import (
+    LightClassification,
+    MeasurementReliability,
+    MeasurementSource,
+)
 
 
 class ProfileAlias(BaseModel):
@@ -60,6 +65,22 @@ class GardenPlantCreate(BaseModel):
     custom_data: dict[str, object] = Field(default_factory=dict)
 
 
+class ReminderSummary(BaseModel):
+    id: UUID
+    action: str
+    due_at: datetime
+    timezone: str | None = None
+
+
+class LightSummary(BaseModel):
+    id: UUID
+    classification: LightClassification
+    lux: float | None = None
+    reliability: MeasurementReliability
+    source: MeasurementSource
+    measured_at: datetime
+
+
 class GardenPlantResponse(BaseModel):
     id: UUID
     profile: PlantProfileResponse
@@ -70,6 +91,8 @@ class GardenPlantResponse(BaseModel):
     image_path: str | None = None
     custom_data: dict[str, object] = Field(default_factory=dict)
     active_reminders: int = 0
+    next_reminder: ReminderSummary | None = None
+    light_summary: LightSummary | None = None
     created_at: datetime
 
 

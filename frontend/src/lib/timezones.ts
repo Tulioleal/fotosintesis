@@ -1,3 +1,31 @@
+export function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+export function effectiveTimezone(reminderTimezone?: string | null): string {
+  return reminderTimezone || browserTimezone();
+}
+
+const dueDateFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+export function formatDueDate(iso: string, timezone?: string | null): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const zone = effectiveTimezone(timezone);
+  let formatter = dueDateFormatterCache.get(zone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("es-AR", {
+      timeZone: zone,
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    dueDateFormatterCache.set(zone, formatter);
+  }
+  return formatter.format(date).replace(".", "");
+}
+
 export const TIMEZONE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "UTC", label: "UTC" },
   { value: "America/Argentina/Buenos_Aires", label: "Argentina (Buenos Aires)" },
