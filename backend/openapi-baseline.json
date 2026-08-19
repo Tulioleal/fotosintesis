@@ -1093,6 +1093,9 @@
                 "$ref": "#/components/schemas/EnrichmentJobResult"
               },
               {
+                "$ref": "#/components/schemas/ProfileRefreshJobResult"
+              },
+              {
                 "type": "null"
               }
             ],
@@ -1122,7 +1125,8 @@
       "JobType": {
         "enum": [
           "ingest_validated_claims",
-          "enrich_confirmed_plant"
+          "enrich_confirmed_plant",
+          "refresh_profile"
         ],
         "title": "JobType",
         "type": "string"
@@ -1338,6 +1342,17 @@
               }
             ]
           },
+          "generation_policy_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Policy Version"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -1353,6 +1368,13 @@
           "scientific_name": {
             "title": "Scientific Name",
             "type": "string"
+          },
+          "section_status": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileSectionStatus"
+            },
+            "title": "Section Status",
+            "type": "array"
           },
           "sections": {
             "additionalProperties": {
@@ -1435,6 +1457,97 @@
           "name"
         ],
         "title": "ProfileAlias",
+        "type": "object"
+      },
+      "ProfileRefreshJobResult": {
+        "additionalProperties": false,
+        "properties": {
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "complete",
+              "partial",
+              "noop"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "regenerated_sections": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Regenerated Sections",
+            "type": "array"
+          },
+          "stale_sections": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Stale Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "outcome",
+          "policy_version"
+        ],
+        "title": "ProfileRefreshJobResult",
+        "type": "object"
+      },
+      "ProfileSectionStatus": {
+        "description": "Per-section freshness metadata (metadata-only, never raw payloads).\n\n``status`` is one of ``current``, ``stale``, ``refreshing``, ``partial``.\n``generated_at`` is the timestamp of the active section version.",
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "status"
+        ],
+        "title": "ProfileSectionStatus",
         "type": "object"
       },
       "ProfileSource": {

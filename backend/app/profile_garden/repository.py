@@ -20,13 +20,22 @@ from app.auth.tables import (
 )
 from app.db.repository import RepositoryBase
 from app.enrichment.identity import CanonicalSpeciesIdentity
+from app.enrichment.policy import CURRENT_ENRICHMENT_POLICY_VERSION
 from app.knowledge.schemas import ReviewStatus
+from app.profile_garden.fingerprint import fingerprint_for_section
 from app.profile_garden.schemas import (
     GardenPlantCreate,
     GardenPlantResponse,
     PlantProfileResponse,
     ProfileAlias,
+    ProfileSectionStatus,
     ProfileSource,
+)
+from app.profile_garden.versions import (
+    CURRENT,
+    PARTIAL,
+    build_section_version,
+    refresh_status,
 )
 
 SECTION_TOPICS = {
@@ -250,8 +259,18 @@ class PlantProfileGardenRepository(RepositoryBase):
             normalized_binomial=normalized_binomial,
         )
         profile_id = uuid4()
-        sections, sources, confidence, limitations, aliases = _build_profile_evidence(
-            scientific_name, common_name, [row._mapping for row in rows]
+        (
+            sections,
+            sources,
+            confidence,
+            limitations,
+            aliases,
+            section_versions,
+        ) = _build_profile_evidence(
+            scientific_name,
+            common_name,
+            [row._mapping for row in rows],
+            generation_policy_version=CURRENT_ENRICHMENT_POLICY_VERSION,
         )
         try:
             await self.session.execute(
@@ -267,6 +286,8 @@ class PlantProfileGardenRepository(RepositoryBase):
                     accepted_gbif_key=accepted_gbif_key,
                     normalized_binomial=normalized_binomial,
                     canonical_species_key=canonical_species_key,
+                    generation_policy_version=CURRENT_ENRICHMENT_POLICY_VERSION,
+                    section_versions=section_versions,
                 )
             )
             await self.session.commit()
@@ -302,6 +323,10 @@ class PlantProfileGardenRepository(RepositoryBase):
                         ),
                         enrichment_validation_runs.c.covered_aspects.label(
                             "validation_covered_aspects"
+                        ),
+                        knowledge_documents.c.source_version.label("source_version"),
+                        knowledge_documents.c.canonical_source_url.label(
+                            "canonical_source_url"
                         ),
                     )
                     .join(
@@ -424,10 +449,15 @@ class PlantProfileGardenRepository(RepositoryBase):
 
 
 def _build_profile_evidence(
-    scientific_name: str, common_name: str | None, chunks: list[dict]
+    scientific_name: str,
+    common_name: str | None,
+    chunks: list[dict],
+    *,
+    generation_policy_version: int,
 ) -> tuple:
     grouped: dict[str, list[str]] = defaultdict(list)
     sources_by_url: dict[str, dict[str, object]] = {}
+    section_evidence: dict[str, list[dict[str, object]]] = defaultdict(list)
     confidences = []
     aliases = []
     if common_name:
@@ -452,6 +482,14 @@ def _build_profile_evidence(
             "domain": chunk["source_domain"],
             "confidence": float(chunk["confidence"]),
         }
+        section_evidence[section].append(
+            {
+                "source_url": chunk.get("canonical_source_url")
+                or chunk["source_url"],
+                "source_version": chunk.get("source_version") or "",
+                "aspect": chunk.get("supported_aspect"),
+            }
+        )
 
     sections = {key: grouped.get(key, [])[:3] for key in SECTION_TOPICS}
     for key, fallback in SECTION_TOPICS.items():
@@ -470,7 +508,66 @@ def _build_profile_evidence(
             "Partial confidence: the recommendations are presented as orientative, not categorical."
         )
 
-    return sections, list(sources_by_url.values()), confidence, limitations, aliases
+    section_versions = _build_section_versions(
+        sections,
+        section_evidence,
+        confidence=confidence,
+        limitations=limitations,
+        generation_policy_version=generation_policy_version,
+    )
+
+    return sections, list(sources_by_url.values()), confidence, limitations, aliases, section_versions
+
+
+def _build_section_versions(
+    sections: dict[str, list[str]],
+    section_evidence: dict[str, list[dict[str, object]]],
+    *,
+    confidence: float,
+    limitations: list[str],
+    generation_policy_version: int,
+) -> dict[str, dict[str, object]]:
+    """Record a version per section with its deterministic fingerprint.
+
+    A section backed by real evidence is ``current``. A section whose content
+    is the insufficient-evidence fallback is recorded as ``partial`` so the
+    reconciliation pass can prioritize it. Sections without any evidence are
+    still recorded with a fingerprint so profile creation is complete.
+    """
+    versions: dict[str, dict[str, object]] = {}
+    for section, fallback_label in SECTION_TOPICS.items():
+        evidence = section_evidence.get(section, [])
+        fingerprint = fingerprint_for_section(
+            section=section,
+            evidence=evidence,
+            generation_policy_version=generation_policy_version,
+        )
+        fallback = len(evidence) == 0
+        status = PARTIAL if fallback else CURRENT
+        provenance = [
+            {"url": str(item["source_url"]), "domain": _domain_for(item)}
+            for item in evidence
+        ]
+        section_limits = list(limitations)
+        if fallback:
+            section_limits.append(
+                f"Insufficient evidence for {fallback_label} of this species."
+            )
+        versions[section] = build_section_version(
+            section=section,
+            fingerprint=fingerprint,
+            generation_policy_version=generation_policy_version,
+            provenance=provenance,
+            confidence=confidence,
+            limitations=section_limits,
+            status=status,
+        )
+    return versions
+
+
+def _domain_for(item: dict[str, object]) -> str:
+    url = str(item.get("source_url") or "")
+    return url.split("/")[2] if url.startswith(("http://", "https://")) and "/" in url else ""
 
 
 def _section_for_topic(topic: str) -> str:
@@ -499,7 +596,48 @@ def _profile_from_row(
         accepted_gbif_key=row.accepted_gbif_key,
         binomial_name=row.normalized_binomial,
         canonical_species_key=row.canonical_species_key,
+        generation_policy_version=row.generation_policy_version,
+        section_status=_section_status(row.section_versions),
     )
+
+
+def _section_status(section_versions: dict) -> list[ProfileSectionStatus]:
+    """Build per-section freshness metadata from the persisted versions.
+
+    Sections without a recorded version (legacy profiles) surface as stale so
+    reads can identify them without blocking navigation.
+    """
+    versions = section_versions or {}
+    statuses: list[ProfileSectionStatus] = []
+    for section in SECTION_TOPICS:
+        version = versions.get(section) if isinstance(versions, dict) else None
+        status = refresh_status(version)
+        statuses.append(
+            ProfileSectionStatus(
+                section=section,
+                status=status,
+                policy_version=(
+                    version.get("policy_version")
+                    if isinstance(version, dict)
+                    else None
+                ),
+                generated_at=_parse_iso(version.get("generated_at"))
+                if isinstance(version, dict)
+                else None,
+            )
+        )
+    return statuses
+
+
+def _parse_iso(value: object):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _select_alias(
@@ -534,6 +672,8 @@ def _garden_from_row(row) -> GardenPlantResponse:
         accepted_gbif_key=row[plant_profiles.c.accepted_gbif_key],
         binomial_name=row[plant_profiles.c.normalized_binomial],
         canonical_species_key=row[plant_profiles.c.canonical_species_key],
+        generation_policy_version=row[plant_profiles.c.generation_policy_version],
+        section_status=_section_status(row[plant_profiles.c.section_versions]),
     )
     return GardenPlantResponse(
         id=row[garden_plants.c.id],

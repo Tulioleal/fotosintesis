@@ -259,6 +259,13 @@ plant_profiles = sa.Table(
     sa.Column("accepted_gbif_key", sa.Integer(), nullable=True),
     sa.Column("normalized_binomial", sa.String(length=240), nullable=True),
     sa.Column("canonical_species_key", sa.String(length=512), nullable=True),
+    sa.Column("generation_policy_version", sa.Integer(), nullable=True),
+    sa.Column(
+        "section_versions",
+        sa.JSON(),
+        nullable=False,
+        server_default=sa.text("'{}'"),
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
@@ -380,7 +387,7 @@ application_jobs = sa.Table(
     sa.UniqueConstraint("job_type", "idempotency_key", name="uq_application_jobs_job_type_idempotency_key"),
     sa.CheckConstraint("status IN ('pending', 'processing', 'complete', 'partial', 'failed')", name="ck_application_jobs_status"),
     sa.CheckConstraint(
-        "job_type IN ('ingest_validated_claims', 'enrich_confirmed_plant')",
+        "job_type IN ('ingest_validated_claims', 'enrich_confirmed_plant', 'refresh_profile')",
         name="ck_application_jobs_type",
     ),
     sa.CheckConstraint("payload_version >= 1", name="ck_application_jobs_payload_version"),

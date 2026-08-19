@@ -45,6 +45,12 @@ const limitationCopy: Record<string, string> = {
   indexing_deferred: "La evidencia se guardo pero la indexacion quedo pendiente.",
 };
 
+const sectionStatusCopy: Record<string, string> = {
+  stale: "Actualizacion pendiente",
+  refreshing: "Actualizando...",
+  partial: "Evidencia parcial",
+};
+
 const aspectCopy: Record<string, string> = {
   general_care_summary: "Cuidados generales",
   light_exposure: "Luz",
@@ -230,6 +236,10 @@ export function PlantProfileView({
   const limitations = profile.limitations ?? [];
   const sections = profile.sections ?? {};
   const sources = profile.sources ?? [];
+  const sectionStatusByKey: Record<string, string> = {};
+  for (const entry of profile.section_status ?? []) {
+    sectionStatusByKey[entry.section] = entry.status;
+  }
   const binomialName = profile.binomial_name ?? null;
   const assistantHref = buildAssistantHref({
     plant: profile.selected_alias ?? profile.common_name ?? profile.scientific_name,
@@ -305,14 +315,24 @@ export function PlantProfileView({
       </Card>
 
       <div className={styles.sections}>
-        {Object.entries(sectionLabels).map(([key, label]) => (
-          <Card key={key} variant="tonal" padding="md">
-            <h2 className={styles.sectionTitle}>{label}</h2>
-            {(sections[key] ?? []).map((text: string) => (
-              <p key={text} className={styles.sectionCopy}>{text}</p>
-            ))}
-          </Card>
-        ))}
+        {Object.entries(sectionLabels).map(([key, label]) => {
+          const status = sectionStatusByKey[key];
+          return (
+            <Card key={key} variant="tonal" padding="md">
+              <div className={styles.sectionHeader}>
+                <h2 className={styles.sectionTitle}>{label}</h2>
+                {status && status !== "current" ? (
+                  <span className={styles.sectionStatusBadge} role="note">
+                    {sectionStatusCopy[status] ?? status}
+                  </span>
+                ) : null}
+              </div>
+              {(sections[key] ?? []).map((text: string) => (
+                <p key={text} className={styles.sectionCopy}>{text}</p>
+              ))}
+            </Card>
+          );
+        })}
       </div>
 
       <Card id="save" variant="tonal" padding="md">

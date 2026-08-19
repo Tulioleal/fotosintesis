@@ -133,8 +133,13 @@ async def test_enrichment_completion_preserves_seeded_snapshot_without_regenerat
             await session.execute(select(application_jobs.c.job_type).distinct())
         ).scalars().all()
     assert profile_count == 1
-    # No profile-refresh job is scheduled by enrichment.
-    assert set(job_types) <= {JobType.enrich_confirmed_plant.value}
+    # Enrichment does NOT regenerate the snapshot inline; it only schedules a
+    # deferred profile-refresh job so section regeneration happens asynchronously.
+    assert set(job_types) <= {
+        JobType.enrich_confirmed_plant.value,
+        JobType.refresh_profile.value,
+    }
+    assert JobType.refresh_profile.value in set(job_types)
 
 
 class _DeterministicModelProvider:

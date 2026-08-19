@@ -27,11 +27,13 @@ from app.enrichment.evidence import AcceptedEnrichmentClaim, EnrichmentEvidenceP
 from app.enrichment.identity import CanonicalSpeciesIdentity
 from app.jobs.handler import HandlerRegistry
 from app.jobs.handlers.enrich_confirmed_plant import EnrichConfirmedPlantHandler
+from app.jobs.handlers.refresh_profile import RefreshProfileHandler
 from app.jobs.schemas import (
     EnrichConfirmedPlantPayload,
     JobFailureCategory,
     JobStatus,
     JobType,
+    RefreshProfilePayload,
 )
 from app.knowledge.rag import VectorIndexError
 from app.knowledge.repository import KnowledgeRepository
@@ -562,6 +564,11 @@ async def test_worker_lease_replacement_does_not_stale_finalize(
         ),
         payload_models={1: EnrichConfirmedPlantPayload},
     )
+    registry_a.register(
+        JobType.refresh_profile.value,
+        RefreshProfileHandler(session_factory=pg_session_factory),
+        payload_models={1: RefreshProfilePayload},
+    )
     worker_a = Worker(
         session_factory=pg_session_factory,
         handler_registry=registry_a,
@@ -601,6 +608,11 @@ async def test_worker_lease_replacement_does_not_stale_finalize(
             )
         ),
         payload_models={1: EnrichConfirmedPlantPayload},
+    )
+    registry_b.register(
+        JobType.refresh_profile.value,
+        RefreshProfileHandler(session_factory=pg_session_factory),
+        payload_models={1: RefreshProfilePayload},
     )
     worker_b = Worker(
         session_factory=pg_session_factory,
@@ -662,7 +674,7 @@ async def test_worker_lease_replacement_does_not_stale_finalize(
             )
             or 0
         )
-    assert job_count == 1
+    assert job_count == 2
     assert association_count == 1
     assert validation_run_count == 1
     assert validation_evidence_count == 1

@@ -888,7 +888,7 @@ export interface components {
             /** Max Attempts */
             max_attempts: number;
             /** Result */
-            result?: components["schemas"]["ReadJobResult"] | components["schemas"]["EnrichmentJobResult"] | null;
+            result?: components["schemas"]["ReadJobResult"] | components["schemas"]["EnrichmentJobResult"] | components["schemas"]["ProfileRefreshJobResult"] | null;
             status: components["schemas"]["JobStatus"];
             /**
              * Updated At
@@ -900,7 +900,7 @@ export interface components {
          * JobType
          * @enum {string}
          */
-        JobType: "ingest_validated_claims" | "enrich_confirmed_plant";
+        JobType: "ingest_validated_claims" | "enrich_confirmed_plant" | "refresh_profile";
         /**
          * LightClassification
          * @enum {string}
@@ -974,6 +974,8 @@ export interface components {
             /** Confidence */
             confidence: number;
             enrichment?: components["schemas"]["CandidateEnrichmentStatus"] | null;
+            /** Generation Policy Version */
+            generation_policy_version?: number | null;
             /**
              * Id
              * Format: uuid
@@ -983,6 +985,8 @@ export interface components {
             limitations?: string[];
             /** Scientific Name */
             scientific_name: string;
+            /** Section Status */
+            section_status?: components["schemas"]["ProfileSectionStatus"][];
             /** Sections */
             sections?: {
                 [key: string]: string[];
@@ -1002,6 +1006,39 @@ export interface components {
             name: string;
             /** Region */
             region?: string | null;
+        };
+        /** ProfileRefreshJobResult */
+        ProfileRefreshJobResult: {
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "partial" | "noop";
+            /** Policy Version */
+            policy_version: number;
+            /** Regenerated Sections */
+            regenerated_sections?: string[];
+            /** Stale Sections */
+            stale_sections?: string[];
+        };
+        /**
+         * ProfileSectionStatus
+         * @description Per-section freshness metadata (metadata-only, never raw payloads).
+         *
+         *     ``status`` is one of ``current``, ``stale``, ``refreshing``, ``partial``.
+         *     ``generated_at`` is the timestamp of the active section version.
+         */
+        ProfileSectionStatus: {
+            /** Generated At */
+            generated_at?: string | null;
+            /** Policy Version */
+            policy_version?: number | null;
+            /** Section */
+            section: string;
+            /** Status */
+            status: string;
         };
         /** ProfileSource */
         ProfileSource: {

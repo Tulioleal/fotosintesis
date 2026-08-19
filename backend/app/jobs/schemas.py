@@ -33,6 +33,7 @@ class JobStatus(str, Enum):
 class JobType(str, Enum):
     ingest_validated_claims = "ingest_validated_claims"
     enrich_confirmed_plant = "enrich_confirmed_plant"
+    refresh_profile = "refresh_profile"
 
 
 class JobFailureCategory(str, Enum):
@@ -53,6 +54,7 @@ class JobFailureCategory(str, Enum):
 class JobPayloadVersion:
     INGEST_VALIDATED_CLAIMS_V1 = 1
     ENRICH_CONFIRMED_PLANT_V1 = 1
+    REFRESH_PROFILE_V1 = 1
 
 
 class SourceProvenance(str, Enum):
@@ -296,6 +298,36 @@ class EnrichmentJobResult(BaseModel):
         return self
 
 
+class RefreshProfilePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payload_version: Literal[1] = JobPayloadVersion.REFRESH_PROFILE_V1
+    policy_version: int = Field(ge=1)
+    species: CanonicalSpeciesIdentityFields
+    changed_aspects: list[str] = Field(
+        default_factory=list, max_length=MAX_ENRICHMENT_ASPECTS
+    )
+    fingerprint: str = Field(min_length=1, max_length=64)
+    run_id: UUID
+
+
+class ProfileRefreshJobResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["complete", "partial", "noop"]
+    policy_version: int = Field(ge=1)
+    regenerated_sections: list[str] = Field(
+        default_factory=list, max_length=MAX_ENRICHMENT_ASPECTS
+    )
+    stale_sections: list[str] = Field(
+        default_factory=list, max_length=MAX_ENRICHMENT_ASPECTS
+    )
+    limitations: list[EnrichmentLimitation] = Field(
+        default_factory=list,
+        max_length=MAX_LIMITATIONS_PER_RESULT,
+    )
+
+
 class ReadJobResult(BaseModel):
     succeeded: int = Field(default=0, ge=0, le=MAX_CLAIMS_PER_PAYLOAD)
     skipped: int = Field(default=0, ge=0, le=MAX_CLAIMS_PER_PAYLOAD)
@@ -306,7 +338,11 @@ class ReadJobResult(BaseModel):
     )
 
 
-JobResult: TypeAlias = ReadJobResult | EnrichmentJobResult
+JobResult: TypeAlias = (
+    ReadJobResult
+    | EnrichmentJobResult
+    | ProfileRefreshJobResult
+)
 
 
 class ReadJobError(BaseModel):

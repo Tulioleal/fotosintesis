@@ -527,7 +527,7 @@ class TestTelemetrySafety:
         from app.jobs.schemas import JobFailureCategory
 
         closed_label_values = {
-            "ingest_validated_claims", "enrich_confirmed_plant",
+            "ingest_validated_claims", "enrich_confirmed_plant", "refresh_profile",
             "pending", "processing", "complete", "partial", "failed", "retry_scheduled",
             "lease_lost", "cancelled",
             "lease_expired", "attempts_exhausted", "provider_transient", "created", "reused",

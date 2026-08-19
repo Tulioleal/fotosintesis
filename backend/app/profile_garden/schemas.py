@@ -20,6 +20,19 @@ class ProfileSource(BaseModel):
     confidence: float
 
 
+class ProfileSectionStatus(BaseModel):
+    """Per-section freshness metadata (metadata-only, never raw payloads).
+
+    ``status`` is one of ``current``, ``stale``, ``refreshing``, ``partial``.
+    ``generated_at`` is the timestamp of the active section version.
+    """
+
+    section: str
+    status: str
+    policy_version: int | None = None
+    generated_at: datetime | None = None
+
+
 class PlantProfileResponse(BaseModel):
     id: UUID
     scientific_name: str
@@ -34,6 +47,8 @@ class PlantProfileResponse(BaseModel):
     accepted_gbif_key: int | None = None
     binomial_name: str | None = None
     canonical_species_key: str | None = None
+    generation_policy_version: int | None = None
+    section_status: list[ProfileSectionStatus] = Field(default_factory=list)
 
 
 class GardenPlantCreate(BaseModel):

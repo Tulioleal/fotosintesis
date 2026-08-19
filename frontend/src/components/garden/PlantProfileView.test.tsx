@@ -379,6 +379,23 @@ describe("PlantProfileView", () => {
     );
   });
 
+  it("renders section status badges for stale and partial sections", async () => {
+    mocks.getPlantProfile.mockResolvedValue({
+      ...profile,
+      section_status: [
+        { generated_at: "2026-01-01T00:00:00Z", policy_version: 1, section: "care", status: "stale" },
+        { generated_at: "2026-01-01T00:00:00Z", policy_version: 1, section: "description", status: "partial" },
+      ],
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText("Actualizacion pendiente")).toBeInTheDocument();
+    expect(screen.getByText("Evidencia parcial")).toBeInTheDocument();
+    expect(screen.getAllByRole("note")).toHaveLength(2);
+  });
+
   it("keeps the persisted profile and actions available after failed enrichment", async () => {
     mocks.getCandidateEnrichment.mockResolvedValue({
       ...enrichment("failed"),

@@ -26,10 +26,11 @@ from app.enrichment.progress import EnrichmentProgressRepository
 from app.jobs.schemas import EnrichConfirmedPlantPayload
 from app.knowledge.acquisition import TrustedSourceValidator, retrieve_balanced_enrichment
 from app.knowledge.page_evidence import TrustedPageEvidence
-from app.knowledge.source_urls import canonical_source_domain, canonical_source_url
 from app.knowledge.rag import KnowledgeVectorIndex
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import KnowledgeRetrievalFilters
+from app.knowledge.source_urls import canonical_source_domain, canonical_source_url
+from app.profile_garden.signals import enqueue_profile_refresh
 from app.providers.factory import ProviderRegistry, get_provider_registry
 
 MAX_JUDGE_EVIDENCE_CHARS = 12_000
@@ -338,6 +339,20 @@ class ProductionEnrichmentService:
                 answerability_status=final.answerability.status,
                 last_validation_run_id=validation_id,
             )
+            if accepted_claims and covered:
+                await enqueue_profile_refresh(
+                    session,
+                    identity=identity,
+                    changed_aspects=[item.value for item in covered],
+                    generation_policy_version=policy.version,
+                    evidence=[
+                        {
+                            "source_url": claim.source_url,
+                            "source_version": claim.source_version,
+                        }
+                        for claim in accepted_claims
+                    ],
+                )
             await session.commit()
 
             states_by_document_id = {

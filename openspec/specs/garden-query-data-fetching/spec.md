@@ -52,7 +52,21 @@ The frontend SHALL save and delete garden plants through TanStack Query mutation
 #### Scenario: Plant delete succeeds
 - **WHEN** an authenticated user deletes a saved garden plant
 - **THEN** the delete operation runs as a mutation and invalidates affected garden list and detail queries after success
-
 #### Scenario: Plant delete requires reminder confirmation
+
 - **WHEN** the delete mutation receives a reminder-confirmation conflict
 - **THEN** the UI preserves the confirmation prompt behavior before retrying the delete with confirmation
+
+### Requirement: Profile cache refresh after section replacement
+
+The frontend SHALL invalidate and refresh cached profile data after a committed profile section replacement so profile queries reflect the new active version without blocking profile reads during regeneration.
+
+#### Scenario: Committed replacement refreshes profile queries
+
+- **WHEN** a profile section replacement commits
+- **THEN** affected profile queries are invalidated and refreshed through TanStack Query
+
+#### Scenario: In-progress refresh does not block reads
+
+- **WHEN** a profile section is refreshing in the background
+- **THEN** existing profile reads remain available and the UI communicates refresh state without blocking navigation

@@ -3,11 +3,13 @@ from pydantic import BaseModel
 from app.jobs.handler import HandlerRegistry, get_handler_registry
 from app.jobs.handlers.enrich_confirmed_plant import EnrichConfirmedPlantHandler
 from app.jobs.handlers.ingest_validated_claims import IngestValidatedClaimsHandler
+from app.jobs.handlers.refresh_profile import RefreshProfileHandler
 from app.jobs.schemas import (
     EnrichConfirmedPlantPayload,
     IngestValidatedClaimsPayload,
     JobPayloadVersion,
     JobType,
+    RefreshProfilePayload,
 )
 
 PRODUCTION_PAYLOAD_MODELS: dict[str, dict[int, type[BaseModel]]] = {
@@ -16,6 +18,9 @@ PRODUCTION_PAYLOAD_MODELS: dict[str, dict[int, type[BaseModel]]] = {
     },
     JobType.enrich_confirmed_plant.value: {
         JobPayloadVersion.ENRICH_CONFIRMED_PLANT_V1: EnrichConfirmedPlantPayload,
+    },
+    JobType.refresh_profile.value: {
+        JobPayloadVersion.REFRESH_PROFILE_V1: RefreshProfilePayload,
     },
 }
 
@@ -51,5 +56,13 @@ def register_handlers(registry: HandlerRegistry | None = None) -> None:
             EnrichConfirmedPlantHandler(),
             payload_models=PRODUCTION_PAYLOAD_MODELS[
                 JobType.enrich_confirmed_plant.value
+            ],
+        )
+    if not target.has_handler(JobType.refresh_profile.value):
+        target.register(
+            JobType.refresh_profile.value,
+            RefreshProfileHandler(),
+            payload_models=PRODUCTION_PAYLOAD_MODELS[
+                JobType.refresh_profile.value
             ],
         )

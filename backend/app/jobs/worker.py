@@ -42,6 +42,7 @@ from app.jobs.schemas import (
     JobFailureCategory,
     JobStatus,
     JobType,
+    ProfileRefreshJobResult,
     ReadJobResult,
 )
 from app.observability.logging import configure_logging
@@ -103,6 +104,19 @@ def _validate_result_contract(result: JobHandlerResult) -> JobHandlerResult:
             category=JobFailureCategory.invariant_violation,
             retryable=False,
             efficacy=result.efficacy,
+        )
+
+    if isinstance(details, ProfileRefreshJobResult):
+        if result.status is JobStatus.complete and result.error is None and details.outcome in {
+            "complete",
+            "noop",
+        }:
+            return result
+        if result.status is JobStatus.partial and result.error is not None:
+            return result
+        return JobHandlerResult.failed(
+            category=JobFailureCategory.invariant_violation,
+            retryable=False,
         )
 
     useful_count = (
