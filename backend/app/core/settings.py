@@ -147,6 +147,33 @@ class Settings(BaseSettings):
         description="Path to the versioned provider recording set for recorded/replay mode.",
     )
 
+    identification_max_image_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_BYTES",
+    )
+    identification_max_image_width: int = Field(
+        default=4000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_WIDTH",
+    )
+    identification_max_image_height: int = Field(
+        default=4000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_HEIGHT",
+    )
+    identification_max_image_pixels: int = Field(
+        default=40_000_000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_PIXELS",
+    )
+    identification_output_quality: int = Field(
+        default=85,
+        ge=1,
+        le=100,
+        validation_alias="IDENTIFICATION_OUTPUT_QUALITY",
+    )
+
     auth_limiter_profiles: str = Field(
         default="",
         validation_alias="AUTH_LIMITER_PROFILES",

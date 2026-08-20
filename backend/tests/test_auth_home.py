@@ -22,6 +22,7 @@ from app.core.settings import get_settings
 from app.identification.gbif import GbifTaxonomy
 from app.main import app
 from app.providers.types import ConfidenceLabel, ImageAnalysisResult, PlantCandidate
+from tests._image_helpers import JPEG_BYTES, PNG_BYTES
 
 
 @pytest.fixture(autouse=True)
@@ -476,7 +477,7 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         created = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.jpg", b"fake-image-bytes", "image/jpeg")},
+            files={"file": ("plant.jpg", JPEG_BYTES, "image/jpeg")},
         )
 
         assert created.status_code == 201
@@ -515,7 +516,7 @@ async def test_identification_upload_with_openai_style_vision_does_not_return_ma
         async def analyze_image(
             self, image: bytes, prompt: str | None = None, **kwargs: object
         ) -> ImageAnalysisResult:
-            assert kwargs["mime_type"] == "image/png"
+            assert kwargs["mime_type"] == "image/jpeg"
             return ImageAnalysisResult(
                 provider="openai-vision",
                 model="gpt-4.1-mini",
@@ -562,7 +563,7 @@ async def test_identification_upload_with_openai_style_vision_does_not_return_ma
         response = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.png", b"fake-png-bytes", "image/png")},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
         )
 
     assert response.status_code == 201
@@ -594,7 +595,7 @@ async def test_identification_reports_no_gbif_match(
         response = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.png", b"fake-image-bytes", "image/png")},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
         )
 
         assert response.status_code == 201

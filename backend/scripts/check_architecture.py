@@ -47,6 +47,8 @@ KNOWN_API_SLICE_INTERNALS = {
     "app.reminders.repository",
     "app.identification.repository",
     "app.identification.gbif",
+    "app.identification.image_processing",
+    "app.identification.confirmation",
     "app.light_measurements.repository",
 }
 

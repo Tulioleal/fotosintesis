@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
+from app.core.settings import get_settings
 from app.db.session import get_async_session
 from app.identification.gbif import GbifClient
 from app.identification.confirmation import (
@@ -13,19 +14,25 @@ from app.identification.confirmation import (
     ConfirmationRejectedError,
     ConfirmationSchedulingUnavailable,
 )
+from app.identification.image_processing import (
+    ImageValidationError,
+    normalize_identification_image,
+)
 from app.identification.repository import IdentificationRepository
 from app.identification.schemas import ConfirmationResponse, IdentificationResponse
 from app.enrichment import get_current_enrichment_policy
 from app.jobs.repository import JobRepository
 from app.jobs.schemas import CandidateEnrichmentStatus
+from app.observability.logging import get_logger
 from app.providers.factory import get_provider_registry
 from app.storage.factory import get_object_storage
 from app.storage.models import ObjectUpload
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/identifications", tags=["identifications"])
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 @router.post("", response_model=IdentificationResponse, status_code=status.HTTP_201_CREATED)
@@ -34,38 +41,55 @@ async def create_identification(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> IdentificationResponse:
+    settings = get_settings()
     content = await file.read()
     mime_type = file.content_type or "application/octet-stream"
     if mime_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=415, detail="Upload a JPEG, PNG, or WebP image.")
-    if not content or len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=422, detail="The image is empty or exceeds 8 MB.")
+    if not content or len(content) > settings.identification_max_image_bytes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The image is empty or exceeds {settings.identification_max_image_bytes} bytes.",
+        )
 
-    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
-    path = f"identifications/{user.id}/{uuid4()}.{extension}"
+    try:
+        normalized = normalize_identification_image(content)
+    except ImageValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from None
+
+    path = f"identifications/{user.id}/{uuid4()}.jpg"
     stored = await get_object_storage().put_object(
-        ObjectUpload(path=path, content=content, mime_type=mime_type)
+        ObjectUpload(path=path, content=normalized.content, mime_type=normalized.mime_type)
     )
 
     repository = IdentificationRepository(session)
-    identification_id = await repository.create_identification(
-        user_id=user.id,
-        storage_path=stored.path,
-        mime_type=stored.mime_type,
-        size_bytes=stored.size_bytes,
-        metadata={"filename": file.filename or "plant-image", "bucket": stored.bucket},
-        status="needs_confirmation",
-        message="Review these possible matches before confirming a species.",
-    )
+    try:
+        identification_id = await repository.create_identification(
+            user_id=user.id,
+            storage_path=stored.path,
+            mime_type=stored.mime_type,
+            size_bytes=stored.size_bytes,
+            metadata={
+                "filename": file.filename or "plant-image",
+                "bucket": stored.bucket,
+                "width": normalized.width,
+                "height": normalized.height,
+            },
+            status="needs_confirmation",
+            message="Review these possible matches before confirming a species.",
+        )
+    except Exception:
+        await _compensate_stored_object(stored.path)
+        raise
 
     try:
         analysis = await get_provider_registry().vision.analyze_image(
-            content,
+            normalized.content,
             prompt=(
                 "Identify visible plant candidates only. Return common name, scientific name, "
                 "visible traits and qualitative confidence; never present the result as definitive."
             ),
-            mime_type=mime_type,
+            mime_type=normalized.mime_type,
         )
     except Exception:
         return await _sad_response(
@@ -129,6 +153,17 @@ async def create_identification(
     if response is None:
         raise HTTPException(status_code=404, detail="Identification not found")
     return response
+
+
+async def _compensate_stored_object(path: str) -> None:
+    """Best-effort deletion of a just-stored object whose record could not persist."""
+    try:
+        await get_object_storage().delete_object(path)
+    except Exception:
+        logger.exception(
+            "identification_object_cleanup_failed",
+            extra={"ctx_object_path": path},
+        )
 
 
 async def _sad_response(
