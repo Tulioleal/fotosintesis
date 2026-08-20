@@ -88,6 +88,86 @@ class IdentificationRepository(RepositoryBase):
         )
         await self.session.commit()
 
+    async def create_manual_candidate(
+        self,
+        *,
+        user_id: UUID,
+        query: str,
+        taxonomy: GbifTaxonomy,
+    ) -> TaxonomyCandidate:
+        identity = CanonicalSpeciesIdentity(
+            accepted_gbif_key=taxonomy.accepted_key,
+            normalized_binomial=taxonomy.binomial_name or "",
+            taxonomy_validated=True,
+        )
+        candidate_id = uuid4()
+        await self.session.execute(
+            insert(identification_candidates).values(
+                id=candidate_id,
+                origin="manual_search",
+                user_id=user_id,
+                identification_id=None,
+                suggested_scientific_name=(
+                    taxonomy.accepted_scientific_name
+                    or taxonomy.binomial_name
+                    or query
+                ),
+                confidence_label="manual",
+                visible_traits=[],
+                possible_match_copy=(
+                    "Manual search candidate selected by the user. "
+                    "Confirm after reviewing the GBIF taxonomy."
+                ),
+                gbif_key=taxonomy.key,
+                gbif_accepted_key=identity.accepted_gbif_key,
+                accepted_scientific_name=taxonomy.accepted_scientific_name,
+                binomial_name=identity.normalized_binomial,
+                taxonomic_status=taxonomy.taxonomic_status,
+                synonyms=taxonomy.synonyms,
+                genus=taxonomy.genus,
+                family=taxonomy.family,
+                species=taxonomy.species,
+                validation_status="validated",
+            )
+        )
+        await self.session.commit()
+        return await self._get_candidate(candidate_id)
+
+    async def confirm_manual_candidate(
+        self, *, candidate_id: UUID, user_id: UUID
+    ) -> TaxonomyCandidate | None:
+        candidate = (
+            await self.session.execute(
+                select(identification_candidates).where(
+                    identification_candidates.c.id == candidate_id,
+                    identification_candidates.c.user_id == user_id,
+                    identification_candidates.c.validation_status == "validated",
+                ).with_for_update()
+            )
+        ).first()
+        if candidate is None:
+            return None
+
+        confirmed_at = datetime.now(timezone.utc)
+        await self.session.execute(
+            update(identification_candidates)
+            .where(identification_candidates.c.id == candidate_id)
+            .values(confirmed_at=confirmed_at)
+        )
+        return await self._get_candidate(candidate_id)
+
+    async def _get_candidate(self, candidate_id: UUID) -> TaxonomyCandidate:
+        row = (
+            await self.session.execute(
+                select(identification_candidates).where(
+                    identification_candidates.c.id == candidate_id
+                )
+            )
+        ).first()
+        if row is None:
+            raise RuntimeError("candidate not found after write")
+        return TaxonomyCandidate.model_validate(row._mapping)
+
     async def get_response(self, identification_id: UUID, user_id: UUID) -> IdentificationResponse | None:
         image = (
             await self.session.execute(

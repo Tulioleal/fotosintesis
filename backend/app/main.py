@@ -11,6 +11,7 @@ from app.api.identifications import router as identifications_router
 from app.api.light_measurements import router as light_measurements_router
 from app.api.profile_garden import router as profile_garden_router
 from app.api.reminders import router as reminders_router
+from app.api.search import router as search_router
 from app.core.settings import get_settings
 from app.observability.logging import configure_logging
 from app.observability.metrics import metrics_registry
@@ -53,6 +54,7 @@ def create_app() -> CorsApplication:
     app.include_router(jobs_router)
     app.include_router(reminders_router)
     app.include_router(light_measurements_router)
+    app.include_router(search_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:

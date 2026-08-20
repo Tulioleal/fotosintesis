@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { operations } from "@/lib/generated/openapi";
+import type { components, operations } from "@/lib/generated/openapi";
 
 // ---------------------------------------------------------------------------
 // Type-only contracts derived from the OpenAPI operation map.
@@ -12,6 +12,16 @@ export type ConfirmationResponse =
 
 export type CandidateEnrichmentResponse =
   operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"]["responses"][200]["content"]["application/json"];
+
+export type SearchLocalResponse =
+  operations["search_local_search_get"]["responses"][200]["content"]["application/json"];
+
+export type GbifSearchResponse =
+  operations["search_gbif_search_gbif_get"]["responses"][200]["content"]["application/json"];
+
+export type GbifCandidate = components["schemas"]["GbifCandidate"];
+
+export type ManualCandidateCreate = components["schemas"]["ManualCandidateCreate"];
 
 // ---------------------------------------------------------------------------
 // Narrow Zod schemas that validate every bounded runtime field.
@@ -98,28 +108,74 @@ export const candidateEnrichmentSchema: z.ZodType<CandidateEnrichmentResponse> =
     job: jobStatusResponseSchema,
   });
 
+export const taxonomyCandidateSchema = z.object({
+  id: z.string().uuid(),
+  common_name: z.string().nullable().optional(),
+  suggested_scientific_name: z.string(),
+  confidence_label: z.string(),
+  visible_traits: z.array(z.string()).optional(),
+  possible_match_copy: z.string(),
+  gbif_key: z.number().int().nullable().optional(),
+  gbif_accepted_key: z.number().int().nullable().optional(),
+  accepted_scientific_name: z.string().nullable().optional(),
+  binomial_name: z.string().nullable().optional(),
+  taxonomic_status: z.string().nullable().optional(),
+  synonyms: z.array(z.string()).optional(),
+  genus: z.string().nullable().optional(),
+  family: z.string().nullable().optional(),
+  species: z.string().nullable().optional(),
+  validation_status: z.enum(["validated", "no_gbif_match"]),
+  confirmed_at: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+});
+
 export const confirmationResponseSchema: z.ZodType<ConfirmationResponse> =
   z.object({
     status: z.string(),
-    candidate: z.object({
-      id: z.string().uuid(),
-      common_name: z.string().nullable().optional(),
-      suggested_scientific_name: z.string(),
-      confidence_label: z.string(),
-      visible_traits: z.array(z.string()).optional(),
-      possible_match_copy: z.string(),
-      gbif_key: z.number().int().nullable().optional(),
-      gbif_accepted_key: z.number().int().nullable().optional(),
-      accepted_scientific_name: z.string().nullable().optional(),
-      binomial_name: z.string().nullable().optional(),
-      taxonomic_status: z.string().nullable().optional(),
-      synonyms: z.array(z.string()).optional(),
-      genus: z.string().nullable().optional(),
-      family: z.string().nullable().optional(),
-      species: z.string().nullable().optional(),
-      validation_status: z.enum(["validated", "no_gbif_match"]),
-      confirmed_at: z.string().nullable().optional(),
-      created_at: z.string().optional(),
-    }),
+    candidate: taxonomyCandidateSchema,
     enrichment: candidateEnrichmentSchema,
+  });
+
+export const localSearchResultSchema = z.object({
+  profile_id: z.string().uuid(),
+  scientific_name: z.string(),
+  common_name: z.string().nullable().optional(),
+  binomial_name: z.string().nullable().optional(),
+  matched_field: z.enum([
+    "scientific_name",
+    "binomial_name",
+    "common_name",
+    "alias",
+  ]),
+  matched_value: z.string(),
+  has_evidence: z.boolean(),
+});
+
+export const searchLocalResponseSchema: z.ZodType<SearchLocalResponse> =
+  z.object({
+    results: z.array(localSearchResultSchema),
+  });
+
+export const gbifCandidateSchema: z.ZodType<GbifCandidate> = z.object({
+  key: z.number().int().nullable().optional(),
+  accepted_key: z.number().int().nullable().optional(),
+  accepted_scientific_name: z.string().nullable().optional(),
+  binomial_name: z.string().nullable().optional(),
+  rank: z.string().nullable().optional(),
+  taxonomic_status: z.string().nullable().optional(),
+  synonyms: z.array(z.string()).optional(),
+  genus: z.string().nullable().optional(),
+  family: z.string().nullable().optional(),
+  species: z.string().nullable().optional(),
+});
+
+export const gbifSearchResponseSchema: z.ZodType<GbifSearchResponse> =
+  z.object({
+    candidates: z.array(gbifCandidateSchema),
+  });
+
+export const manualCandidateCreateSchema: z.ZodType<ManualCandidateCreate> =
+  z.object({
+    query: z.string().min(1).max(240),
+    gbif: gbifCandidateSchema,
   });

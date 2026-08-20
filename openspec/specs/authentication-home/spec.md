@@ -1,9 +1,7 @@
 ## Purpose
 
 TBD - synced from change `add-authentication-home`.
-
 ## Requirements
-
 ### Requirement: Auth.js authentication boundary
 
 The system SHALL use Auth.js / NextAuth as the frontend authentication boundary for login, logout and session handling.
@@ -293,9 +291,14 @@ The system SHALL expose navigable authenticated placeholders for private feature
 
 #### Scenario: Pending feature opened
 
-- **WHEN** an authenticated user opens identification, search, light meter, reminders, My Garden or assistant before that feature is implemented
+- **WHEN** an authenticated user opens identification, light meter, reminders, My Garden or assistant before that feature is implemented
 - **THEN** the system shows a protected placeholder screen with a "Coming soon" copy in English
 - **AND** the system does not implement real feature logic in this slice
+
+#### Scenario: Search is a real protected flow
+
+- **WHEN** an authenticated user opens the search route
+- **THEN** the system renders the functional search experience rather than a "Coming soon" placeholder
 
 ### Requirement: Bottom navigation
 
@@ -430,3 +433,4 @@ The system SHALL provide a frontend reset route that reads the token from the UR
 - **WHEN** the reset request fails for an unknown, used, or expired token
 - **THEN** the UI presents a neutral failure that does not distinguish the token detail
 - **AND** offers a safe path to request a new recovery link
+

@@ -46,6 +46,11 @@ export type AssistantRetryableError = components["schemas"]["AssistantRetryableE
 export type ConfirmationResponse = operations["confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post"]["responses"][200]["content"]["application/json"];
 export type CandidateEnrichmentStatus = operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"]["responses"][200]["content"]["application/json"];
 export type PlantProfileResponse = operations["get_plant_profile_plant_profiles__scientific_name__get"]["responses"][200]["content"]["application/json"];
+export type SearchLocalResponse = components["schemas"]["SearchLocalResponse"];
+export type GbifSearchResponse = components["schemas"]["GbifSearchResponse"];
+export type GbifCandidate = components["schemas"]["GbifCandidate"];
+export type ManualCandidateCreate = components["schemas"]["ManualCandidateCreate"];
+export type TaxonomyCandidate = components["schemas"]["TaxonomyCandidate"];
 
 type ErrorPayload = {
   detail?: string;
@@ -169,6 +174,27 @@ export const apiClient = {
     const params = new URLSearchParams({ candidateId, language });
     return frontendRequest<PlantProfileResponse>(
       `/api/plant-profiles/${encodeURIComponent(scientificName)}?${params}`,
+    );
+  },
+  searchPlants(query: string) {
+    const params = new URLSearchParams({ q: query });
+    return frontendRequest<SearchLocalResponse>(`/api/search?${params.toString()}`);
+  },
+  searchGbif(query: string) {
+    const params = new URLSearchParams({ q: query });
+    return frontendRequest<GbifSearchResponse>(`/api/search/gbif?${params.toString()}`);
+  },
+  createManualCandidate(body: ManualCandidateCreate) {
+    return frontendRequest<TaxonomyCandidate>("/api/search/candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  confirmManualCandidate(candidateId: string) {
+    return frontendRequest<ConfirmationResponse>(
+      `/api/search/candidates/${encodeURIComponent(candidateId)}/confirm`,
+      { method: "POST" },
     );
   },
   listReminders(gardenPlantId?: string) {

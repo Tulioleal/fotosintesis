@@ -11,6 +11,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"status": "ok"})
             return
 
+        if parsed.path == "/v1/species/suggest":
+            self._handle_suggest(parsed)
+            return
+
         if parsed.path != "/v1/species/match":
             self.send_error(404)
             return
@@ -34,6 +38,38 @@ class Handler(BaseHTTPRequestHandler):
             "family": "Crassulaceae",
             "species": "Cotyledon tomentosa",
         })
+
+    def _handle_suggest(self, parsed: "urlparse.ParseResult") -> None:
+        query = parse_qs(parsed.query).get("q", [""])[0].casefold()
+        if "cotyledon" not in query and "tomentosa" not in query:
+            self._send([])
+            return
+        self._send([
+            {
+                "key": 4219524,
+                "acceptedKey": 4219524,
+                "scientificName": "Cotyledon tomentosa Harv.",
+                "acceptedName": "Cotyledon tomentosa Harv.",
+                "canonicalName": "Cotyledon tomentosa",
+                "status": "ACCEPTED",
+                "rank": "SPECIES",
+                "genus": "Cotyledon",
+                "family": "Crassulaceae",
+                "species": "Cotyledon tomentosa",
+            },
+            {
+                "key": 4219525,
+                "acceptedKey": 4219525,
+                "scientificName": "Cotyledon orbiculata",
+                "acceptedName": "Cotyledon orbiculata",
+                "canonicalName": "Cotyledon orbiculata",
+                "status": "ACCEPTED",
+                "rank": "SPECIES",
+                "genus": "Cotyledon",
+                "family": "Crassulaceae",
+                "species": "Cotyledon orbiculata",
+            },
+        ])
 
     def _send(self, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")

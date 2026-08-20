@@ -1,7 +1,7 @@
 from collections import defaultdict
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, insert, or_, select
+from sqlalchemy import Text, delete, func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,7 @@ from app.profile_garden.schemas import (
     GardenPlantCreate,
     GardenPlantResponse,
     LightSummary,
+    LocalPlantSearchResult,
     PlantProfileResponse,
     ProfileAlias,
     ProfileSectionStatus,
@@ -532,7 +533,7 @@ class PlantProfileGardenRepository(RepositoryBase):
         return (
             await self.session.execute(
                 select(identification_candidates)
-                .join(
+                .outerjoin(
                     identification_images,
                     identification_images.c.id == identification_candidates.c.identification_id,
                 )
@@ -540,10 +541,68 @@ class PlantProfileGardenRepository(RepositoryBase):
                     identification_candidates.c.id == candidate_id,
                     identification_candidates.c.validation_status == "validated",
                     identification_candidates.c.confirmed_at.is_not(None),
-                    identification_images.c.user_id == user_id,
+                    or_(
+                        identification_candidates.c.user_id == user_id,
+                        identification_images.c.user_id == user_id,
+                    ),
                 )
             )
         ).first()
+
+    async def search_local_profiles(self, query: str, limit: int = 12) -> list[LocalPlantSearchResult]:
+        term = query.strip()
+        if not term:
+            return []
+        pattern = f"%{term}%"
+
+        rows = (
+            await self.session.execute(
+                select(
+                    plant_profiles.c.id,
+                    plant_profiles.c.scientific_name,
+                    plant_profiles.c.common_name,
+                    plant_profiles.c.normalized_binomial,
+                    plant_profiles.c.aliases,
+                    plant_profiles.c.sections,
+                )
+                .where(
+                    or_(
+                        plant_profiles.c.scientific_name.ilike(pattern),
+                        plant_profiles.c.normalized_binomial.ilike(pattern),
+                        plant_profiles.c.common_name.ilike(pattern),
+                        plant_profiles.c.aliases.cast(Text).ilike(pattern),
+                    )
+                )
+                .order_by(plant_profiles.c.scientific_name)
+                .limit(limit)
+            )
+        ).all()
+
+        results: list[LocalPlantSearchResult] = []
+        for row in rows:
+            mapping = row._mapping
+            scientific = mapping[plant_profiles.c.scientific_name]
+            common = mapping[plant_profiles.c.common_name]
+            binomial = mapping[plant_profiles.c.normalized_binomial]
+            aliases = mapping[plant_profiles.c.aliases] or []
+            sections = mapping[plant_profiles.c.sections] or {}
+
+            matched_field, matched_value = _resolve_local_match(
+                term, scientific, common, binomial, aliases
+            )
+
+            results.append(
+                LocalPlantSearchResult(
+                    profile_id=mapping[plant_profiles.c.id],
+                    scientific_name=scientific,
+                    common_name=common,
+                    binomial_name=binomial,
+                    matched_field=matched_field,
+                    matched_value=matched_value,
+                    has_evidence=bool(sections),
+                )
+            )
+        return results
 
     async def count_garden_plants(self, *, user_id: UUID) -> int:
         value = await self.session.scalar(
@@ -568,6 +627,31 @@ class PlantProfileGardenRepository(RepositoryBase):
         )
         rows = (await self.session.execute(statement)).all()
         return [_garden_card_from_row(row._mapping) for row in rows]
+
+
+def _resolve_local_match(
+    term: str,
+    scientific_name: str | None,
+    common_name: str | None,
+    binomial_name: str | None,
+    aliases: list,
+) -> tuple[str, str]:
+    """Determine which field a profile matched on, in priority order."""
+    lowered = term.casefold()
+    if scientific_name and lowered in scientific_name.casefold():
+        return ("scientific_name", scientific_name)
+    if binomial_name and lowered in binomial_name.casefold():
+        return ("binomial_name", binomial_name)
+    if common_name and lowered in common_name.casefold():
+        return ("common_name", common_name)
+    if isinstance(aliases, list):
+        for alias in aliases:
+            if not isinstance(alias, dict):
+                continue
+            name = alias.get("name")
+            if isinstance(name, str) and lowered in name.casefold():
+                return ("alias", name)
+    return ("scientific_name", scientific_name or "")
 
 
 def _build_profile_evidence(

@@ -368,6 +368,13 @@ describe("IdentifyFlow", () => {
       screen.queryByRole("button", { name: "Seleccionar esta planta" }),
     ).not.toBeInTheDocument();
     expect(container.querySelector("hr")).not.toBeInTheDocument();
+
+    // The recoverable state offers a navigable manual search entry point.
+    const searchLink = screen.getByRole("link", {
+      name: "Buscar manualmente",
+    });
+    expect(searchLink).toBeInTheDocument();
+    expect(searchLink.getAttribute("href")).toBe("/search");
   });
 
   it("does not expose PlantCare placeholder copy on the redesigned identification flow", () => {

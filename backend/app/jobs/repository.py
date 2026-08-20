@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -361,14 +361,17 @@ class JobRepository(RepositoryBase):
     ) -> CandidateEnrichmentAssociationResult:
         owned_candidate = await self.session.scalar(
             select(identification_candidates.c.id)
-            .join(
+            .outerjoin(
                 identification_images,
                 identification_images.c.id
                 == identification_candidates.c.identification_id,
             )
             .where(
                 identification_candidates.c.id == candidate_id,
-                identification_images.c.user_id == user_id,
+                or_(
+                    identification_candidates.c.user_id == user_id,
+                    identification_images.c.user_id == user_id,
+                ),
             )
         )
         if owned_candidate is None:
@@ -1101,7 +1104,7 @@ class JobRepository(RepositoryBase):
                     identification_candidates.c.id
                     == candidate_enrichment_jobs.c.candidate_id,
                 )
-                .join(
+                .outerjoin(
                     identification_images,
                     identification_images.c.id
                     == identification_candidates.c.identification_id,
@@ -1110,7 +1113,10 @@ class JobRepository(RepositoryBase):
                     candidate_enrichment_jobs.c.candidate_id == candidate_id,
                     candidate_enrichment_jobs.c.policy_version == policy_version,
                     candidate_enrichment_jobs.c.user_id == user_id,
-                    identification_images.c.user_id == user_id,
+                    or_(
+                        identification_candidates.c.user_id == user_id,
+                        identification_images.c.user_id == user_id,
+                    ),
                 )
             )
         ).first()

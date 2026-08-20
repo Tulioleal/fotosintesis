@@ -461,6 +461,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Local */
+        get: operations["search_local_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Manual Candidate */
+        post: operations["create_manual_candidate_search_candidates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/candidates/{candidate_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Manual Candidate */
+        post: operations["confirm_manual_candidate_search_candidates__candidate_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/gbif": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Gbif */
+        get: operations["search_gbif_search_gbif_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -796,6 +864,34 @@ export interface components {
             notes?: string | null;
             profile: components["schemas"]["PlantProfileResponse"];
         };
+        /** GbifCandidate */
+        GbifCandidate: {
+            /** Accepted Key */
+            accepted_key?: number | null;
+            /** Accepted Scientific Name */
+            accepted_scientific_name?: string | null;
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Genus */
+            genus?: string | null;
+            /** Key */
+            key?: number | null;
+            /** Rank */
+            rank?: string | null;
+            /** Species */
+            species?: string | null;
+            /** Synonyms */
+            synonyms?: string[];
+            /** Taxonomic Status */
+            taxonomic_status?: string | null;
+        };
+        /** GbifSearchResponse */
+        GbifSearchResponse: {
+            /** Candidates */
+            candidates?: components["schemas"]["GbifCandidate"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -968,6 +1064,32 @@ export interface components {
             measured_at: string;
             reliability: components["schemas"]["MeasurementReliability"];
             source: components["schemas"]["MeasurementSource"];
+        };
+        /** LocalPlantSearchResult */
+        LocalPlantSearchResult: {
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Common Name */
+            common_name?: string | null;
+            /** Has Evidence */
+            has_evidence: boolean;
+            /** Matched Field */
+            matched_field: string;
+            /** Matched Value */
+            matched_value: string;
+            /**
+             * Profile Id
+             * Format: uuid
+             */
+            profile_id: string;
+            /** Scientific Name */
+            scientific_name: string;
+        };
+        /** ManualCandidateCreate */
+        ManualCandidateCreate: {
+            gbif: components["schemas"]["GbifCandidate"];
+            /** Query */
+            query: string;
         };
         /**
          * MeasurementReliability
@@ -1409,6 +1531,11 @@ export interface components {
             time?: string | null;
             /** Timezone */
             timezone?: string | null;
+        };
+        /** SearchLocalResponse */
+        SearchLocalResponse: {
+            /** Results */
+            results?: components["schemas"]["LocalPlantSearchResult"][];
         };
         /** TaxonomyCandidate */
         TaxonomyCandidate: {
@@ -2677,6 +2804,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReminderDto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_local_search_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchLocalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_manual_candidate_search_candidates_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualCandidateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyCandidate"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_manual_candidate_search_candidates__candidate_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                candidate_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_gbif_search_gbif_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GbifSearchResponse"];
                 };
             };
             /** @description Validation Error */

@@ -353,3 +353,93 @@ async def _create_user_candidate(
         await session.commit()
 
     return auth_session.token, str(candidate_id)
+
+
+async def _create_profile(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    scientific_name: str,
+    common_name: str | None = None,
+    normalized_binomial: str | None = None,
+    aliases: list | None = None,
+    has_sections: bool = True,
+) -> None:
+    async with session_factory() as session:
+        await session.execute(
+            insert(plant_profiles).values(
+                id=uuid4(),
+                scientific_name=scientific_name,
+                common_name=common_name,
+                aliases=aliases or [],
+                sections={"care": ["Some content."]} if has_sections else {},
+                sources=[],
+                confidence=0.5,
+                limitations=[],
+                normalized_binomial=normalized_binomial,
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_search_local_profiles_matches_scientific_binomial_common_and_alias(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _create_profile(
+        session_factory,
+        scientific_name="Monstera deliciosa",
+        common_name="Costilla de Adán",
+        normalized_binomial="Monstera deliciosa",
+        aliases=[{"name": "Hoja partida", "language": "es"}],
+    )
+    await _create_profile(
+        session_factory,
+        scientific_name="Solanum lycopersicum",
+        common_name="Tomate",
+        normalized_binomial="Solanum lycopersicum",
+        aliases=[],
+        has_sections=False,
+    )
+
+    async with session_factory() as session:
+        from app.profile_garden.repository import PlantProfileGardenRepository
+
+        repo = PlantProfileGardenRepository(session)
+
+        scientific = await repo.search_local_profiles("Monstera")
+        assert len(scientific) == 1
+        assert scientific[0].matched_field == "scientific_name"
+        assert scientific[0].scientific_name == "Monstera deliciosa"
+
+        binomial = await repo.search_local_profiles("deliciosa")
+        assert len(binomial) == 1
+        assert binomial[0].scientific_name == "Monstera deliciosa"
+
+        common = await repo.search_local_profiles("Tomate")
+        assert len(common) == 1
+        assert common[0].matched_field == "common_name"
+        assert common[0].has_evidence is False
+
+        alias = await repo.search_local_profiles("Hoja partida")
+        assert len(alias) == 1
+        assert alias[0].matched_field == "alias"
+        assert alias[0].matched_value == "Hoja partida"
+
+
+@pytest.mark.asyncio
+async def test_search_local_profiles_returns_empty_for_no_match(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _create_profile(
+        session_factory,
+        scientific_name="Monstera deliciosa",
+        common_name="Costilla de Adán",
+    )
+
+    async with session_factory() as session:
+        from app.profile_garden.repository import PlantProfileGardenRepository
+
+        repo = PlantProfileGardenRepository(session)
+        results = await repo.search_local_profiles("zzz-no-such-plant")
+        assert results == []
+        assert await repo.search_local_profiles("   ") == []

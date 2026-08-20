@@ -4,6 +4,7 @@ import { ChangeEvent, useRef, useState } from "react";
 import {
   CameraIcon,
   CheckCircleIcon,
+  MagnifyingGlassIcon,
   PlantIcon,
   QuestionIcon,
   UploadSimpleIcon,
@@ -371,6 +372,25 @@ export function IdentifyFlow() {
               role="status"
             >
               {identification.message}
+              <div className={styles.recoverableActions}>
+                <AppLink
+                  href="/search"
+                  variant="button"
+                  buttonVariant="outline"
+                  buttonSize="sm"
+                  leadingIcon={
+                    <MagnifyingGlassIcon
+                      aria-hidden="true"
+                      size="1.25rem"
+                    />
+                  }
+                >
+                  Buscar manualmente
+                </AppLink>
+                <Button variant="ghost" size="sm" onClick={resetFlow}>
+                  Reintentar
+                </Button>
+              </div>
             </Notice>
           ) : null}
 

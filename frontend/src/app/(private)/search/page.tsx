@@ -1,5 +1,5 @@
-import { PlaceholderPage } from "@/components/ui/PlaceholderPage";
+import { SearchFlow } from "@/components/search/SearchFlow";
 
 export default function SearchPage() {
-  return <PlaceholderPage title="Buscar plantas" />;
+  return <SearchFlow />;
 }

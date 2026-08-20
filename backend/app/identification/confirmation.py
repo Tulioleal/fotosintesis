@@ -55,6 +55,27 @@ class CandidateConfirmationService:
             await self.session.rollback()
             raise ConfirmationRejectedError
 
+        return await self._schedule_and_respond(candidate, candidate_id, user_id)
+
+    async def confirm_manual(
+        self, *, candidate_id: UUID, user_id: UUID
+    ) -> ConfirmationResponse:
+        if not self.settings.jobs_producer_enabled:
+            await self.session.rollback()
+            raise ConfirmationSchedulingUnavailable("durable scheduling is disabled")
+
+        candidate = await self.identifications.confirm_manual_candidate(
+            candidate_id=candidate_id, user_id=user_id
+        )
+        if candidate is None:
+            await self.session.rollback()
+            raise ConfirmationRejectedError
+
+        return await self._schedule_and_respond(candidate, candidate_id, user_id)
+
+    async def _schedule_and_respond(
+        self, candidate, candidate_id: UUID, user_id: UUID
+    ) -> ConfirmationResponse:
         try:
             identity = CanonicalSpeciesIdentity(
                 accepted_gbif_key=candidate.gbif_accepted_key,

@@ -66,6 +66,21 @@
   }
 }
 
+.recoverableActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+@media (min-width: 720px) {
+  .recoverableActions {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+
 .dropHint {
   margin: 0;
   font-family: $font-body-stack;

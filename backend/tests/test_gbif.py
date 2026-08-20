@@ -1,7 +1,9 @@
 import json
 
+import pytest
+
 from app.core.settings import get_settings
-from app.identification.gbif import GbifClient
+from app.identification.gbif import GbifClient, ProviderLookupError
 
 PUBLIC_GBIF_URL = "https://api.gbif.org/v1/species/match"
 
@@ -88,3 +90,74 @@ async def test_none_response_remains_unmatched(monkeypatch) -> None:
 
     assert taxonomy.matched is False
     assert taxonomy.has_canonical_identity is False
+
+
+async def test_suggest_prioritizes_accepted_species(monkeypatch) -> None:
+    payload = [
+        {
+            "key": 1001,
+            "canonicalName": "Monstera deliciosa",
+            "scientificName": "Monstera deliciosa Liebm.",
+            "status": "ACCEPTED",
+            "rank": "SPECIES",
+            "genus": "Monstera",
+            "family": "Araceae",
+            "species": "Monstera deliciosa",
+        },
+        {
+            "key": 1002,
+            "canonicalName": "Monstera deliciosa subsp. sierrana",
+            "scientificName": "Monstera deliciosa subsp. sierrana",
+            "status": "ACCEPTED",
+            "rank": "SUBSPECIES",
+            "genus": "Monstera",
+            "family": "Araceae",
+            "species": "Monstera deliciosa",
+        },
+    ]
+
+    def fake_urlopen(url, timeout):
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("app.identification.gbif.urlopen", fake_urlopen)
+
+    result = await GbifClient(base_url=PUBLIC_GBIF_URL).suggest("Monstera")
+
+    assert len(result) == 2
+    # Accepted species-level candidate is ranked first.
+    assert result[0].key == 1001
+    assert result[0].rank == "SPECIES"
+    assert result[0].accepted_scientific_name == "Monstera deliciosa Liebm."
+    assert result[0].binomial_name == "Monstera deliciosa"
+    assert result[0].genus == "Monstera"
+    assert result[0].family == "Araceae"
+    assert result[0].matched is True
+    assert result[1].rank == "SUBSPECIES"
+
+
+async def test_suggest_provider_failure_is_retryable(monkeypatch) -> None:
+    def fake_urlopen(url, timeout):
+        raise OSError("network down")
+
+    monkeypatch.setattr("app.identification.gbif.urlopen", fake_urlopen)
+
+    with pytest.raises(ProviderLookupError):
+        await GbifClient(base_url=PUBLIC_GBIF_URL).suggest("Monstera")
+
+
+async def test_suggest_ignores_unranked_or_missing_key(monkeypatch) -> None:
+    payload = [
+        {"canonicalName": "No key here", "status": "ACCEPTED"},
+        {"key": 2001, "canonicalName": "Valid entry", "status": "ACCEPTED", "rank": "SPECIES"},
+    ]
+
+    def fake_urlopen(url, timeout):
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("app.identification.gbif.urlopen", fake_urlopen)
+
+    result = await GbifClient(base_url=PUBLIC_GBIF_URL).suggest("query")
+
+    assert len(result) == 1
+    assert result[0].key == 2001
+

@@ -98,3 +98,13 @@ class GardenPlantResponse(BaseModel):
 
 class GardenDeleteResponse(BaseModel):
     status: str
+
+
+class LocalPlantSearchResult(BaseModel):
+    profile_id: UUID
+    scientific_name: str
+    common_name: str | None = None
+    binomial_name: str | None = None
+    matched_field: str
+    matched_value: str
+    has_evidence: bool
