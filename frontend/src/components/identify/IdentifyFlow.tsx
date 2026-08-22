@@ -75,6 +75,33 @@ const validationChipCopy: Record<"validated" | "no_gbif_match", string> = {
   no_gbif_match: "Sin coincidencia GBIF",
 };
 
+const recoveryCopy: Record<string, { heading: string; message: string }> = {
+  maas_unavailable: {
+    heading: "No pudimos analizar la foto",
+    message: "El análisis visual no está disponible. Intentá de nuevo en unos minutos o buscá la planta manualmente.",
+  },
+  blurry_image: {
+    heading: "Necesitamos otra foto",
+    message: "La imagen parece borrosa. Intentá nuevamente con mejor enfoque y luz natural.",
+  },
+  no_plant: {
+    heading: "No encontramos una planta clara",
+    message: "Probá con una foto más cercana, bien iluminada y con la planta en el centro.",
+  },
+  low_confidence: {
+    heading: "Necesitamos otra foto",
+    message: "No obtuvimos coincidencias confiables. Intentá nuevamente con mejor luz y enfoque.",
+  },
+  no_gbif_match: {
+    heading: "No pudimos validar la especie",
+    message: "Vimos plantas posibles, pero GBIF no validó los nombres sugeridos. Podés usar la búsqueda manual.",
+  },
+  taxonomy_unavailable: {
+    heading: "No pudimos validar la especie",
+    message: "El análisis visual funcionó, pero GBIF no está disponible temporalmente. Intentá de nuevo en unos minutos.",
+  },
+};
+
 export function IdentifyFlow() {
   const router = useRouter();
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -368,10 +395,14 @@ export function IdentifyFlow() {
           {identification.sad_path ? (
             <Notice
               tone="warning"
-              heading="Necesitamos otra foto"
+              heading={
+                recoveryCopy[identification.sad_path]?.heading ??
+                "Necesitamos otra foto"
+              }
               role="status"
             >
-              {identification.message}
+              {recoveryCopy[identification.sad_path]?.message ??
+                identification.message}
               <div className={styles.recoverableActions}>
                 <AppLink
                   href="/search"

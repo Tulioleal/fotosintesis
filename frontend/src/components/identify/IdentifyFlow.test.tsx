@@ -377,6 +377,43 @@ describe("IdentifyFlow", () => {
     expect(searchLink.getAttribute("href")).toBe("/search");
   });
 
+  it("explains a temporary GBIF outage without asking for another photo", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...identificationPayload,
+          sad_path: "taxonomy_unavailable",
+          message: "GBIF taxonomy validation is temporarily unavailable.",
+          status: "retry_needed",
+          candidates: [],
+        }),
+      }),
+    );
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp"]',
+    ) as HTMLInputElement;
+
+    fireEvent.change(upload, {
+      target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] },
+    });
+
+    expect(
+      await screen.findByText("No pudimos validar la especie"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "El análisis visual funcionó, pero GBIF no está disponible temporalmente. Intentá de nuevo en unos minutos.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("GBIF taxonomy validation is temporarily unavailable."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Necesitamos otra foto")).not.toBeInTheDocument();
+  });
+
   it("does not expose PlantCare placeholder copy on the redesigned identification flow", () => {
     const { container } = render(<IdentifyFlow />);
     expect(container.textContent).not.toMatch(/PlantCare/);
