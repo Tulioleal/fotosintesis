@@ -1004,7 +1004,7 @@ def test_knowledge_embedding_vector_column_uses_pgvector_type() -> None:
     vector_type = knowledge_embeddings.c.embedding_vector.type
 
     assert not isinstance(vector_type, sa.Text)
-    assert vector_type.compile(dialect=postgresql.dialect()).lower() == "vector(8)"
+    assert vector_type.compile(dialect=postgresql.dialect()).lower() == "vector(1536)"
 
 
 def test_knowledge_embedding_insert_binds_pgvector_type_for_postgresql() -> None:
@@ -1023,7 +1023,7 @@ def test_knowledge_embedding_insert_binds_pgvector_type_for_postgresql() -> None
     vector_bind = compiled.binds["embedding_vector"]
 
     assert not isinstance(vector_bind.type, sa.Text | sa.String)
-    assert vector_bind.type.compile(dialect=postgresql.dialect()).lower() == "vector(8)"
+    assert vector_bind.type.compile(dialect=postgresql.dialect()).lower() == "vector(1536)"
 
 
 def test_llamaindex_metadata_filters_can_be_built_with_injected_classes() -> None:
