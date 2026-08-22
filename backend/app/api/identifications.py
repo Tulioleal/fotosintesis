@@ -8,7 +8,7 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
 from app.core.settings import get_settings
 from app.db.session import get_async_session
-from app.identification.gbif import GbifClient
+from app.identification.gbif import GbifClient, ProviderLookupError
 from app.identification.confirmation import (
     CandidateConfirmationService,
     ConfirmationRejectedError,
@@ -130,10 +130,36 @@ async def create_identification(
             candidates=candidates,
         )
 
-    gbif = GbifClient()
+    try:
+        gbif = GbifClient()
+        resolved = [
+            (candidate, await gbif.match_name(candidate.scientific_name)) for candidate in reliable
+        ]
+    except ProviderLookupError as exc:
+        logger.warning(
+            "identification_taxonomy_lookup_failed",
+            extra={
+                "ctx_identification_id": str(identification_id),
+                "ctx_cause_type": exc.cause_type,
+                "ctx_attempts": exc.attempts,
+                "ctx_latency_seconds": (
+                    round(exc.latency_seconds, 6)
+                    if exc.latency_seconds is not None
+                    else None
+                ),
+            },
+            exc_info=True,
+        )
+        return await _sad_response(
+            repository,
+            identification_id,
+            user.id,
+            "taxonomy_unavailable",
+            "GBIF taxonomy validation is temporarily unavailable. Retry shortly.",
+        )
+
     validated = 0
-    for candidate in reliable:
-        taxonomy = await gbif.match_name(candidate.scientific_name)
+    for candidate, taxonomy in resolved:
         if taxonomy.has_canonical_identity:
             validated += 1
         await repository.add_candidate(
@@ -182,11 +208,23 @@ async def _sad_response(
     )
     if candidates:
         gbif = GbifClient()
-        for candidate in candidates[:3]:
+        try:
+            resolved = [
+                (candidate, await gbif.match_name(candidate.scientific_name))
+                for candidate in candidates[:3]
+            ]
+        except ProviderLookupError:
+            logger.warning(
+                "identification_recovery_taxonomy_lookup_failed",
+                extra={"ctx_identification_id": str(identification_id)},
+                exc_info=True,
+            )
+            resolved = []
+        for candidate, taxonomy in resolved:
             await repository.add_candidate(
                 identification_id=identification_id,
                 candidate=candidate,
-                taxonomy=await gbif.match_name(candidate.scientific_name),
+                taxonomy=taxonomy,
             )
     response = await repository.get_response(identification_id, user_id)
     if response is None:

@@ -19,7 +19,7 @@ from app.auth.tables import (
     users,
 )
 from app.core.settings import get_settings
-from app.identification.gbif import GbifTaxonomy
+from app.identification.gbif import GbifTaxonomy, ProviderLookupError
 from app.main import app
 from app.providers.types import ConfidenceLabel, ImageAnalysisResult, PlantCandidate
 from tests._image_helpers import JPEG_BYTES, PNG_BYTES
@@ -603,3 +603,38 @@ async def test_identification_reports_no_gbif_match(
         assert body["status"] == "retry_needed"
         assert body["sad_path"] == "no_gbif_match"
         assert body["candidates"][0]["binomial_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_identification_reports_taxonomy_provider_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable_name(self, scientific_name: str) -> GbifTaxonomy:
+        raise ProviderLookupError("network down")
+
+    monkeypatch.setattr("app.identification.gbif.GbifClient.match_name", unavailable_name)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "name": "Iris",
+            "email": "iris@example.com",
+            "password": "password123",
+        }
+        await client.post("/auth/register", json=payload)
+        verified = await client.post(
+            "/auth/credentials/verify",
+            json={"email": payload["email"], "password": payload["password"]},
+        )
+        token = verified.json()["session_token"]
+
+        response = await client.post(
+            "/identifications",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "retry_needed"
+    assert body["sad_path"] == "taxonomy_unavailable"
+    assert body["candidates"] == []

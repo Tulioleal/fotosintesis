@@ -92,6 +92,65 @@ async def test_none_response_remains_unmatched(monkeypatch) -> None:
     assert taxonomy.has_canonical_identity is False
 
 
+async def test_match_provider_failure_is_retryable(monkeypatch) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def fake_urlopen(url, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise OSError("network down")
+
+    monkeypatch.setattr("app.identification.gbif.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.identification.gbif.sleep", delays.append)
+
+    with pytest.raises(ProviderLookupError) as exc_info:
+        await GbifClient(base_url=PUBLIC_GBIF_URL).match_name("Monstera deliciosa")
+
+    assert attempts == 3
+    assert delays == [0.2, 0.4]
+    assert exc_info.value.cause_type == "OSError"
+    assert exc_info.value.attempts == 3
+    assert exc_info.value.latency_seconds is not None
+
+
+async def test_match_recovers_after_transient_provider_failure(monkeypatch) -> None:
+    attempts = 0
+    delays: list[float] = []
+    payload = {
+        "usageKey": 2868323,
+        "acceptedUsageKey": 2868323,
+        "scientificName": "Epipremnum aureum (Linden & André) G.S.Bunting",
+        "acceptedScientificName": "Epipremnum aureum (Linden & André) G.S.Bunting",
+        "canonicalName": "Epipremnum aureum",
+        "status": "ACCEPTED",
+        "matchType": "EXACT",
+        "confidence": 100,
+        "genus": "Epipremnum",
+        "family": "Araceae",
+        "species": "Epipremnum aureum",
+    }
+
+    def fake_urlopen(url, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary DNS failure")
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("app.identification.gbif.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.identification.gbif.sleep", delays.append)
+
+    taxonomy = await GbifClient(base_url=PUBLIC_GBIF_URL).match_name(
+        "Epipremnum aureum"
+    )
+
+    assert attempts == 2
+    assert delays == [0.2]
+    assert taxonomy.has_canonical_identity is True
+    assert taxonomy.accepted_key == 2868323
+
+
 async def test_suggest_prioritizes_accepted_species(monkeypatch) -> None:
     payload = [
         {
@@ -160,4 +219,3 @@ async def test_suggest_ignores_unranked_or_missing_key(monkeypatch) -> None:
 
     assert len(result) == 1
     assert result[0].key == 2001
-

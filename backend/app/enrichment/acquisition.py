@@ -9,7 +9,13 @@ from app.enrichment.identity import CanonicalSpeciesIdentity
 from app.enrichment.policy import EnrichmentPolicy
 from app.knowledge.acquisition import TrustedSourceValidator
 from app.knowledge.page_evidence import TrustedPageEvidence, TrustedPageEvidenceFetcher
+from app.observability.logging import get_logger
+from app.providers.errors import ProviderError
 from app.providers.interfaces import SearchProvider
+from app.providers.wrappers import AllProvidersFailedError
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,21 +68,38 @@ class OfflineEnrichmentAcquisitionService:
             raise ValueError("acquisition group exceeds the selected policy")
 
         selected: dict[str, TrustedPageEvidence] = {}
+        provider_failures: list[Exception] = []
+        completed_groups = 0
         for group in groups:
             terms = aspect_query_terms([aspect.value for aspect in group])
             query = " ".join(
                 [identity.normalized_binomial, *terms, "botanical care evidence"]
             )
-            candidates = await self.search.search(
-                query,
-                allowed_domains=sorted(self.trusted_sources.approved_domains),
-            )
+            try:
+                candidates = await self.search.search(
+                    query,
+                    allowed_domains=sorted(self.trusted_sources.approved_domains),
+                )
+            except (ProviderError, AllProvidersFailedError, TimeoutError) as exc:
+                provider_failures.append(exc)
+                logger.warning(
+                    "enrichment_search_group_failed",
+                    extra={
+                        "ctx_group_size": len(group),
+                        "ctx_completed_groups": completed_groups,
+                    },
+                )
+                continue
+            completed_groups += 1
             trusted = self.trusted_sources.filter(candidates)
             for page in await self.page_fetcher.fetch_all(trusted, limit=3):
                 if not (page.has_fetched_content and page.fetch_status == "fetched"):
                     continue
                 if page.evidence_text.strip():
                     selected.setdefault(page.result.url, page)
+
+        if not selected and provider_failures and len(provider_failures) == len(groups):
+            raise provider_failures[-1]
 
         return OfflineAcquisitionResult(
             searched_groups=groups,

@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     light_measurement_min_reliability: str = "medium"
     model_provider_attempt_timeout_seconds: float = 30.0
     judge_provider_attempt_timeout_seconds: float = 30.0
-    search_provider_attempt_timeout_seconds: float = 25.0
+    search_provider_attempt_timeout_seconds: float = 40.0
     vision_provider_attempt_timeout_seconds: float = 30.0
     model_circuit_breaker_duration_seconds: float = 60.0
     judge_circuit_breaker_duration_seconds: float = 60.0

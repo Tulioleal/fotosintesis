@@ -272,6 +272,28 @@ class RecordingFetcher:
         return [TrustedPageEvidence(result=result, content=result.snippet) for result in results[:limit]]
 
 
+class FetchedRecordingFetcher:
+    async def fetch_all(self, results, *, limit=3):
+        return [
+            TrustedPageEvidence(
+                result=result,
+                content=result.snippet,
+                fetch_status="fetched",
+            )
+            for result in results[:limit]
+        ]
+
+
+class PartiallyFailingSearch(RecordingSearch):
+    async def search(self, query: str, **kwargs):
+        if self.queries:
+            from app.providers.errors import ProviderError
+
+            self.queries.append(query)
+            raise ProviderError("temporary search failure")
+        return await super().search(query, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_offline_acquisition_searches_only_missing_policy_groups_within_bounds() -> None:
     search = RecordingSearch()
@@ -297,6 +319,30 @@ async def test_offline_acquisition_searches_only_missing_policy_groups_within_bo
     assert RequiredAspect.watering_amount not in {
         aspect for group in result.searched_groups for aspect in group
     }
+
+
+@pytest.mark.asyncio
+async def test_offline_acquisition_keeps_evidence_when_later_search_group_fails() -> None:
+    search = PartiallyFailingSearch()
+    missing = (
+        RequiredAspect.general_care_summary,
+        RequiredAspect.light_exposure,
+    )
+
+    result = await OfflineEnrichmentAcquisitionService(
+        search=search,
+        trusted_sources=TrustedSourceValidator(["example.org"]),
+        page_fetcher=FetchedRecordingFetcher(),
+    ).acquire(
+        identity=CanonicalSpeciesIdentity(2878688, "Monstera deliciosa", True),
+        required_aspects=tuple(ENRICHMENT_POLICY_V1.required_aspects),
+        acquisition_aspects=missing,
+        policy=ENRICHMENT_POLICY_V1,
+    )
+
+    assert len(search.queries) == 2
+    assert len(result.evidence) == 1
+    assert result.evidence[0].result.url == "https://example.org/1"
 
 
 def test_only_final_supported_trusted_acquired_claims_are_selected() -> None:

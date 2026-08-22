@@ -3,7 +3,7 @@ import types
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.core.settings import get_settings
+from app.core.settings import Settings, get_settings
 from app.main import app
 from app.providers.factory import get_provider_registry
 from app.providers.gemini import (
@@ -19,6 +19,10 @@ from app.providers.openai import (
     OpenAIVisionProvider,
 )
 from app.providers.plant_data import PerenualPlantDataProvider, TreflePlantDataProvider
+
+
+def test_search_provider_timeout_allows_grounded_provider_latency() -> None:
+    assert Settings(_env_file=None).search_provider_attempt_timeout_seconds == 40.0
 
 
 @pytest.mark.asyncio
@@ -535,4 +539,3 @@ def test_missing_gemini_credentials_fail_for_selected_vision_role(
         ValueError, match="GEMINI_API_KEY is required when vision provider is gemini"
     ):
         get_provider_registry()
-
