@@ -93,8 +93,6 @@ services:
     command: sh -c "corepack enable && pnpm --filter frontend start"
     environment:
       NODE_OPTIONS: "--max-old-space-size=1024"
-    volumes:
-      - ${HOME}/.cache/node/corepack:/root/.cache/node/corepack
     depends_on:
       backend:
         condition: service_healthy
