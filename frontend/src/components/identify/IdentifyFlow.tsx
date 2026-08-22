@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CameraIcon,
   CheckCircleIcon,
@@ -25,6 +26,7 @@ import styles from "./IdentifyFlow.module.scss";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api/client";
+import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 
 type Candidate = {
   id: string;
@@ -104,6 +106,7 @@ const recoveryCopy: Record<string, { heading: string; message: string }> = {
 
 export function IdentifyFlow() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const confirmingCandidateRef = useRef<string | null>(null);
@@ -191,9 +194,15 @@ export function IdentifyFlow() {
     setConfirmingCandidateId(candidate.id);
     setError(null);
     try {
-      await apiClient.confirmCandidate(identification.id, candidate.id);
+      const confirmation = await apiClient.confirmCandidate(identification.id, candidate.id);
+      const scientificName = candidateScientificName(candidate);
+      const language = typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es";
+      queryClient.setQueryData(
+        candidateEnrichmentQueryKey(candidate.id, scientificName, language),
+        confirmation.enrichment,
+      );
       router.push(
-        `/profiles/${encodeURIComponent(candidateScientificName(candidate))}?candidateId=${encodeURIComponent(candidate.id)}`,
+        `/profiles/${encodeURIComponent(scientificName)}?candidateId=${encodeURIComponent(candidate.id)}`,
       );
     } catch (confirmationError) {
       setError(
@@ -443,7 +452,12 @@ export function IdentifyFlow() {
 
               {confirmingCandidateId ? (
                 <p className={styles.statusCopy} role="status" aria-live="polite">
-                  Confirmando la planta y preparando su perfil...
+                  Planta confirmada. Iniciando la búsqueda de información en segundo plano...
+                </p>
+              ) : null}
+              {!confirmingCandidateId ? (
+                <p className={styles.statusCopy}>
+                  Al confirmar, buscaremos información de cuidado en fuentes confiables. La búsqueda continuará en segundo plano.
                 </p>
               ) : null}
 

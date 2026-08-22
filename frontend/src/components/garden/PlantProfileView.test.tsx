@@ -150,7 +150,7 @@ describe("PlantProfileView", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     expect(mocks.getCandidateEnrichment).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("status")).toHaveTextContent("En espera");
+    expect(screen.getByRole("status")).toHaveTextContent("La búsqueda está en espera");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
@@ -159,13 +159,13 @@ describe("PlantProfileView", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     expect(mocks.getCandidateEnrichment).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole("status")).toHaveTextContent("Buscando evidencia");
+    expect(screen.getByRole("status")).toHaveTextContent("Estamos consultando y validando fuentes");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Evidencia completa");
+    expect(screen.getByRole("status")).toHaveTextContent("La evidencia está lista");
     expect(mocks.getPlantProfile).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/Conservamos la ultima instantanea disponible/)).toBeInTheDocument();
     expect(screen.getByText("Riego moderado")).toBeInTheDocument();
@@ -185,14 +185,14 @@ describe("PlantProfileView", () => {
       <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
     );
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    await screen.findByText(/En espera/);
+    await screen.findByText(/La búsqueda está en espera/);
 
     await queryClient.refetchQueries({
       queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
 
-    await screen.findByText(/Evidencia completa/);
+    await screen.findByText(/La evidencia está lista/);
     await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: plantProfileQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
@@ -202,7 +202,7 @@ describe("PlantProfileView", () => {
       queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
-    expect(screen.getByText("Este estado no regenera las secciones del perfil guardado.")).toBeInTheDocument();
+    expect(screen.getByText("La evidencia encontrada puede tardar unos instantes más en reflejarse en las secciones del perfil.")).toBeInTheDocument();
   });
 
   it("makes no further status request after a terminal observation", async () => {
@@ -218,13 +218,13 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(screen.getByText(/Buscando evidencia/)).toBeInTheDocument();
+    expect(screen.getByText(/Estamos consultando y validando fuentes/)).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_POLL_INTERVAL_MS);
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByText(/Evidencia completa/)).toBeInTheDocument();
+    expect(screen.getByText(/La evidencia está lista/)).toBeInTheDocument();
 
     const callsAfterTerminal = mocks.getCandidateEnrichment.mock.calls.length;
     await act(async () => {
@@ -239,7 +239,7 @@ describe("PlantProfileView", () => {
       <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
     );
 
-    expect(await screen.findByText(/Evidencia parcial · Politica v1/)).toBeInTheDocument();
+    expect(await screen.findByText(/Encontramos evidencia útil, pero faltan algunos temas · Política v1/)).toBeInTheDocument();
     expect(screen.getByText((_, element) =>
       element?.tagName === "P" && element.textContent?.includes("Aspectos cubiertos (2): Luz, future_aspect") === true,
     )).toBeInTheDocument();
@@ -290,7 +290,7 @@ describe("PlantProfileView", () => {
       <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
     );
 
-    await screen.findByText(/Buscando evidencia/);
+    await screen.findByText(/Estamos consultando y validando fuentes/);
     const liveRegions = screen.getAllByRole("status");
     expect(liveRegions).toHaveLength(1);
     expect(liveRegions[0]).toHaveAttribute("aria-live", "polite");
@@ -320,7 +320,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
     first.unmount();
 
     mocks.getCandidateEnrichment.mockClear().mockResolvedValue(enrichment("pending"));
@@ -331,8 +331,8 @@ describe("PlantProfileView", () => {
       await vi.advanceTimersByTimeAsync(1);
     });
     // The new candidate receives its own bounded window: no stale stall text.
-    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
-    expect(screen.getByText(/En espera/)).toBeInTheDocument();
+    expect(screen.queryByText(/Está tardando más de lo esperado/)).not.toBeInTheDocument();
+    expect(screen.getByText(/La búsqueda está en espera/)).toBeInTheDocument();
   });
 
   it("issues exactly one request per manual retry and disables the control while checking", async () => {
@@ -409,7 +409,7 @@ describe("PlantProfileView", () => {
       <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
     );
 
-    expect(await screen.findByText(/No se pudo ampliar la evidencia/)).toBeInTheDocument();
+    expect(await screen.findByText(/No pudimos completar la búsqueda de evidencia/)).toBeInTheDocument();
     expect(screen.getByText(/No se encontro evidencia suficiente/)).toBeInTheDocument();
     expect(screen.getByText("Riego moderado")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Preguntar al asistente" })).toBeInTheDocument();
@@ -468,12 +468,12 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(screen.getByText(/Buscando evidencia/)).toBeInTheDocument();
+    expect(screen.getByText(/Estamos consultando y validando fuentes/)).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
 
     const callsBefore = mocks.getCandidateEnrichment.mock.calls.length;
     await act(async () => {
@@ -495,7 +495,7 @@ describe("PlantProfileView", () => {
     });
     // The profile fallback keeps the active status visible while the status
     // query keeps failing.
-    expect(screen.getByRole("status")).toHaveTextContent("Buscando evidencia");
+    expect(screen.getByRole("status")).toHaveTextContent("Estamos consultando y validando fuentes");
     expect(screen.getByRole("alert")).toHaveTextContent("Estado temporalmente no disponible.");
 
     // Polling continues through failures but the bounded deadline still stops it.
@@ -508,7 +508,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
 
     const terminalCalls = mocks.getCandidateEnrichment.mock.calls.length;
     await act(async () => {
@@ -527,7 +527,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
 
     act(() => {
       queryClient.setQueryData(
@@ -546,7 +546,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Está tardando más de lo esperado/)).not.toBeInTheDocument();
   });
 
   it("allows polling again for a new active job after a terminal job", async () => {
@@ -559,7 +559,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(screen.getByText(/Evidencia completa/)).toBeInTheDocument();
+    expect(screen.getByText(/La evidencia está lista/)).toBeInTheDocument();
 
     const callsAtTerminal = mocks.getCandidateEnrichment.mock.calls.length;
     await act(async () => {
@@ -620,12 +620,12 @@ describe("PlantProfileView", () => {
         await vi.advanceTimersByTimeAsync(1);
       });
     }
-    expect(screen.queryByText(/La ampliacion esta tardando mas de lo esperado/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Está tardando más de lo esperado/)).not.toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
   });
 
   it("remounting does not hide an already stalled job", async () => {
@@ -638,7 +638,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
     first.unmount();
 
     renderWithQueryClient(
@@ -647,7 +647,7 @@ describe("PlantProfileView", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ENRICHMENT_STALL_AFTER_MS + ENRICHMENT_POLL_INTERVAL_MS + 1_000);
     });
-    expect(screen.getByText(/La ampliacion esta tardando mas de lo esperado/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tardando más de lo esperado/)).toBeInTheDocument();
   });
 
   it("manual retry performs exactly one immediate refetch", async () => {
@@ -698,7 +698,7 @@ describe("PlantProfileView", () => {
       <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
     );
 
-    expect(await screen.findByText(/Buscando evidencia/)).toBeInTheDocument();
+    expect(await screen.findByText(/Estamos consultando y validando fuentes/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Preguntar al asistente" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Crear recordatorio" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Agregar a Mi Jardin" })).toBeInTheDocument();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   GlobeHemisphereWestIcon,
   MagnifyingGlassIcon,
@@ -22,12 +22,14 @@ import {
   type GbifCandidate,
   type SearchLocalResponse,
 } from "@/lib/api/client";
+import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 import styles from "./SearchFlow.module.scss";
 
 type LocalResult = NonNullable<SearchLocalResponse["results"]>[number];
 
 export function SearchFlow() {
   const inputId = useId();
+  const queryClient = useQueryClient();
   const resultsLiveRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -85,6 +87,11 @@ export function SearchFlow() {
       const scientific =
         response.candidate.accepted_scientific_name ??
         response.candidate.suggested_scientific_name;
+      const language = typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es";
+      queryClient.setQueryData(
+        candidateEnrichmentQueryKey(response.candidate.id, scientific, language),
+        response.enrichment,
+      );
       window.location.href = `/profiles/${encodeURIComponent(scientific)}?candidateId=${encodeURIComponent(response.candidate.id)}`;
     },
   });
@@ -327,7 +334,7 @@ export function SearchFlow() {
               <h3 className={styles.confirmTitle}>Confirmar candidata</h3>
               <p className={styles.confirmBody}>
                 {createdCandidateId
-                  ? "Tu candidata se creó. Confirmala para preparar su perfil."
+                  ? "Tu candidata se creó. Confirmala para iniciar la búsqueda de información en segundo plano."
                   : `Crear y confirmar “${
                       selectedCandidate.accepted_scientific_name ??
                       selectedCandidate.binomial_name
@@ -363,7 +370,7 @@ export function SearchFlow() {
                     disabled={confirmMutation.isPending}
                   >
                     {confirmMutation.isPending
-                      ? "Confirmando y preparando perfil…"
+                      ? "Confirmando e iniciando la búsqueda…"
                       : "Confirmar y ver perfil"}
                   </Button>
                 )}

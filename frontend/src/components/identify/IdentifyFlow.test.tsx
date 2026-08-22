@@ -11,6 +11,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
 }));
 
+vi.mock("@tanstack/react-query", async () => ({
+  ...(await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query")),
+  useQueryClient: () => ({ setQueryData: vi.fn() }),
+}));
+
 vi.mock("@/lib/api/client", () => ({
   apiClient: { confirmCandidate: mocks.confirmCandidate },
 }));
@@ -216,7 +221,7 @@ describe("IdentifyFlow", () => {
 
     expect(mocks.confirmCandidate).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Confirmando planta..." })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Confirmando la planta y preparando su perfil...");
+    expect(screen.getByRole("status")).toHaveTextContent("Planta confirmada. Iniciando la búsqueda de información en segundo plano...");
     expect(mocks.push).not.toHaveBeenCalled();
 
     await act(async () => {

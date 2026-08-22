@@ -15,6 +15,7 @@ import iconStyles from "@/components/ui/Icons.module.scss";
 import { apiClient } from "@/lib/api/client";
 import type { CandidateEnrichmentStatus } from "@/lib/api/client";
 import { buildAssistantHref } from "@/lib/assistant";
+import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 import { ChatTextIcon, PlusCircleIcon, SunIcon } from "@phosphor-icons/react";
 import styles from "./PlantProfileView.module.scss";
 
@@ -29,11 +30,11 @@ const sectionLabels: Record<string, string> = {
 };
 
 const lifecycleCopy = {
-  pending: "En espera",
-  processing: "Buscando evidencia",
-  complete: "Evidencia completa",
-  partial: "Evidencia parcial",
-  failed: "No se pudo ampliar la evidencia",
+  pending: "La búsqueda está en espera",
+  processing: "Estamos consultando y validando fuentes",
+  complete: "La evidencia está lista",
+  partial: "Encontramos evidencia útil, pero faltan algunos temas",
+  failed: "No pudimos completar la búsqueda de evidencia",
 } as const;
 
 const limitationCopy: Record<string, string> = {
@@ -80,8 +81,7 @@ export const ENRICHMENT_STALL_AFTER_MS = 300_000;
 export const plantProfileQueryKey = (candidateId: string, scientificName: string, language: string) =>
   ["plant-profile", candidateId, scientificName, language] as const;
 
-export const candidateEnrichmentQueryKey = (candidateId: string, scientificName: string, language: string) =>
-  ["candidate-enrichment", candidateId, scientificName, language] as const;
+export { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 
 export function enrichmentRefetchInterval(
   query: { state: { data?: CandidateEnrichmentStatus; status?: string } },
@@ -405,12 +405,23 @@ function EnrichmentSummary({
     <Card variant="tonal" padding="md">
       <h2 className={styles.sectionTitle}>Estado de la evidencia</h2>
       <div role="status" aria-live="polite">
-        <p className={styles.sectionCopy}>
-          {status} · Politica v{policyVersion}
-        </p>
-        {stalled ? (
           <p className={styles.sectionCopy}>
-            La ampliacion esta tardando mas de lo esperado. Puedes seguir usando el perfil.
+            {status} · Política v{policyVersion}
+          </p>
+          {job.status === "pending" || job.status === "processing" ? (
+            <p className={styles.sectionCopy}>
+              Estamos ampliando este perfil en segundo plano con información de fuentes confiables.
+              Puedes seguir usando Fotosíntesis; el perfil se actualizará automáticamente.
+            </p>
+          ) : null}
+          {job.status === "complete" ? (
+            <p className={styles.sectionCopy}>
+              La búsqueda terminó y el perfil ya puede mostrar la información encontrada.
+            </p>
+          ) : null}
+          {stalled ? (
+            <p className={styles.sectionCopy}>
+              Está tardando más de lo esperado, pero continúa en segundo plano. Puedes seguir usando el perfil.
           </p>
         ) : null}
       </div>
@@ -436,7 +447,7 @@ function EnrichmentSummary({
         </p>
       ) : null}
       <p className={styles.snapshotNote}>
-        Este estado no regenera las secciones del perfil guardado.
+        La evidencia encontrada puede tardar unos instantes más en reflejarse en las secciones del perfil.
       </p>
     </Card>
   );
