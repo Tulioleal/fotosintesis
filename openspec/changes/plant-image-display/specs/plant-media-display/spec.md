@@ -58,7 +58,7 @@ Surfaces that present garden plants — garden list, garden detail, home dashboa
 
 ### Requirement: Single-image scope
 
-Phase 1 associates at most one image with a garden plant: the photo from the identification that produced the confirmed candidate. Galleries, additional uploads, replacement flows, and historical image versions are out of scope until a later change extends this capability.
+Phase 1 SHALL associate at most one image with a garden plant: the photo from the identification that produced the confirmed candidate. Galleries, additional uploads, replacement flows, and historical image versions are out of scope until a later change extends this capability.
 
 #### Scenario: Second image is not accepted
 
