@@ -387,13 +387,3 @@ Accepted and indexed enrichment evidence SHALL be retrievable by later assistant
 - **THEN** candidate-resolved canonical identity remains authoritative
 - **AND** retrieval does not combine taxonomy from different species
 
-### Requirement: Proposal 11 remains independent
-
-Confirmed-plant enrichment MUST NOT regenerate, invalidate, replace, version, or refresh existing persisted profile sections and MUST NOT schedule profile-refresh work.
-
-#### Scenario: Enrichment completes for an existing profile
-
-- **WHEN** accepted evidence is persisted and indexed after a profile snapshot already exists
-- **THEN** later assistant retrieval can use the evidence
-- **AND** the existing profile sections, sources, confidence, and limitations remain unchanged
-- **AND** no profile-refresh job is created
