@@ -54,6 +54,7 @@ class PlantProfileResponse(BaseModel):
     canonical_species_key: str | None = None
     generation_policy_version: int | None = None
     section_status: list[ProfileSectionStatus] = Field(default_factory=list)
+    confirmed_candidate_image_path: str | None = None
 
 
 class GardenPlantCreate(BaseModel):

@@ -36,6 +36,7 @@ class TaxonomyCandidate(BaseModel):
     species: str | None = None
     validation_status: ValidationStatus
     confirmed_at: datetime | None = None
+    image_path: str | None = None
 
 
 class IdentificationResponse(BaseModel):

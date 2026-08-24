@@ -220,6 +220,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/garden/{garden_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Garden Plant Image */
+        get: operations["get_garden_plant_image_garden__garden_id__image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1218,6 +1235,8 @@ export interface components {
             common_name?: string | null;
             /** Confidence */
             confidence: number;
+            /** Confirmed Candidate Image Path */
+            confirmed_candidate_image_path?: string | null;
             enrichment?: components["schemas"]["CandidateEnrichmentStatus"] | null;
             /** Generation Policy Version */
             generation_policy_version?: number | null;
@@ -1665,6 +1684,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Image Path */
+            image_path?: string | null;
             /** Possible Match Copy */
             possible_match_copy: string;
             /** Species */
@@ -2306,6 +2327,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GardenDeleteResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_garden_plant_image_garden__garden_id__image_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                garden_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

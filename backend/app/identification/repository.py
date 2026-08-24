@@ -159,14 +159,30 @@ class IdentificationRepository(RepositoryBase):
     async def _get_candidate(self, candidate_id: UUID) -> TaxonomyCandidate:
         row = (
             await self.session.execute(
-                select(identification_candidates).where(
+                self._candidate_with_image_query().where(
                     identification_candidates.c.id == candidate_id
                 )
             )
         ).first()
         if row is None:
             raise RuntimeError("candidate not found after write")
-        return TaxonomyCandidate.model_validate(row._mapping)
+        return self._candidate_from_row(row)
+
+    @staticmethod
+    def _candidate_with_image_query():
+        return select(
+            identification_candidates,
+            identification_images.c.storage_path.label("image_path"),
+        ).outerjoin(
+            identification_images,
+            identification_images.c.id == identification_candidates.c.identification_id,
+        )
+
+    @staticmethod
+    def _candidate_from_row(row) -> TaxonomyCandidate:
+        mapping = dict(row._mapping)
+        mapping.setdefault("image_path", None)
+        return TaxonomyCandidate.model_validate(mapping)
 
     async def get_response(self, identification_id: UUID, user_id: UUID) -> IdentificationResponse | None:
         image = (
@@ -182,12 +198,12 @@ class IdentificationRepository(RepositoryBase):
 
         rows = (
             await self.session.execute(
-                select(identification_candidates)
-                .where(identification_candidates.c.identification_id == identification_id)
-                .order_by(identification_candidates.c.created_at)
+                self._candidate_with_image_query().where(
+                    identification_candidates.c.identification_id == identification_id
+                ).order_by(identification_candidates.c.created_at)
             )
         ).all()
-        candidates = [TaxonomyCandidate.model_validate(row._mapping) for row in rows]
+        candidates = [self._candidate_from_row(row) for row in rows]
         return IdentificationResponse(
             id=image.id,
             status=image.status,
@@ -252,10 +268,12 @@ class IdentificationRepository(RepositoryBase):
         )
         row = (
             await self.session.execute(
-                select(identification_candidates).where(identification_candidates.c.id == candidate_id)
+                self._candidate_with_image_query().where(
+                    identification_candidates.c.id == candidate_id
+                )
             )
         ).first()
-        return TaxonomyCandidate.model_validate(row._mapping) if row else None
+        return self._candidate_from_row(row) if row else None
 
     async def create_or_reuse_taxonomy_snapshot(
         self,

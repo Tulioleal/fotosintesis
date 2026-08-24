@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeDashboard } from "./HomeDashboard";
 import { EnrichmentActivityProvider } from "@/components/enrichment/EnrichmentActivityProvider";
-import { API_BASE_URL } from "@/lib/api/config";
 
 const recentPlant = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -186,10 +185,7 @@ describe("HomeDashboard", () => {
     expect(card).toHaveAttribute("href", `/garden/${recentPlant.id}`);
 
     const image = screen.getByRole("img", { name: "Lobby monstera" });
-    expect(image).toHaveAttribute(
-      "src",
-      `${API_BASE_URL}/garden-plants/monstera.jpg`,
-    );
+    expect(image).toHaveAttribute("src", "/api/media/garden-plants/monstera.jpg");
 
     expect(screen.getByText("Sala • 2 recordatorios")).toBeInTheDocument();
 

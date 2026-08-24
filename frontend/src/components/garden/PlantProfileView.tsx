@@ -299,6 +299,7 @@ export function PlantProfileView({
       nickname: optionalText(formData.get("nickname")),
       location: optionalText(formData.get("location")),
       notes: optionalText(formData.get("notes")),
+      image_path: profileQuery.data?.confirmed_candidate_image_path ?? null,
     });
   }
 

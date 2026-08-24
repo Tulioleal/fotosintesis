@@ -1797,6 +1797,17 @@
             "title": "Confidence",
             "type": "number"
           },
+          "confirmed_candidate_image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Candidate Image Path"
+          },
           "enrichment": {
             "anyOf": [
               {
@@ -2954,6 +2965,17 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Path"
           },
           "possible_match_copy": {
             "title": "Possible Match Copy",
@@ -4315,6 +4337,74 @@
           }
         },
         "summary": "Get Garden Plant",
+        "tags": [
+          "plant-profile-garden"
+        ]
+      }
+    },
+    "/garden/{garden_id}/image": {
+      "get": {
+        "operationId": "get_garden_plant_image_garden__garden_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "garden_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Garden Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Garden Plant Image",
         "tags": [
           "plant-profile-garden"
         ]

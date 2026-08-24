@@ -79,6 +79,10 @@ def canonical_identity_fields(candidate) -> dict[str, object]:
     }
 
 
+class GardenImageValidationError(ValueError):
+    """Raised when a save references an image the caller does not own."""
+
+
 class PlantProfileGardenRepository(RepositoryBase):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -155,6 +159,12 @@ class PlantProfileGardenRepository(RepositoryBase):
         candidate = await self.confirmed_candidate(payload.confirmed_candidate_id, user_id)
         if candidate is None:
             return None
+        if payload.image_path is not None:
+            await self._ensure_owned_identification_image(
+                user_id=user_id,
+                candidate_id=payload.confirmed_candidate_id,
+                storage_path=payload.image_path,
+            )
         scientific_name = candidate.accepted_scientific_name or candidate.suggested_scientific_name
         profile = await self.get_or_create_profile(
             scientific_name=scientific_name,
@@ -177,6 +187,54 @@ class PlantProfileGardenRepository(RepositoryBase):
         )
         await self.session.commit()
         return await self.get_garden_plant(garden_id, user_id)
+
+    async def _ensure_owned_identification_image(
+        self, *, user_id: UUID, candidate_id: UUID, storage_path: str
+    ) -> None:
+        row = (
+            await self.session.execute(
+                select(identification_images.c.id)
+                .select_from(identification_candidates)
+                .join(
+                    identification_images,
+                    identification_images.c.id == identification_candidates.c.identification_id,
+                )
+                .where(
+                    identification_candidates.c.id == candidate_id,
+                    identification_candidates.c.user_id == user_id,
+                    identification_images.c.user_id == user_id,
+                    identification_images.c.storage_path == storage_path,
+                )
+            )
+        ).first()
+        if row is None:
+            raise GardenImageValidationError(
+                "The provided plant image does not belong to this confirmed plant."
+            )
+
+    async def garden_plant_image_path(self, *, user_id: UUID, plant_id: UUID) -> str | None:
+        """Authoritative image path for a garden plant, derived from its confirmed
+        candidate's identification record so stored values can never cross owners."""
+        row = (
+            await self.session.execute(
+                select(identification_images.c.storage_path)
+                .select_from(garden_plants)
+                .join(
+                    identification_candidates,
+                    identification_candidates.c.id == garden_plants.c.confirmed_candidate_id,
+                )
+                .join(
+                    identification_images,
+                    identification_images.c.id == identification_candidates.c.identification_id,
+                )
+                .where(
+                    garden_plants.c.id == plant_id,
+                    garden_plants.c.user_id == user_id,
+                    identification_images.c.user_id == user_id,
+                )
+            )
+        ).first()
+        return row[0] if row else None
 
     async def list_garden_plants(
         self, *, user_id: UUID, query: str | None = None
@@ -533,6 +591,7 @@ class PlantProfileGardenRepository(RepositoryBase):
         return (
             await self.session.execute(
                 select(identification_candidates)
+                .add_columns(identification_images.c.storage_path.label("image_path"))
                 .outerjoin(
                     identification_images,
                     identification_images.c.id == identification_candidates.c.identification_id,

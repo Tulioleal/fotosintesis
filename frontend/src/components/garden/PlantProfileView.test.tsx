@@ -25,6 +25,7 @@ const profile = {
   sections: { care: ["Riego moderado"] },
   selected_alias: "Helecho",
   sources: [{ confidence: 0.9, domain: "example.org", title: "Guia original", url: "https://example.org/guia" }],
+  confirmed_candidate_image_path: "identifications/owner/plant.jpg",
 };
 
 const jobBase = {
@@ -487,6 +488,12 @@ describe("PlantProfileView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Guardar planta confirmada" }));
 
     expect(await screen.findByText("No pudimos guardar la planta.")).toBeInTheDocument();
+    expect(mocks.saveGardenPlant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmed_candidate_id: "candidate-1",
+        image_path: "identifications/owner/plant.jpg",
+      }),
+    );
     expect(screen.getByText("Riego moderado")).toBeInTheDocument();
   });
 
