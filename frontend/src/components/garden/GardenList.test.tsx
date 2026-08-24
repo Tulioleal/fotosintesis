@@ -250,7 +250,7 @@ describe("GardenList enrichment activity", () => {
       await screen.findByText(/No pudimos ampliar la evidencia/),
     ).toBeVisible();
     expect(
-      screen.getByText(/ampliar la evidencia nuevamente/),
+      screen.getByText(/volver a intentarlo más adelante/),
     ).toBeInTheDocument();
   });
 

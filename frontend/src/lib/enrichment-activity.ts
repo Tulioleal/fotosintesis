@@ -314,7 +314,7 @@ export function activityDetailCopy(item: EnrichmentActivityItem): string {
       return `${activityStatusCopy(item)}. El perfil sigue disponible; podés volver a intentar la actualización más tarde.`;
     }
 
-    return `${activityStatusCopy(item)}. Podés revisar el perfil para intentar ampliar la evidencia nuevamente.`;
+    return `${activityStatusCopy(item)}. El perfil sigue disponible con la evidencia actual; vamos a volver a intentarlo más adelante.`;
   }
   if (item.phase === "evidence" && item.result) {
     const parts: string[] = [];

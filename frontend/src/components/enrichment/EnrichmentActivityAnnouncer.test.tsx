@@ -124,7 +124,7 @@ describe("EnrichmentActivityAnnouncer", () => {
       await screen.findByText(/No pudimos ampliar la evidencia/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/ampliar la evidencia nuevamente/),
+      screen.getByText(/volver a intentarlo más adelante/),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });

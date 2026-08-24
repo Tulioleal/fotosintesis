@@ -98,7 +98,10 @@ class OfflineEnrichmentAcquisitionService:
                 if page.evidence_text.strip():
                     selected.setdefault(page.result.url, page)
 
-        if not selected and provider_failures and len(provider_failures) == len(groups):
+        # A partial provider outage is indistinguishable from a genuine lack of
+        # trusted evidence, so any provider failure without usable evidence must
+        # surface as retryable instead of terminating the run permanently.
+        if not selected and provider_failures:
             raise provider_failures[-1]
 
         return OfflineAcquisitionResult(

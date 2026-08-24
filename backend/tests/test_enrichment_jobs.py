@@ -2,6 +2,8 @@ from datetime import UTC, datetime, timezone
 from uuid import uuid4
 
 import pytest
+
+from app.providers.errors import ProviderError
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
@@ -343,6 +345,31 @@ async def test_offline_acquisition_keeps_evidence_when_later_search_group_fails(
     assert len(search.queries) == 2
     assert len(result.evidence) == 1
     assert result.evidence[0].result.url == "https://example.org/1"
+
+
+@pytest.mark.asyncio
+async def test_offline_acquisition_raises_retryable_when_partial_outage_yields_no_evidence() -> None:
+    search = PartiallyFailingSearch()
+    missing = (
+        RequiredAspect.general_care_summary,
+        RequiredAspect.light_exposure,
+    )
+
+    class EmptyFetcher:
+        async def fetch_all(self, results, *, limit=3):
+            return []
+
+    with pytest.raises(ProviderError, match="temporary search failure"):
+        await OfflineEnrichmentAcquisitionService(
+            search=search,
+            trusted_sources=TrustedSourceValidator(["example.org"]),
+            page_fetcher=EmptyFetcher(),
+        ).acquire(
+            identity=CanonicalSpeciesIdentity(2878688, "Monstera deliciosa", True),
+            required_aspects=tuple(ENRICHMENT_POLICY_V1.required_aspects),
+            acquisition_aspects=missing,
+            policy=ENRICHMENT_POLICY_V1,
+        )
 
 
 def test_only_final_supported_trusted_acquired_claims_are_selected() -> None:

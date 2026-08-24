@@ -188,7 +188,8 @@ describe("activityStatusCopy", () => {
     const failed = activityDetailCopy(
       evidenceItem({ status: "failed", last_error: { category: "attempts_exhausted", retryable: false } }),
     );
-    expect(failed).toMatch(/revisar el perfil/);
+    expect(failed).toMatch(/El perfil sigue disponible/);
+    expect(failed).not.toMatch(/intentar ampliar la evidencia nuevamente/);
   });
 });
 
