@@ -74,11 +74,13 @@ export function AssistantChat() {
     null,
   );
   const [pendingStage, setPendingStage] = useState(0);
+  const [serverStage, setServerStage] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!pending) {
       setPendingStage(0);
+      setServerStage(null);
       return;
     }
     setPendingStage(0);
@@ -111,14 +113,25 @@ export function AssistantChat() {
     setMessages((current) => [...current, { role: "user", content: trimmed }]);
     setMessage("");
     try {
-      const response = await apiClient.sendAssistantMessage({
+      const streamBody = {
         message: trimmed,
         conversation_id: conversationId,
         plant,
         plant_binomial_name: binomial,
         plant_scientific_name: scientific,
         confirmed_candidate_id: candidate ?? undefined,
-      });
+      };
+      let response;
+      try {
+        response = await apiClient.sendAssistantMessageStream(
+          streamBody,
+          (label) => setServerStage(label),
+        );
+      } catch {
+        // Graceful degradation: the blocking JSON chat contract remains
+        // canonical whenever the stream is unavailable or breaks mid-turn.
+        response = await apiClient.sendAssistantMessage(streamBody);
+      }
       if (
         "retryable" in response &&
         (response as AssistantRetryableError).retryable
@@ -419,7 +432,7 @@ export function AssistantChat() {
             ))}
             {pending ? (
               <p className={styles.meta} role="status">
-                {PENDING_STAGES[pendingStage]}
+                {serverStage ?? PENDING_STAGES[pendingStage]}
               </p>
             ) : null}
             <div ref={threadEndRef} aria-hidden="true" />

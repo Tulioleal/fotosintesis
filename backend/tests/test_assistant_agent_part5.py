@@ -512,6 +512,7 @@ async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
             plant_scientific_name: str | None = None,
             canonical_species_key: str | None = None,
             accepted_gbif_key: int | None = None,
+            stage_listener=None,
         ):
             return {
                 "answer": "Synthesized model response.",

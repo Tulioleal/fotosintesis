@@ -171,6 +171,17 @@ class Settings(BaseSettings):
         validation_alias="EVALUATION_RUN_RETENTION",
         description="Latest-N bound on retained evaluation run artifact directories.",
     )
+    assistant_progress_streaming_enabled: bool = Field(
+        default=True,
+        validation_alias="ASSISTANT_PROGRESS_STREAMING_ENABLED",
+        description="Serve the SSE chat progress stream beside the blocking JSON contract.",
+    )
+    assistant_stream_heartbeat_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        validation_alias="ASSISTANT_STREAM_HEARTBEAT_SECONDS",
+        description="Heartbeat interval during silent stages of the SSE chat stream.",
+    )
 
     identification_max_image_bytes: int = Field(
         default=8 * 1024 * 1024,

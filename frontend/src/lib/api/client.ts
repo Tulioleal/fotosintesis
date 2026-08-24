@@ -161,6 +161,23 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  async sendAssistantMessageStream(
+    body: AssistantChatRequest,
+    onStage?: (label: string) => void,
+  ): Promise<AssistantChatResponse | AssistantRetryableError> {
+    const response = await fetch("/api/assistant/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response
+        .json()
+        .catch(() => ({ detail: `Request failed with status ${response.status}` }));
+      throw new ApiClientError(detail.detail ?? "Request failed", response.status);
+    }
+    return consumeAssistantStream(response, onStage);
+  },
   confirmCandidate(identificationId: string, candidateId: string) {
     return frontendRequest<ConfirmationResponse>(
       `/api/identifications/${encodeURIComponent(identificationId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
@@ -273,3 +290,52 @@ export const apiClient = {
     return frontendRequest<LightMeasurement[]>(`/api/light-measurements?${params.toString()}`);
   },
 };
+
+type StreamTerminal = AssistantChatResponse | AssistantRetryableError;
+
+/**
+ * Parse the assistant SSE stream. Stage events are forwarded via `onStage`;
+ * exactly one terminal frame (result | error) resolves the returned payload.
+ * Throws when the transport breaks before a terminal event so callers can
+ * fall back to the blocking chat contract.
+ */
+export async function consumeAssistantStream(
+  response: Pick<Response, "body">,
+  onStage?: (label: string) => void,
+): Promise<StreamTerminal> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Streaming is not supported in this environment.");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let terminal: StreamTerminal | null = null;
+
+  const handleFrame = (raw: string) => {
+    if (!raw.startsWith("data: ")) return; // heartbeat comment frames are ignored
+    const event = JSON.parse(raw.slice("data: ".length)) as {
+      type: string;
+      label_es?: string;
+    } & Record<string, unknown>;
+    if (event.type === "stage" && typeof event.label_es === "string") {
+      onStage?.(event.label_es);
+      return;
+    }
+    if (event.type === "result" || event.type === "error") {
+      const { type: _type, ...payload } = event;
+      terminal = payload as unknown as StreamTerminal;
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let separator = buffer.indexOf("\n\n");
+    while (separator !== -1) {
+      handleFrame(buffer.slice(0, separator).trim());
+      buffer = buffer.slice(separator + 2);
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+  if (!terminal) throw new Error("Assistant stream ended without a terminal event.");
+  return terminal;
+}

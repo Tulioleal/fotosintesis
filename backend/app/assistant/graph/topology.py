@@ -10,6 +10,26 @@ from app.assistant.graph.routes import (
 )
 from app.assistant.graph.types import AssistantState
 
+STAGE_NODES = (
+    "classify_intent",
+    "load_user_context",
+    "retrieve",
+    "evaluate_sufficiency",
+    "fallback_web_search",
+    "handle_action",
+    "generate_answer",
+    "clarify",
+    "failure",
+)
+
+
+def _stage_wrapped(owner, name: str, fn):
+    async def wrapped(state: AssistantState) -> dict:
+        await owner._emit_stage(name)
+        return await fn(state)
+
+    return wrapped
+
 
 def _compile_graph(owner):
     try:
@@ -17,18 +37,9 @@ def _compile_graph(owner):
     except ImportError:
         return _SequentialGraph(owner)
     graph = StateGraph(AssistantState)
-    for name in (
-        "classify_intent",
-        "load_user_context",
-        "retrieve",
-        "evaluate_sufficiency",
-        "fallback_web_search",
-        "handle_action",
-        "generate_answer",
-        "clarify",
-        "failure",
-    ):
-        graph.add_node(name, getattr(owner, name))
+    for name in STAGE_NODES:
+        # Stage emission is a no-op unless a listener is active for this turn.
+        graph.add_node(name, _stage_wrapped(owner, name, getattr(owner, name)))
     graph.add_edge(START, "classify_intent")
     graph.add_edge("classify_intent", "load_user_context")
     graph.add_conditional_edges(
@@ -62,15 +73,7 @@ class _SequentialGraph:
     def __init__(self, owner) -> None:
         self.owner = owner
         self._node_callables: dict[str, Any] = {
-            "classify_intent": owner.classify_intent,
-            "load_user_context": owner.load_user_context,
-            "retrieve": owner.retrieve,
-            "evaluate_sufficiency": owner.evaluate_sufficiency,
-            "fallback_web_search": owner.fallback_web_search,
-            "handle_action": owner.handle_action,
-            "generate_answer": owner.generate_answer,
-            "clarify": owner.clarify,
-            "failure": owner.failure,
+            name: _stage_wrapped(owner, name, getattr(owner, name)) for name in STAGE_NODES
         }
 
     async def ainvoke(self, state: AssistantState) -> AssistantState:

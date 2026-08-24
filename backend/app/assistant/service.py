@@ -44,7 +44,11 @@ class AssistantService:
         return await self._session.scalar(select(users.c.timezone).where(users.c.id == user_id))
 
     async def chat(
-        self, *, user_id: UUID, payload: AssistantChatRequest
+        self,
+        *,
+        user_id: UUID,
+        payload: AssistantChatRequest,
+        stage_listener=None,
     ) -> AssistantChatResponse | AssistantRetryableError:
         resolved_context = None
         if payload.confirmed_candidate_id is not None:
@@ -114,6 +118,7 @@ class AssistantService:
                 if resolved_context is not None
                 else None
             ),
+            stage_listener=stage_listener,
         )
         if state.get("total_generation_failure") and not state.get("answer"):
             tool_failures = state.get("tool_failures", [])
@@ -235,3 +240,59 @@ class AssistantService:
     def _should_enqueue_ingestion_jobs() -> bool:
         from app.core.settings import get_settings
         return get_settings().jobs_producer_enabled
+
+    async def chat_stream(self, *, user_id: UUID, payload: AssistantChatRequest):
+        """Yield server-sent-event frames: ordered stage events, optional
+        heartbeats, then exactly one terminal `result` or `error` frame."""
+        import asyncio
+
+        from app.assistant.streaming import (
+            HEARTBEAT_FRAME,
+            build_error_event,
+            build_result_event,
+            sse_frame,
+        )
+        from app.core.settings import get_settings
+
+        settings = get_settings()
+        heartbeat_seconds = settings.assistant_stream_heartbeat_seconds
+        queue: asyncio.Queue = asyncio.Queue()
+        sequence_index = 0
+
+        async def emit(event: dict) -> None:
+            nonlocal sequence_index
+            event["index"] = sequence_index
+            sequence_index += 1
+            await queue.put(event)
+
+        task = asyncio.create_task(
+            self.chat(user_id=user_id, payload=payload, stage_listener=emit)
+        )
+
+        async def next_event():
+            getter = asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait(
+                {getter, task},
+                timeout=heartbeat_seconds,
+            )
+            if getter in done:
+                return getter.result()
+            getter.cancel()
+            return None
+
+        while not task.done():
+            event = await next_event()
+            if event is None:
+                yield HEARTBEAT_FRAME
+            else:
+                yield sse_frame(event)
+
+        # Drain any stages emitted between the last poll and task completion.
+        while not queue.empty():
+            yield sse_frame(queue.get_nowait())
+
+        result = task.result()
+        if isinstance(result, AssistantRetryableError):
+            yield sse_frame(build_error_event(result.model_dump(mode="json")))
+        else:
+            yield sse_frame(build_result_event(result.model_dump(mode="json")))

@@ -5,6 +5,8 @@ import { AssistantChat, AssistantMessageContent } from "./AssistantChat";
 const mocks = vi.hoisted(() => ({
   createReminder: vi.fn(),
   sendAssistantMessage: vi.fn(),
+  sendAssistantMessageStream: vi.fn(),
+  consumeAssistantStreamImpl: vi.fn(),
   searchParams: new URLSearchParams(),
 }));
 
@@ -16,6 +18,9 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     createReminder: mocks.createReminder,
     sendAssistantMessage: mocks.sendAssistantMessage,
+    sendAssistantMessageStream: mocks.sendAssistantMessageStream,
+    consumeAssistantStream: (...args: unknown[]) =>
+      mocks.consumeAssistantStreamImpl(...(args as [Response, ((l: string) => void)?])),
   },
 }));
 
@@ -23,6 +28,10 @@ describe("AssistantChat", () => {
   beforeEach(() => {
     mocks.createReminder.mockReset();
     mocks.sendAssistantMessage.mockReset();
+    mocks.sendAssistantMessageStream.mockReset();
+    // Streams fail by default so tests exercise the blocking fallback unless
+    // a test explicitly provides a streaming implementation.
+    mocks.sendAssistantMessageStream.mockRejectedValue(new Error("stream unavailable"));
     mocks.searchParams = new URLSearchParams();
     mocks.createReminder.mockResolvedValue({ id: "reminder-1" });
     mocks.sendAssistantMessage.mockResolvedValue({
@@ -464,6 +473,51 @@ describe("AssistantChat", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows live server-authored stages while streaming and suppresses the rotating copy", async () => {
+    mocks.sendAssistantMessageStream.mockImplementationOnce(async (_body, onStage) => {
+      onStage?.("Buscando evidencia en fuentes confiables");
+      return {
+        conversation_id: "conversation-stream",
+        message: { role: "assistant", content: "Respuesta final.", content_format: "plain_text" },
+        sources: [],
+        requires_confirmation: false,
+        reminder_suggestion: null,
+        tool_failures: [],
+      };
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Como riego?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(screen.getByText("Buscando evidencia en fuentes confiables")).toBeInTheDocument();
+    expect(await screen.findByText("Respuesta final.")).toBeInTheDocument();
+    expect(mocks.sendAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the blocking chat contract when the stream fails", async () => {
+    mocks.sendAssistantMessageStream.mockRejectedValueOnce(new Error("stream broke"));
+    mocks.sendAssistantMessage.mockResolvedValueOnce({
+      conversation_id: "conversation-fb",
+      message: { role: "assistant", content: "Respuesta por bloqueo.", content_format: "plain_text" },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Hola" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("Respuesta por bloqueo.")).toBeInTheDocument();
+    expect(mocks.sendAssistantMessage).toHaveBeenCalledTimes(1);
   });
 
   it("scrolls to the newest message when the thread updates", async () => {

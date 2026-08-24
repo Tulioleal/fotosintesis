@@ -3236,6 +3236,74 @@
         ]
       }
     },
+    "/assistant/chat/stream": {
+      "post": {
+        "operationId": "assistant_chat_stream_assistant_chat_stream_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistant Chat Stream",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
     "/auth/admit/authjs_post": {
       "post": {
         "description": "Narrow internal admission endpoint for relevant unauthenticated Auth.js POST operations.\n\nThe frontend Auth.js boundary calls this endpoint (protected by the same\nsigned source assertion used by every other limiter header) before\ninvoking Auth.js work. A rejected or storage-failed outcome is translated\ninto the bounded retry contract so the distributed ``authjs_post`` policy\nhas a real runtime call site and session reads and authenticated logout\nremain unchanged.",
