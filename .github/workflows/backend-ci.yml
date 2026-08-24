@@ -73,6 +73,28 @@ jobs:
           OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
         run: pytest --ignore=tests/integration
 
+  evaluation:
+    name: Assistant quality gate (recorded)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # Advisory rollout: flip continue-on-error to false once the gate's
+    # thresholds are calibrated against a stable baseline.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
+      - name: Run recorded evaluation gate
+        run: python scripts/run_evaluation.py --mode recorded --providers mock --recording app/evaluation/data/recordings/ci-recording.json --output app/evaluation/data/runs
+
   policy:
     name: Manifest security policy (Checkov)
     runs-on: ubuntu-latest

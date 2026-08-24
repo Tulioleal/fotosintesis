@@ -6,7 +6,7 @@
     "dev": "pnpm --filter frontend dev",
     "build": "pnpm --filter frontend build",
     "lint": "pnpm --filter frontend lint",
-    "eval": "pnpm --dir backend exec python scripts/run_evaluation.py --mode recorded",
+    "eval": "sh -c 'if [ -x backend/.venv/bin/python ]; then EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-8} backend/.venv/bin/python backend/scripts/run_evaluation.py --mode recorded --providers mock; else cd backend && EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-8} python scripts/run_evaluation.py --mode recorded; fi'",
     "fallow": "pnpx fallow",
     "e2e:enrichment": "sh scripts/run-enrichment-e2e.sh"
   },

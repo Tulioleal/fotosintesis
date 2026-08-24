@@ -251,3 +251,115 @@ async def test_runner_records_unsatisfied_tool_assertion(tmp_path: Path) -> None
     # reminder, so the tool assertion is not satisfied.
     assert case_result.status == "quality_failure"
     assert any("tool_assertion_satisfaction" in failure for failure in case_result.failures)
+
+
+def _gate_summary(**overrides: int) -> dict[str, Any]:
+    summary = {
+        "total_cases": 4,
+        "passed_cases": 3,
+        "quality_failures": 1,
+        "execution_errors": 0,
+        "metric_errors": 0,
+        "unsupported": 0,
+        "pass_rate": 0.75,
+    }
+    summary.update(overrides)
+    return summary
+
+
+def test_zero_threshold_profile_is_rejected() -> None:
+    with pytest.raises(metrics.EvaluationProfileError, match="judge_score"):
+        metrics.validate_profile(
+            metrics.EvaluationProfile(name="broken", judge_score=0.0)
+        )
+    with pytest.raises(metrics.EvaluationProfileError, match="aggregate_pass_rate"):
+        metrics.validate_profile(
+            metrics.EvaluationProfile(name="broken", aggregate_pass_rate=0.0)
+        )
+
+
+def test_omitted_metrics_stay_ungated_and_positive_profiles_load() -> None:
+    metrics.validate_profile(metrics.QUALITY_GATE_PROFILE)
+    failures = metrics.apply_per_case_thresholds(
+        {"rouge_l": 0.1, "judge": {"score": 0.5}},
+        metrics.QUALITY_GATE_PROFILE,
+    )
+    # rouge_l is omitted from the enforced profile: observed but ungated.
+    assert "rouge_l" not in failures
+    assert "judge_score" in failures
+
+
+def test_gate_pass_rate_uses_supported_denominator_only() -> None:
+    decision = metrics.evaluate_run_gate(
+        summary=_gate_summary(),
+        profile=metrics.QUALITY_GATE_PROFILE,
+    )
+    # Unsupported cases are excluded: 3/3 supported = 100% >= 60% target.
+    assert decision["supported_case_ratio"] == pytest.approx(1.0)
+    assert decision["coverage_failure"] is False
+    assert decision["approved"] is True
+
+
+def test_gate_coverage_failure_is_distinct_from_quality_failure() -> None:
+    decision = metrics.evaluate_run_gate(
+        summary=_gate_summary(
+            total_cases=10,
+            passed_cases=0,
+            quality_failures=1,
+            unsupported=9,
+            pass_rate=0.0,
+        ),
+        profile=metrics.QUALITY_GATE_PROFILE,
+    )
+    assert decision["coverage_failure"] is True
+    assert any("coverage failure" in reason for reason in decision["reasons"])
+    assert decision["supported_case_ratio"] == pytest.approx(0.1)
+
+
+def test_gate_blocks_execution_and_metric_errors() -> None:
+    decision = metrics.evaluate_run_gate(
+        summary=_gate_summary(execution_errors=2, metric_errors=1),
+        profile=metrics.QUALITY_GATE_PROFILE,
+    )
+    assert decision["approved"] is False
+    assert any("execution error" in reason for reason in decision["reasons"])
+    assert any("metric error" in reason for reason in decision["reasons"])
+
+
+def test_quality_gate_approves_target_pass_rate() -> None:
+    decision = metrics.evaluate_run_gate(
+        summary=_gate_summary(passed_cases=4, quality_failures=0, pass_rate=1.0),
+        profile=metrics.QUALITY_GATE_PROFILE,
+    )
+    assert decision["approved"] is True
+    assert decision["reasons"] == []
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_artifacts_and_prunes_old_runs(tmp_path: Path) -> None:
+    from app.evaluation.metrics import QUALITY_GATE_PROFILE
+
+    output_dir = tmp_path / "runs"
+    for stale in range(3):
+        (output_dir / f"stale-{stale}").mkdir(parents=True)
+
+    case = EvaluationCase(
+        id="artifact-case",
+        flow="assistant_rag",
+        input={"prompt": "How do I water a fern?"},
+    )
+    result = await EvaluationRunner(
+        output_dir=output_dir,
+        profile=QUALITY_GATE_PROFILE,
+        run_retention=2,
+    ).run(cases=[case])
+
+    run_dir = Path(result.report_path).parent
+    assert (run_dir / "result.json").exists()
+    payload = json.loads((run_dir / "result.json").read_text())
+    assert payload["summary"]["gate"]["min_supported_case_ratio"] > 0
+    # Latest-N retention bounds total run directories (ties on coarse
+    # filesystem mtimes make the specific survivors non-deterministic).
+    retained = [p.name for p in output_dir.iterdir() if p.is_dir()]
+    assert len(retained) == 2
+    assert run_dir.name in retained

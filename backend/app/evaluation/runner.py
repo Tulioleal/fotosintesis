@@ -32,11 +32,13 @@ from app.evaluation.metrics import (
     aggregate_pass_rate_met,
     apply_per_case_thresholds,
     bertscore,
+    evaluate_run_gate,
     precision_at_k,
     retrieval_recall_at_k,
     rouge_l,
     tool_assertion_metrics,
     tool_success_rate,
+    validate_profile,
 )
 from app.evaluation.reconcile import reconcile_cases
 from app.evaluation.recordings import (
@@ -130,6 +132,7 @@ class EvaluationRunner:
         profile: EvaluationProfile = DEFAULT_EVALUATION_PROFILE,
         base_registry: ProviderRegistry | None = None,
         user_id: UUID | None = None,
+        run_retention: int | None = None,
     ) -> None:
         normalized_mode = (mode or "recorded").strip().lower()
         if normalized_mode not in EXECUTION_MODE:
@@ -137,13 +140,18 @@ class EvaluationRunner:
         self.mode = normalized_mode
         self.recording_path = recording_path
         self.profile = profile
-        self.judge_provider = judge_provider or get_provider_registry().judge
+        # Judge from the same base registry as execution so recorded/replay
+        # runs stay self-consistent and deterministic.
+        base_registry = base_registry or get_provider_registry()
+        self.judge_provider = judge_provider or base_registry.judge
         self.output_dir = output_dir or Path("evaluation-runs")
         self.base_registry = base_registry
         self.user_id = user_id or uuid4()
         self.recording_version: int | None = None
+        self.run_retention = run_retention
 
     async def run(self, cases: list[EvaluationCase] | None = None) -> EvaluationRunResult:
+        validate_profile(self.profile)
         if self.mode == "recorded" and self.recording_path is None:
             logger.warning(
                 "evaluation recorded mode without a recording path; "
@@ -203,6 +211,9 @@ class EvaluationRunner:
         result.summary["aggregate_approved"] = aggregate_pass_rate_met(
             result.summary["pass_rate"], self.profile
         )
+        gate = evaluate_run_gate(summary=result.summary, profile=self.profile)
+        result.summary["gate"] = gate
+        result.summary["approved"] = gate["approved"]
         result.report_path = self._persist(result)
         return result
 
@@ -435,7 +446,27 @@ class EvaluationRunner:
         report_path = run_dir / "report.md"
         report_path.write_text(render_markdown_report(result), encoding="utf-8")
         (run_dir / "result.json").write_text(_to_json(result), encoding="utf-8")
+        self._prune_old_runs()
         return str(report_path)
+
+    def _prune_old_runs(self, *, keep: int | None = None) -> None:
+        """Bound retained run directories to the latest ``keep`` entries."""
+        if keep is None:
+            keep = self.run_retention
+            if keep is None:
+                from app.core.settings import get_settings
+
+                keep = get_settings().evaluation_run_retention
+        if keep <= 0:
+            return
+        try:
+            run_dirs = [p for p in self.output_dir.iterdir() if p.is_dir()]
+        except FileNotFoundError:
+            return
+        for stale in sorted(run_dirs, key=lambda p: p.stat().st_mtime)[:-keep] if len(run_dirs) > keep else []:
+            import shutil
+
+            shutil.rmtree(stale, ignore_errors=True)
 
 
 class _DeterministicKnowledgeRuntime:

@@ -94,4 +94,29 @@ python scripts/run_evaluation.py --mode recorded
 
 Or from the repository root: `pnpm eval`.
 
+### Quality gate
+
+Runs are approved by the `quality_gate` profile (the CLI default):
+
+- Aggregate LLM-judge pass rate over supported cases must reach **0.60**.
+- Per-case judge scores follow the shared rubric passing score (0.75); tool assertions must be fully satisfied.
+- A supported-case ratio below **0.20** fails the run as a *coverage failure*, distinct from quality failures.
+- Execution or metric errors block approval.
+- Thresholds must be strictly positive or omitted entirely; `0.0` is invalid profile configuration.
+
+The gate writes `report.md` and `result.json` under `app/evaluation/data/runs/`
+(retention bounded by `EVALUATION_RUN_RETENTION`, default latest 10) and exits
+non-zero when not approved. CI replays the committed recording set
+(`app/evaluation/data/recordings/ci-recording.json`) with `--providers mock`.
+
+Refresh the committed recording after intentional graph changes:
+
+```bash
+cd backend
+EMBEDDING_DIMENSION=8 python scripts/record_evaluation_set.py
+```
+
+The `EMBEDDING_DIMENSION=8` override matches the deterministic mock embedding
+provider; omit it only when running against real embedding models.
+
 Use real provider credentials only through local environment files or secret managers. Do not commit provider keys, database passwords, session secrets or API tokens.

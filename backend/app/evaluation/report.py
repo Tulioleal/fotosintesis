@@ -49,8 +49,28 @@ def render_markdown_report(result: ReportableRun) -> str:
         f"- Pass rate (scored cases): {summary.get('pass_rate', 0):.2%}",
         f"- Aggregate approved: {summary.get('aggregate_approved', False)}",
         "",
-        "## Per-Flow Summary",
+        "## Quality Gate",
     ]
+    gate = summary.get("gate") or {}
+    if gate:
+        lines.extend(
+            [
+                f"- Approved: {gate.get('approved', False)}",
+                f"- Coverage failure: {gate.get('coverage_failure', False)}",
+                f"- Supported-case ratio: {gate.get('supported_case_ratio', 0):.2f} "
+                f"(minimum {gate.get('min_supported_case_ratio', 0):.2f})",
+            ]
+        )
+        reasons = gate.get("reasons") or []
+        if reasons:
+            for reason in reasons:
+                lines.append(f"- Failure: {reason}")
+        else:
+            lines.append("- All gate conditions met.")
+    else:
+        lines.append("- Gate decision not recorded for this run.")
+
+    lines.extend(["", "## Per-Flow Summary"])
     for flow, per_flow in sorted(summary.get("flows", {}).items()):
         lines.append(
             f"- {flow}: {per_flow.get('passed', 0)}/{per_flow.get('total', 0)} passed; "

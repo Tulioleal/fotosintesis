@@ -165,6 +165,12 @@ class Settings(BaseSettings):
         validation_alias="EVALUATION_RECORDING_PATH",
         description="Path to the versioned provider recording set for recorded/replay mode.",
     )
+    evaluation_run_retention: int = Field(
+        default=10,
+        gt=0,
+        validation_alias="EVALUATION_RUN_RETENTION",
+        description="Latest-N bound on retained evaluation run artifact directories.",
+    )
 
     identification_max_image_bytes: int = Field(
         default=8 * 1024 * 1024,

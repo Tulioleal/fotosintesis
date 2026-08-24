@@ -2,7 +2,7 @@
   "entries": [
     {
       "key": "4353a9a415b811110e8c2c6a64f37de7186398e43bc8fb7c001d25ab1770b077",
-      "latency_ms": 0.019325998437125236,
+      "latency_ms": 0.024355998903047293,
       "model": null,
       "payload": {
         "data": {
@@ -22,7 +22,7 @@
     },
     {
       "key": "81d2343f04efc01a0a0992f08628ab90b6f3d633230dfcd72b18330a2dac36bf",
-      "latency_ms": 0.00701400131219998,
+      "latency_ms": 0.007414000720018521,
       "model": null,
       "payload": {
         "data": {
@@ -42,7 +42,7 @@
     },
     {
       "key": "bff6a0af5ff07b1194674d8322b438e32eedcd4168e2d168d620f41d07a69871",
-      "latency_ms": 0.020488998416112736,
+      "latency_ms": 0.013635999493999407,
       "model": null,
       "payload": {
         "embeddings": [
@@ -66,7 +66,7 @@
     },
     {
       "key": "676973b9d98b6ccb97c37150321ae43fc5eba6ce93a419d0c9f41656c8987396",
-      "latency_ms": 0.016341000446118414,
+      "latency_ms": 0.01572900146129541,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -89,7 +89,7 @@
     },
     {
       "key": "808c39f9e9ecdac5200150d0201ffe13ec9de6ac032392e65873e1ecfab75f24",
-      "latency_ms": 0.011550997442100197,
+      "latency_ms": 0.010330000804970041,
       "model": null,
       "payload": {
         "results": [
@@ -107,7 +107,7 @@
     },
     {
       "key": "3b844502c48c7ee7753880a55204644390530cd2fe61e4926c662486cc4d1524",
-      "latency_ms": 0.011953001376241446,
+      "latency_ms": 0.012813998182537034,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -130,7 +130,7 @@
     },
     {
       "key": "5e942187cfbc59b98be6eb2635477a53c8541b07a859e0ef7c4f7310aadba5f9",
-      "latency_ms": 0.009347997547592968,
+      "latency_ms": 0.011581996659515426,
       "model": null,
       "payload": {
         "metadata": {},
@@ -143,7 +143,7 @@
     },
     {
       "key": "20a5b5ae88821fc3d2220fb11f041deb27a678712263e78f8174416e3835d180",
-      "latency_ms": 0.019257000531069934,
+      "latency_ms": 0.020478000806178898,
       "model": null,
       "payload": {
         "data": {
@@ -163,7 +163,7 @@
     },
     {
       "key": "1df66dc2773da1270d41f6c34372faf766a8ffbb3ebdce00a6d46a4e5c673f23",
-      "latency_ms": 0.006152000423753634,
+      "latency_ms": 0.006432001100620255,
       "model": null,
       "payload": {
         "data": {
@@ -183,7 +183,7 @@
     },
     {
       "key": "d0311abcd71a37bf2f51857bd35dc51684063c7bcd3716e3ce4b0529890e9fb8",
-      "latency_ms": 0.024747001589275897,
+      "latency_ms": 0.012974000128451735,
       "model": null,
       "payload": {
         "embeddings": [
@@ -207,7 +207,7 @@
     },
     {
       "key": "6ed96f457aa6803963c8866e471650365e33d8aecee916d783fe2b974cbc64ca",
-      "latency_ms": 0.016961999790510163,
+      "latency_ms": 0.014869001461192966,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -230,7 +230,7 @@
     },
     {
       "key": "297d8b52e9bc3b3935ee359c7aa3d10a680d8d797e0910b10fb8c0f16333e6cd",
-      "latency_ms": 0.014507000742014498,
+      "latency_ms": 0.009438001143280417,
       "model": null,
       "payload": {
         "results": [
@@ -248,7 +248,7 @@
     },
     {
       "key": "d02abf52b6c75d4705e540a54e48fad95421dc50110b0adc405353569f7a4331",
-      "latency_ms": 0.012563999916892499,
+      "latency_ms": 0.009858002158580348,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -271,7 +271,7 @@
     },
     {
       "key": "809593c0c91b2e2892a82159c8559da95064e18266ffa0177a1b2aa913171924",
-      "latency_ms": 0.018896000256063417,
+      "latency_ms": 0.009687999408924952,
       "model": null,
       "payload": {
         "metadata": {},
@@ -284,7 +284,7 @@
     },
     {
       "key": "fbd78ab5b9f14f2ffec3e1a38e83aaf82c7f8d2aff54b6eef40feaa07b0df88c",
-      "latency_ms": 0.019697003153851256,
+      "latency_ms": 0.02459700044710189,
       "model": null,
       "payload": {
         "data": {
@@ -304,7 +304,7 @@
     },
     {
       "key": "618eda4f38da97cafbe5a79592aebfd8f694333c637504f2516ddcb7c0b4712d",
-      "latency_ms": 0.004839999746764079,
+      "latency_ms": 0.009076997230295092,
       "model": null,
       "payload": {
         "data": {
@@ -324,7 +324,7 @@
     },
     {
       "key": "10ddf36a79330d954e3b5fd20af399459fa4c4e070bd4e59f7ea775a798054dc",
-      "latency_ms": 0.013365002814680338,
+      "latency_ms": 0.014436998753808439,
       "model": null,
       "payload": {
         "embeddings": [
@@ -348,7 +348,7 @@
     },
     {
       "key": "96ee73c0ddad7b1668d78ffa40854afac7fd330c803f5083e4f4ff5f755b8d45",
-      "latency_ms": 0.02261199915665202,
+      "latency_ms": 0.013615997886518016,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -371,7 +371,7 @@
     },
     {
       "key": "95f3606998aff66c755f4a5710c638e9294958b616d3502e8200406b4647450f",
-      "latency_ms": 0.020109000615775585,
+      "latency_ms": 0.00919800004339777,
       "model": null,
       "payload": {
         "results": [
@@ -389,7 +389,7 @@
     },
     {
       "key": "b1925c1efeb49bea8b023c061c53195ab3b9dd35ba1345956cdfb1f03c79d146",
-      "latency_ms": 0.017091999325202778,
+      "latency_ms": 0.009187999239657074,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -412,7 +412,7 @@
     },
     {
       "key": "aa18d6b4417cc8235efb7e247bdf5feee558ea10e7145feba5d6087b3bc43093",
-      "latency_ms": 0.022061998606659472,
+      "latency_ms": 0.00968800304690376,
       "model": null,
       "payload": {
         "metadata": {},
@@ -425,7 +425,7 @@
     },
     {
       "key": "40ba281de7ac64a1f4ac0f4b943051680c94fe0c2ea40982a80a571deb415d8c",
-      "latency_ms": 0.020117997337365523,
+      "latency_ms": 0.0185349999810569,
       "model": null,
       "payload": {
         "data": {
@@ -445,7 +445,7 @@
     },
     {
       "key": "4b8081e935d488aa2c5a690f1458330798b8a6a6fa3d8ed3983416e962280c39",
-      "latency_ms": 0.005780999345006421,
+      "latency_ms": 0.0056110002333298326,
       "model": null,
       "payload": {
         "data": {
@@ -465,7 +465,7 @@
     },
     {
       "key": "f935c1b8fb9dad407e4869e31a089fbe475a9e5705a31f0a4a0aa70fe3095aa1",
-      "latency_ms": 0.015349000022979453,
+      "latency_ms": 0.01329500082647428,
       "model": null,
       "payload": {
         "embeddings": [
@@ -489,7 +489,7 @@
     },
     {
       "key": "2039f43b1f43aced634718e82189f0b15419d5c6c0d1c61ba9218bfe3f73c74d",
-      "latency_ms": 0.014086999726714566,
+      "latency_ms": 0.02332399890292436,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -512,7 +512,7 @@
     },
     {
       "key": "7daf84c4674adc33c46e788ab17224d8ea90edd27188382cf829063c4d9a58d8",
-      "latency_ms": 0.009859002602752298,
+      "latency_ms": 0.015860001440159976,
       "model": null,
       "payload": {
         "results": [
@@ -530,7 +530,7 @@
     },
     {
       "key": "4bde13ed8a8d899b153dd422948c5164d0f82c4d35670d9e758f33965721d245",
-      "latency_ms": 0.008205999620258808,
+      "latency_ms": 0.012783999409293756,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -553,7 +553,7 @@
     },
     {
       "key": "6c5d1fff58e4ff62cb15adebb99817d23e6c64ad634d663aca17195f724acbb4",
-      "latency_ms": 0.0110910004877951,
+      "latency_ms": 0.014067001757211983,
       "model": null,
       "payload": {
         "metadata": {},
@@ -566,7 +566,7 @@
     },
     {
       "key": "aaec624ea366da0faa7042f45c77d87406f4b284defb08a88a95d91e1bcd50b5",
-      "latency_ms": 0.019877999875461683,
+      "latency_ms": 0.019987997802672908,
       "model": null,
       "payload": {
         "data": {
@@ -586,7 +586,7 @@
     },
     {
       "key": "3f0bdb27bfc78d43946b6cdc613911e6f88b374648b23f984a3d740cd75db8b2",
-      "latency_ms": 0.005480000254465267,
+      "latency_ms": 0.00599100167164579,
       "model": null,
       "payload": {
         "data": {
@@ -606,7 +606,7 @@
     },
     {
       "key": "cc3599c118fc5c668da0b1f89793f152c20df5ddaf92a8a0d2bd3fc3ce24debd",
-      "latency_ms": 0.012895001418655738,
+      "latency_ms": 0.011872001778101549,
       "model": null,
       "payload": {
         "embeddings": [
@@ -630,7 +630,7 @@
     },
     {
       "key": "55b5c9d0ef3943a540f01d1307ec16be8ac3da6b16450a282be911bc633442eb",
-      "latency_ms": 0.016381000023102388,
+      "latency_ms": 0.023925000277813524,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -653,7 +653,7 @@
     },
     {
       "key": "6e17824bff9bef9f18ca9a77814b25126662e79565ea993edc9df86802ff531e",
-      "latency_ms": 0.034846001653932035,
+      "latency_ms": 0.01545000122860074,
       "model": null,
       "payload": {
         "results": [
@@ -671,7 +671,7 @@
     },
     {
       "key": "2236309f258c2ef3fe83bc0bb01645c370fba286fa2eaa72b093a24580040782",
-      "latency_ms": 0.02058900281554088,
+      "latency_ms": 0.02393500108155422,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -694,7 +694,7 @@
     },
     {
       "key": "6d6c52e797efc500c4f27f41d7be7a943dc714bfd9b2128fdf2416d06cc95119",
-      "latency_ms": 0.012984997738385573,
+      "latency_ms": 0.028665002901107073,
       "model": null,
       "payload": {
         "metadata": {},
@@ -707,7 +707,7 @@
     },
     {
       "key": "6139b42e2457613494a6c1eaa73de5349169b7b7eed6b249c6080aa382580723",
-      "latency_ms": 0.01893599983304739,
+      "latency_ms": 0.02244300048914738,
       "model": null,
       "payload": {
         "data": {
@@ -727,7 +727,7 @@
     },
     {
       "key": "7ef3cc2923d3df71059f679266c1219543f6088063b6de11aba9cc22f66e8418",
-      "latency_ms": 0.005491001502377912,
+      "latency_ms": 0.006262001988943666,
       "model": null,
       "payload": {
         "data": {
@@ -747,7 +747,7 @@
     },
     {
       "key": "f6cc34034d5315fe933522b46e977b2acdef2f49f17db931c2466d9ea4589a8c",
-      "latency_ms": 0.013155000488040969,
+      "latency_ms": 0.012432999938027933,
       "model": null,
       "payload": {
         "embeddings": [
@@ -771,7 +771,7 @@
     },
     {
       "key": "7ecea332a533d8441d668df5f7bd718051569fcdd7f6dd9ac4a5447e24307db6",
-      "latency_ms": 0.019376999262021855,
+      "latency_ms": 0.014828001440037042,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -794,7 +794,7 @@
     },
     {
       "key": "c0d5404b3f7d09babfb02af20885e2c3819fcfe6e45ae7f1afa05cb30d8c5362",
-      "latency_ms": 0.012833999790018424,
+      "latency_ms": 0.008226001227740198,
       "model": null,
       "payload": {
         "results": [
@@ -812,7 +812,7 @@
     },
     {
       "key": "7812059510910fba0c32894964105ec5d21f96534c0472317c09a82e563895c3",
-      "latency_ms": 0.01383600101689808,
+      "latency_ms": 0.010850999387912452,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -835,7 +835,7 @@
     },
     {
       "key": "81088e7a852b55b914a4a39411e2aa4bc93c82b14c516a9aa8dd2fc3dbb21b06",
-      "latency_ms": 0.0110910004877951,
+      "latency_ms": 0.011812997399829328,
       "model": null,
       "payload": {
         "metadata": {},
@@ -848,7 +848,7 @@
     },
     {
       "key": "b79d7de77f5324ed2662e6390ad98565838a09cc2f3dcdd7c793bd68efe33af2",
-      "latency_ms": 0.01952700040419586,
+      "latency_ms": 0.03329299943288788,
       "model": null,
       "payload": {
         "data": {
@@ -868,7 +868,7 @@
     },
     {
       "key": "5ea4e5bffd5e13fa03477f77d933dc2020e9d3d16247f78c8469a63c84807c2f",
-      "latency_ms": 0.004828998498851433,
+      "latency_ms": 0.0058109981182496995,
       "model": null,
       "payload": {
         "data": {
@@ -888,7 +888,7 @@
     },
     {
       "key": "5a098e5641e9950eb9d67233cc75ecb74299467bb9b5a3687899388ca5b6a4cc",
-      "latency_ms": 0.013495002349372953,
+      "latency_ms": 0.012923999747727066,
       "model": null,
       "payload": {
         "embeddings": [
@@ -912,7 +912,7 @@
     },
     {
       "key": "36fcc6dc3a712f9d1344ca993d58ffa535842fb399dfcb28c89cb708a947ea4a",
-      "latency_ms": 0.014727000234415755,
+      "latency_ms": 0.014297002053353935,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -935,7 +935,7 @@
     },
     {
       "key": "19919a2563211a13992a89fbc15e107571918de441da6cbf1bc3312b475f8c86",
-      "latency_ms": 0.007965001714183018,
+      "latency_ms": 0.008896997314877808,
       "model": null,
       "payload": {
         "results": [
@@ -953,7 +953,7 @@
     },
     {
       "key": "253c4762e413f08f9cd9e71e133ef038be6c9a72049923af579d08ad9ecd33c7",
-      "latency_ms": 0.01756299752742052,
+      "latency_ms": 0.009406998287886381,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -976,7 +976,7 @@
     },
     {
       "key": "ef8883516cda6879e45397fc0f7f6de415ba5c4d22f37380c72b8c4e44bebfa1",
-      "latency_ms": 0.014637997082900256,
+      "latency_ms": 0.009037001291289926,
       "model": null,
       "payload": {
         "metadata": {},
@@ -989,7 +989,7 @@
     },
     {
       "key": "2469d05dc28e71fca63c74fbbf552939d0bcc3963ffaa2e9a3c492fc717ab40e",
-      "latency_ms": 0.01999800224439241,
+      "latency_ms": 0.020868999854428694,
       "model": null,
       "payload": {
         "data": {
@@ -1009,7 +1009,7 @@
     },
     {
       "key": "71f4f73bd3d28e4cf3627d9f1736ca155b14010f0ec79a38d523c7eb5c15952e",
-      "latency_ms": 0.005040001269662753,
+      "latency_ms": 0.005200003215577453,
       "model": null,
       "payload": {
         "data": {
@@ -1029,7 +1029,7 @@
     },
     {
       "key": "f2f16090b5668aa0b431fbe0828d08f85787eb657590876079b4d4d2e14f04f4",
-      "latency_ms": 0.01938700006576255,
+      "latency_ms": 0.01509899811935611,
       "model": null,
       "payload": {
         "embeddings": [
@@ -1053,7 +1053,7 @@
     },
     {
       "key": "cc916e7b643c5d63b5d3233ae6885198fa52041f9fe36669c537025e85ca4f2d",
-      "latency_ms": 0.025298002583440393,
+      "latency_ms": 0.01609000173630193,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -1076,7 +1076,7 @@
     },
     {
       "key": "0638bf824d92c2950d2a28fa717ae3ce5055e5d4f26d383963c6a67e192af20c",
-      "latency_ms": 0.015670000721001998,
+      "latency_ms": 0.010800999007187784,
       "model": null,
       "payload": {
         "results": [
@@ -1094,7 +1094,7 @@
     },
     {
       "key": "2048e92ec89d6b432e0e0e33e187dc64cad4969cb61b61818c14d3fe783a4327",
-      "latency_ms": 0.012343996786512434,
+      "latency_ms": 0.01119099761126563,
       "model": null,
       "payload": {
         "confidence": 1.0,
@@ -1117,7 +1117,7 @@
     },
     {
       "key": "f238f6eb82f3aa98c20c4857b9a7cf3b399893c838d458528261ed8929dc214a",
-      "latency_ms": 0.009938998118741438,
+      "latency_ms": 0.010299998393747956,
       "model": null,
       "payload": {
         "metadata": {},
@@ -1130,7 +1130,7 @@
     },
     {
       "key": "cc27e3807d52fe7dc916409b197955f4ef12db60fcb5aaa56197c5477d58897d",
-      "latency_ms": 0.020507999579422176,
+      "latency_ms": 0.018894999811891466,
       "model": null,
       "payload": {
         "data": {
@@ -1150,7 +1150,7 @@
     },
     {
       "key": "9da240e51bfa11c1f39cabf9b4e69a127ba0d731c9ecf274cdfae16085eadfaf",
-      "latency_ms": 0.005581001460086554,
+      "latency_ms": 0.005460002284962684,
       "model": null,
       "payload": {
         "data": {
@@ -1170,7 +1170,7 @@
     },
     {
       "key": "c3f21a698254b7dda4ff99f23b65f5cf5c63ed6aa250375ba1c13cd5e745cd6d",
-      "latency_ms": 0.02677999873412773,
+      "latency_ms": 0.018776001525111496,
       "model": null,
       "payload": {
         "metadata": {},
@@ -1183,7 +1183,7 @@
     },
     {
       "key": "f4e999e44c9c023dae329453357f5ea97d677ab76a9458e7f203ea0e73c4a508",
-      "latency_ms": 0.01982800313271582,
+      "latency_ms": 0.025487999664619565,
       "model": null,
       "payload": {
         "data": {
@@ -1203,7 +1203,7 @@
     },
     {
       "key": "7429fb9c86373b66c180912c8cc48778df79d8bf308d37b65f44cd68c7e81b86",
-      "latency_ms": 0.005360001523513347,
+      "latency_ms": 0.005640002200379968,
       "model": null,
       "payload": {
         "data": {
@@ -1223,7 +1223,7 @@
     },
     {
       "key": "1f3555b40dcbb297fc613670d8a8b3f71a3683a6c087b8b6d7ef8cb84425ac87",
-      "latency_ms": 0.016862002667039633,
+      "latency_ms": 0.02447700171614997,
       "model": null,
       "payload": {
         "metadata": {},
@@ -1236,7 +1236,7 @@
     },
     {
       "key": "74e249a309e68e2d883c9d1d60561dcdfef573b75c03b9dfd9fbc8f3db4b06f3",
-      "latency_ms": 0.020307998056523502,
+      "latency_ms": 0.021249998098937795,
       "model": null,
       "payload": {
         "data": {
@@ -1256,7 +1256,7 @@
     },
     {
       "key": "c9ebec7a4595ab624886eb8cb13bc796a89f49fe7438ff4f2eee24b81760d4b3",
-      "latency_ms": 0.004868998075835407,
+      "latency_ms": 0.007594000635435805,
       "model": null,
       "payload": {
         "data": {
@@ -1276,7 +1276,7 @@
     },
     {
       "key": "dccfa01ec903f2a2c84924ffd7ec3d213f00fe89dfbcc3157715cc3d29ba4f1e",
-      "latency_ms": 0.027411999326432124,
+      "latency_ms": 0.028073001885786653,
       "model": null,
       "payload": {
         "metadata": {},
@@ -1289,7 +1289,7 @@
     },
     {
       "key": "0c2913c5fdf4a8edaae24fcdd40dbcaf322dddfbfa3f9b364664ff9d091a4719",
-      "latency_ms": 0.01910599894472398,
+      "latency_ms": 0.022332002117764205,
       "model": null,
       "payload": {
         "data": {
@@ -1309,7 +1309,7 @@
     },
     {
       "key": "0828542d47e548dfc58e7a31b6a8532d6388c9a71e593452f739f42ca29b6c4e",
-      "latency_ms": 0.00490899765281938,
+      "latency_ms": 0.005160000000614673,
       "model": null,
       "payload": {
         "data": {
@@ -1329,7 +1329,7 @@
     },
     {
       "key": "019f5467318cf514cfa3ece8dc5d4e6ffa182b50789bbaeef24d95156b06c001",
-      "latency_ms": 0.026159999833907932,
+      "latency_ms": 0.016882000636542216,
       "model": null,
       "payload": {
         "metadata": {},

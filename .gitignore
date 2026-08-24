@@ -72,6 +72,7 @@ postgres-data/
 pgdata/
 storage-data/
 uploads/
+backend/app/evaluation/data/runs/
 
 # Docker and local overrides
 docker-compose.override.yml
@@ -102,4 +103,7 @@ frontend/e2e/.care-tools-credentials.json
 docs/deploy-walkthrough.md
 IMPROVEMENTS.md
 proposals/*
-plans/
+plans/backend/evaluation-runs/
+backend/evaluation-runs/
+backend/evaluation-runs-record/
+evaluation-runs/
