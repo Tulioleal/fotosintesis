@@ -170,14 +170,16 @@ async def _judge_combined_evidence(
 
 
 def _safety_constrained_covered_aspects(requested_values: list[str], evidence: str) -> list[str]:
+    del evidence
     covered = list(requested_values)
-    normalized = evidence.casefold()
     for aspect_value in {
         RequiredAspect.toxicity_pet_safety.value,
         RequiredAspect.toxicity_child_safety.value,
         RequiredAspect.toxicity_human_edibility.value,
     }:
-        if aspect_value in covered and not _is_safety_sensitive_question(normalized):
+        # Safety aspects are conservatively withheld from combined RAG+web
+        # full coverage; only grounded local evidence can fully cover them.
+        if aspect_value in covered:
             covered.remove(aspect_value)
     return covered
 
@@ -441,10 +443,6 @@ def _validated_claim_payloads(
 def _has_requested_safety_aspect(values: list[str]) -> bool:
     translated = [LEGACY_ASPECT_TRANSLATION.get(value, value) for value in values]
     return any(value.startswith(("toxicity_", "safety_")) for value in translated)
-
-
-def _is_safety_sensitive_question(message: str) -> bool:
-    return False
 
 
 async def fallback_web_search(owner, state: AssistantState) -> dict:

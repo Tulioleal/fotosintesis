@@ -97,14 +97,12 @@ def _log_fallback_route(reason: str, *, evidence_type: str) -> None:
     )
 
 
-def _conservative_safety_answer(state: AssistantState) -> str | None:
-    plant_name = _display_name_for_answer(state) or "your plant"
+def _has_missing_edibility_or_pet_aspect(state: AssistantState) -> bool:
     missing_aspects = [LEGACY_ASPECT_TRANSLATION.get(value, value) for value in state.get("missing_aspects", [])]
-    if RequiredAspect.toxicity_human_edibility.value in missing_aspects:
-        return f"I did not find direct and reliable evidence on whether {plant_name} is edible. For safety, do not consume it or use it in preparations until verified with a reliable toxicological or botanical source."
-    if RequiredAspect.toxicity_pet_safety.value in missing_aspects:
-        return f"I did not find direct and reliable evidence on the safety of {plant_name} for pets, children, or skin contact. As a precaution, keep it out of reach of pets and children until confirmed with a reliable veterinary or toxicological source. If ingestion or skin contact occurs and symptoms appear, consult a veterinarian or poison control center."
-    return None
+    return (
+        RequiredAspect.toxicity_human_edibility.value in missing_aspects
+        or RequiredAspect.toxicity_pet_safety.value in missing_aspects
+    )
 
 
 def is_recoverable_generation_failure(failure_metadata: AssistantFailureMetadata) -> bool:
@@ -122,7 +120,7 @@ async def generate_answer(owner, state: AssistantState) -> dict:
     if not state.get("sufficient"):
         web_results = state.get("web_results", [])
         if web_results:
-            if _has_missing_safety_aspect(state) and _conservative_safety_answer(state):
+            if _has_missing_edibility_or_pet_aspect(state):
                 rendered = await owner._generate_fallback_response(state, _conservative_safety_draft(state))
                 return {**rendered, "fallback_reasons": _append_reason(state, "conservative_safety_fallback")}
             return await owner._generate_web_answer(state, web_results)
@@ -278,13 +276,13 @@ async def _generate_fallback_response(owner, state: AssistantState | dict, draft
 __all__ = [
     "_append_reason",
     "_combined_extra_context",
-    "_conservative_safety_answer",
     "_conservative_safety_draft",
     "_default_fallback_constraints",
     "_diagnostics",
     "_fallback_response_prompt",
     "_generate_disclaimed_guidance",
     "_generate_fallback_response",
+    "_has_missing_edibility_or_pet_aspect",
     "_generate_grounded_answer",
     "_generate_structured_answer",
     "_generate_web_answer",

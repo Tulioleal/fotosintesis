@@ -224,6 +224,25 @@
   color: inherit;
 }
 
+.suggestionEvidenceLine {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+  line-height: $line-height-relaxed;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.suggestionLimitations {
+  margin: 0;
+  font-family: $font-body-stack;
+  font-size: 0.75rem;
+  line-height: $line-height-relaxed;
+  color: inherit;
+  opacity: 0.75;
+}
+
 .suggestionActions {
   display: flex;
   flex-wrap: wrap;

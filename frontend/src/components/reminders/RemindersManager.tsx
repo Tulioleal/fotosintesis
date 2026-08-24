@@ -1041,6 +1041,20 @@ function formatSuggestionWhen(
   }).format(date);
 }
 
+function suggestionEvidenceSummary(
+  evidence: ReminderSuggestionResult["evidence"],
+): string {
+  const parts = [evidence.taxonomy, evidence.location, evidence.light_context].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (evidence.active_reminders > 0) {
+    parts.push(
+      `${evidence.active_reminders} recordatorio${evidence.active_reminders === 1 ? "" : "s"} activo${evidence.active_reminders === 1 ? "" : "s"}`,
+    );
+  }
+  return parts.length ? parts.join(" · ") : "datos del perfil de la planta";
+}
+
 function SuggestionOutcomeCard({
   outcome,
   onAccept,
@@ -1105,6 +1119,15 @@ function SuggestionOutcomeCard({
           {suggestionRecurrenceLabels[outcome.recurrence] ?? outcome.recurrence}
         </p>
         <p className={styles.suggestionItemCopy}>{outcome.justification}</p>
+        <p className={styles.suggestionEvidenceLine}>
+          Confianza: {Math.round(outcome.confidence * 100)}% &middot;{" "}
+          {suggestionEvidenceSummary(outcome.evidence)}
+        </p>
+        {outcome.limitations?.length ? (
+          <p className={styles.suggestionLimitations}>
+            Limitaciones: {outcome.limitations.join(" · ")}
+          </p>
+        ) : null}
         <div className={styles.suggestionActions}>
           <Button
             type="button"

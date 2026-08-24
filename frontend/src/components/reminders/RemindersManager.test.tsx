@@ -265,6 +265,8 @@ describe("RemindersManager", () => {
     expect(
       await screen.findByText(defaultSuggestion.justification),
     ).toBeInTheDocument();
+    expect(screen.getByText(/Confianza: 90%/)).toBeInTheDocument();
+    expect(screen.getByText(/Nephrolepis exaltata · Balcón/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Aceptar sugerencia" }));
 
     await waitFor(() => {
@@ -289,8 +291,7 @@ describe("RemindersManager", () => {
     });
   });
 
-  it("renders a clarification outcome with the missing fields", async () => {
-    mocks.suggestReminder.mockResolvedValueOnce({
+  it("renders a clarification outcome with the missing fields", async () => {    mocks.suggestReminder.mockResolvedValueOnce({
       kind: "clarification",
       missing_fields: ["date", "time"],
     });
@@ -307,6 +308,22 @@ describe("RemindersManager", () => {
     expect(
       screen.queryByRole("button", { name: "Aceptar sugerencia" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders suggestion limitations when the backend reports them", async () => {
+    mocks.suggestReminder.mockResolvedValueOnce({
+      ...defaultSuggestion,
+      confidence: 0.55,
+      limitations: ["Sin medicion de luz reciente"],
+    });
+
+    renderWithQueryClient(<RemindersManager />);
+
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+
+    expect(await screen.findByText(/Confianza: 55%/)).toBeInTheDocument();
+    expect(screen.getByText(/Limitaciones: Sin medicion de luz reciente/)).toBeInTheDocument();
   });
 
   it("renders a duplicate outcome referencing an existing reminder", async () => {

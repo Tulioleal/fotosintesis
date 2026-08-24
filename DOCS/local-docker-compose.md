@@ -89,7 +89,9 @@ The backend evaluation runner uses deterministic mocks unless real providers are
 
 ```bash
 cd backend
-python -m app.evaluation.runner
+python scripts/run_evaluation.py --mode recorded
 ```
+
+Or from the repository root: `pnpm eval`.
 
 Use real provider credentials only through local environment files or secret managers. Do not commit provider keys, database passwords, session secrets or API tokens.
