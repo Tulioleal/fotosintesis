@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -27,11 +26,15 @@ from app.schemas.reminders import (
     ReminderUpdate,
 )
 from app.observability.metrics import metrics_registry
+from app.reminders.validation import (
+    MissingReminderTimezoneError,
+    ReminderValidationError,
+    ensure_future_due,
+    resolve_effective_timezone,
+)
 from app.scheduling.timezone import (
     InvalidTimezoneError,
     NonexistentLocalTimeError,
-    local_datetime_to_utc,
-    resolve_timezone,
 )
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
@@ -152,12 +155,13 @@ async def delete_reminder(
 def _ensure_future_due(payload: ReminderCreate | ReminderUpdate, user: AuthUser) -> None:
     if payload.date is None or payload.time is None:
         return
-    zone_key = payload.timezone or user.timezone
-    zone = resolve_timezone(zone_key)
-    if zone is None:
-        raise MissingTimezoneError(
-            "Provide a timezone on your account or on this reminder to schedule it."
+    try:
+        zone = resolve_effective_timezone(
+            override=payload.timezone, user_timezone=user.timezone
         )
-    due_at = local_datetime_to_utc(payload.date, payload.time, zone)
-    if due_at <= datetime.now(timezone.utc):
-        raise HTTPException(status_code=422, detail="The date and time must be in the future.")
+    except MissingReminderTimezoneError as error:
+        raise MissingTimezoneError(str(error)) from None
+    try:
+        ensure_future_due(due_date=payload.date, due_time=payload.time, zone=zone)
+    except ReminderValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None

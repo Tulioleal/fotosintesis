@@ -37,11 +37,16 @@ describe("AssistantChat", () => {
       reminder_suggestion: {
         garden_plant_id: "garden-1",
         plant_name: "Pata",
-        action: "regar",
+        action: "Riego",
         due_at: "2026-06-01T10:30:00Z",
         recurrence: "weekly",
         suggestion_justification: "Sugerido por el asistente desde la conversacion.",
         timezone: "America/Argentina/Buenos_Aires",
+        date: "2026-06-01",
+        time: "07:30",
+        confidence: 0.92,
+        limitations: [],
+        evidence: { taxonomy: "Nephrolepis exaltata", location: null, notes: null, profile_sections: [], active_reminders: 0, light_context: null },
       },
       tool_failures: [],
     });
@@ -57,6 +62,7 @@ describe("AssistantChat", () => {
 
     expect(await screen.findByText("Recordatorio sugerido")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Riego" })).toBeInTheDocument();
+    expect(screen.getByText(/Confianza: 92%/)).toBeInTheDocument();
     expect(screen.getByText(/Pata .* Semanal/)).toBeInTheDocument();
     expect(screen.getByText("Sugerido por el asistente desde la conversacion.")).toBeInTheDocument();
   });
@@ -84,10 +90,13 @@ describe("AssistantChat", () => {
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
       timezone: "America/Argentina/Buenos_Aires",
     });
+    // Explicit backend schedule fields are used verbatim (no ISO slicing).
+    expect(mocks.createReminder.mock.calls[0][0].time).toBe("07:30");
     expect(await screen.findByRole("button", { name: "Recordatorio creado" })).toBeDisabled();
   });
 
-  it("normalizes a non-water assistant suggestion to its TASK_TYPES value before posting", async () => {
+  it("posts the backend-supplied action verbatim without local semantic rewriting", async () => {
+    const rawAction = "limpiar polvo del follaje";
     mocks.sendAssistantMessage.mockResolvedValueOnce({
       message: {
         role: "assistant",
@@ -99,10 +108,12 @@ describe("AssistantChat", () => {
       reminder_suggestion: {
         garden_plant_id: "garden-1",
         plant_name: "Pata",
-        action: "limpiar polvo del follaje",
+        action: rawAction,
         due_at: "2026-06-01T10:30:00Z",
         recurrence: "weekly",
         suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+        date: "2026-06-01",
+        time: "10:30",
       },
       tool_failures: [],
     });
@@ -113,14 +124,38 @@ describe("AssistantChat", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
 
-    expect(await screen.findByRole("heading", { name: "Limpieza" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: rawAction })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
 
     await waitFor(() => {
       expect(mocks.createReminder).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "Limpieza" }),
+        expect.objectContaining({ action: rawAction, time: "10:30", date: "2026-06-01" }),
       );
     });
+  });
+
+  it("renders a suggestion without an accept action when requires_confirmation is false", async () => {
+    mocks.sendAssistantMessage.mockResolvedValueOnce({
+      conversation_id: "conversation-9",
+      message: {
+        role: "assistant",
+        content: "Listo, cree el recordatorio.",
+        content_format: "plain_text",
+      },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Crea un recordatorio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("Listo, cree el recordatorio.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aceptar sugerencia" })).not.toBeInTheDocument();
   });
 
   it("maps assistant taxonomy query parameters to the chat payload", async () => {

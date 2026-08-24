@@ -259,22 +259,98 @@ class AssistantTools:
         timezone: str | None = None,
     ) -> ToolResult:
         try:
-            reminder_id = await self.repository.create_reminder(
+            from app.reminders.repository import ReminderRepository
+            from app.reminders.validation import (
+                MissingReminderTimezoneError,
+                ReminderValidationError,
+                ensure_future_due,
+                resolve_effective_timezone,
+            )
+            from app.schemas.reminders import ReminderCreate as ReminderCreatePayload
+            from app.schemas.reminders import ReminderRecurrence
+
+            recurrence_value = (recurrence or "none").strip().lower()
+            try:
+                recurrence_enum = ReminderRecurrence(recurrence_value)
+            except ValueError:
+                raise ReminderValidationError(
+                    "State a recurrence of none, daily, weekly or monthly."
+                ) from None
+
+            zone = resolve_effective_timezone(
+                override=timezone,
+                user_timezone=await self._stored_user_timezone(user_id),
+            )
+            if due_at.tzinfo is not None:
+                local_due = due_at.astimezone(zone)
+            else:
+                local_due = due_at.replace(tzinfo=None)
+            due_at_utc = ensure_future_due(
+                due_date=local_due.date(), due_time=local_due.time(), zone=zone
+            )
+
+            repository = ReminderRepository(self.repository.session)
+            existing = await repository.find_equivalent(
                 user_id=user_id,
                 garden_plant_id=garden_plant_id,
                 action=action,
-                due_at=due_at,
-                recurrence=recurrence,
-                justification=justification,
-                timezone=timezone,
+                due_at=due_at_utc,
+                recurrence=recurrence_enum.value,
             )
+            if existing is not None:
+                result = ToolResult(
+                    ok=True,
+                    data={"id": str(existing), "duplicate": True},
+                )
+                self._record_tool_call("reminder_create", result)
+                return result
+
+            reminder = await repository.create_reminder(
+                user_id=user_id,
+                payload=ReminderCreatePayload(
+                    garden_plant_id=garden_plant_id,
+                    action=action,
+                    date=local_due.date(),
+                    time=local_due.time(),
+                    recurrence=recurrence_enum,
+                    suggestion_justification=justification,
+                    timezone=zone.key,
+                ),
+            )
+            if reminder is None:
+                raise ReminderValidationError(
+                    "The selected plant does not exist in your garden."
+                )
+            result = ToolResult(ok=True, data={"id": str(reminder.id)})
+        except (
+            ReminderValidationError,
+            MissingReminderTimezoneError,
+        ) as validation_error:
+            result = ToolResult(ok=False, error=str(validation_error))
+            self._record_tool_call("reminder_create", result)
+            return result
         except Exception as exc:
             result = ToolResult(ok=False, error=f"reminder_create failed: {exc}")
             self._record_tool_call("reminder_create", result)
             return result
-        result = ToolResult(ok=True, data={"id": str(reminder_id)})
         self._record_tool_call("reminder_create", result)
         return result
+
+    async def _stored_user_timezone(self, user_id: UUID) -> str | None:
+        """Best-effort stored user timezone for effective-zone resolution."""
+        try:
+            from sqlalchemy import select
+
+            from app.auth.tables import users
+
+            row = (
+                await self.repository.session.execute(
+                    select(users.c.timezone).where(users.c.id == user_id)
+                )
+            ).first()
+            return row[0] if row else None
+        except Exception:
+            return None
 
     async def light_measurement_lookup(
         self, *, user_id: UUID, garden_plant_id: UUID | None = None

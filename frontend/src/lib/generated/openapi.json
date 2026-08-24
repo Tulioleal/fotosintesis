@@ -286,15 +286,56 @@
             "title": "Action",
             "type": "string"
           },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
           "due_at": {
             "format": "date-time",
             "title": "Due At",
             "type": "string"
           },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
           "garden_plant_id": {
             "format": "uuid",
             "title": "Garden Plant Id",
             "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
           },
           "plant_name": {
             "title": "Plant Name",
@@ -306,6 +347,17 @@
           "suggestion_justification": {
             "title": "Suggestion Justification",
             "type": "string"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
           },
           "timezone": {
             "anyOf": [

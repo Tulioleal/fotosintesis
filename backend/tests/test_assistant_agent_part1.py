@@ -488,7 +488,7 @@ async def test_converted_fallback_paths_use_centralized_renderer() -> None:
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
             "reminder_suggestion_requested": False,
-            "reminder_due_at": datetime(2026, 6, 1, 10, 30, tzinfo=timezone.utc),
+            "reminder_due_at": "2026-06-01T10:30",
         },
     )
     await AssistantGraph(action_tools).run(

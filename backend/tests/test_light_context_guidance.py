@@ -220,6 +220,7 @@ async def test_reminder_suggestion_discloses_eligible_light_context() -> None:
             "light_context_relevant": True,
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": True,
         },
         light_measurement=_measurement(),

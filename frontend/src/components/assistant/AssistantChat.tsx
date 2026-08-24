@@ -10,7 +10,6 @@ import {
   type AssistantSource,
   type ReminderCreate,
 } from "@/lib/api/client";
-import { normalizeReminderAction } from "@/components/reminders/RemindersManager";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Notice } from "@/components/ui/Notice";
@@ -35,6 +34,7 @@ type ChatMessage = {
   content: string;
   contentFormat?: AssistantMessageContentFormat | null;
   reminderSuggestion?: AssistantReminderSuggestion | null;
+  requiresConfirmation?: boolean;
   suggestionStatus?: "accepted" | "error";
 };
 
@@ -143,6 +143,7 @@ export function AssistantChat() {
           content: chatResponse.message.content,
           contentFormat: chatResponse.message.content_format,
           reminderSuggestion: chatResponse.reminder_suggestion,
+          requiresConfirmation: chatResponse.requires_confirmation !== false,
         },
       ]);
       setSources(chatResponse.sources);
@@ -165,12 +166,15 @@ export function AssistantChat() {
     setAcceptingSuggestion(messageIndex);
     setError(null);
     try {
-      const schedule = localScheduleParts(suggestion.due_at, suggestion.timezone);
+      const fallbackSchedule =
+        suggestion.date && suggestion.time
+          ? null
+          : localScheduleParts(suggestion.due_at, suggestion.timezone);
       await apiClient.createReminder({
         garden_plant_id: suggestion.garden_plant_id,
-        action: normalizeReminderAction(suggestion.action),
-        date: schedule.date,
-        time: schedule.time,
+        action: suggestion.action,
+        date: suggestion.date ?? fallbackSchedule?.date ?? "",
+        time: suggestion.time ?? fallbackSchedule?.time ?? "",
         recurrence: suggestion.recurrence,
         suggestion_justification: suggestion.suggestion_justification,
         timezone: suggestion.timezone ?? null,
@@ -347,9 +351,7 @@ export function AssistantChat() {
                     variant="callout"
                     className={styles.suggestionCard}
                     eyebrow="Recordatorio sugerido"
-                    heading={normalizeReminderAction(
-                      item.reminderSuggestion.action,
-                    )}
+                    heading={item.reminderSuggestion.action}
                     description={
                       <>
                         {item.reminderSuggestion.plant_name} &middot;{" "}
@@ -362,32 +364,50 @@ export function AssistantChat() {
                       </>
                     }
                     actions={
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="primary"
-                        onClick={() =>
-                          acceptReminderSuggestion(
-                            item.reminderSuggestion!,
-                            index,
-                          )
-                        }
-                        disabled={
-                          acceptingSuggestion !== null ||
-                          item.suggestionStatus === "accepted"
-                        }
-                      >
-                        {item.suggestionStatus === "accepted"
-                          ? "Recordatorio creado"
-                          : acceptingSuggestion === index
-                            ? "Creando..."
-                            : "Aceptar sugerencia"}
-                      </Button>
+                      item.requiresConfirmation === false ? undefined : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          onClick={() =>
+                            acceptReminderSuggestion(
+                              item.reminderSuggestion!,
+                              index,
+                            )
+                          }
+                          disabled={
+                            acceptingSuggestion !== null ||
+                            item.suggestionStatus === "accepted"
+                          }
+                        >
+                          {item.suggestionStatus === "accepted"
+                            ? "Recordatorio creado"
+                            : acceptingSuggestion === index
+                              ? "Creando..."
+                              : "Aceptar sugerencia"}
+                        </Button>
+                      )
                     }
                   >
                     <p className={styles.suggestionJustification}>
                       {item.reminderSuggestion.suggestion_justification}
                     </p>
+                    {typeof item.reminderSuggestion.confidence ===
+                    "number" ? (
+                      <p className={styles.suggestionEvidence}>
+                        Confianza:{" "}
+                        {Math.round(item.reminderSuggestion.confidence * 100)}%
+                        {item.reminderSuggestion.evidence?.taxonomy
+                          ? ` · ${String(item.reminderSuggestion.evidence.taxonomy)}`
+                          : ""}
+                      </p>
+                    ) : null}
+                    {item.reminderSuggestion.limitations?.length ? (
+                      <p className={styles.suggestionEvidence}>
+                        Limitaciones:{" "}
+                        {item.reminderSuggestion.limitations.join(" · ")}
+                      </p>
+                    ) : null}
                     {item.suggestionStatus === "error" ? (
                       <p className={styles.suggestionError}>
                         No pudimos crear este recordatorio.

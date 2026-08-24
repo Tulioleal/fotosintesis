@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from app.assistant.graph.fallback_drafts import _missing_taxonomy_draft, _simple_fallback_draft
 from app.assistant.graph.helpers import logger
 from app.assistant.graph.plant_resolution import (
@@ -9,7 +11,6 @@ from app.assistant.graph.plant_resolution import (
     _sources_from_retrieval,
 )
 from app.assistant.graph.types import AssistantState
-from app.assistant.graph_shared import _extract_due_at
 from app.assistant.light_context import (
     is_light_measurement_eligible,
     light_context_from_measurement,
@@ -190,16 +191,17 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
     missing: list[str] = []
     if not selected or selected.get("id") is None:
         missing.append("plant")
-    due_at = (
-        _extract_due_at(state["message"], state.get("user_timezone"))
-        or state.get("reminder_due_at")
-    )
+    due_at = _reminder_due_at(state)
     if due_at is None:
         missing.append("date or time")
     action = state.get("reminder_action")
     if not action:
         missing.append("action")
-    recurrence = state.get("reminder_recurrence") or "none"
+    recurrence = state.get("reminder_recurrence")
+    if not recurrence:
+        # A missing recurrence is clarified, never defaulted: creating a
+        # non-recurring reminder implicitly contradicts user intent.
+        missing.append("recurrence")
     if missing:
         rendered = await owner._generate_fallback_response(
             state,
@@ -208,7 +210,7 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
                 intent="reminder_missing_data",
                 allowed_facts=["Missing fields: " + ", ".join(missing)],
                 required_points=["Ask for the missing reminder fields before creating anything."],
-                prohibited_points=["Do not claim a reminder was created."],
+                prohibited_points=["Do not claim a reminder was created.", "Do not default a missing recurrence to non-recurring."],
             ),
         )
         return {"requires_confirmation": True, **rendered}
@@ -216,28 +218,33 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
     if state.get("light_context_relevant") and state.get("light_context"):
         light_facts = "; ".join(light_reading_facts(state.get("light_context")))
         justification += f" Light context: {light_facts}."
+    suggestion_payload = {
+        "garden_plant_id": selected["id"],
+        "plant_name": _display_plant(selected),
+        "action": action,
+        "due_at": due_at,
+        "recurrence": recurrence,
+        "suggestion_justification": justification,
+        "timezone": state.get("user_timezone"),
+        **_local_schedule_parts(due_at, state.get("user_timezone")),
+        "confidence": _classification_confidence(state),
+        "limitations": [],
+        "evidence": _reminder_evidence(state, selected),
+    }
     if state.get("reminder_suggestion_requested"):
         rendered = await owner._generate_fallback_response(
             state,
             _simple_fallback_draft(
                 state,
                 intent="reminder_suggestion_ready",
-                allowed_facts=[f"Reminder suggestion for {action} on {_display_plant(selected)} at {due_at}."],
+                allowed_facts=[f"Reminder suggestion for {action} on {_display_plant(selected)} at {due_at} with {recurrence} recurrence."],
                 required_points=["Tell the user a reminder suggestion is ready and needs confirmation before creation."],
                 prohibited_points=["Do not claim the reminder was created."],
             ),
         )
         return {
             "requires_confirmation": True,
-            "reminder_suggestion": {
-                "garden_plant_id": selected["id"],
-                "plant_name": _display_plant(selected),
-                "action": action,
-                "due_at": due_at,
-                "recurrence": recurrence,
-                "suggestion_justification": justification,
-                "timezone": state.get("user_timezone"),
-            },
+            "reminder_suggestion": suggestion_payload,
             **rendered,
         }
     result = await owner.tools.reminder_create(
@@ -261,6 +268,19 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
             ),
         )
         return {"tool_failures": state.get("tool_failures", []) + [result.error or "reminder_create failed"], **rendered}
+    duplicate = isinstance(result.data, dict) and result.data.get("duplicate")
+    if duplicate:
+        rendered = await owner._generate_fallback_response(
+            state,
+            _simple_fallback_draft(
+                state,
+                intent="reminder_duplicate",
+                allowed_facts=[f"An equivalent reminder already exists for {action} on {_display_plant(selected)} at {due_at}."],
+                required_points=["Tell the user an equivalent reminder already exists and nothing new was created."],
+                prohibited_points=["Do not claim a new reminder was created."],
+            ),
+        )
+        return {"requires_confirmation": False, **rendered}
     return await owner._generate_fallback_response(
         state,
         _simple_fallback_draft(
@@ -271,6 +291,85 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
             prohibited_points=["Do not invent additional details."],
         ),
     )
+
+
+def _reminder_due_at(state: AssistantState) -> datetime | None:
+    """Schema-declared classifier value only; free-text extraction is never a
+    creation source. A naive local value resolves in the stored user timezone,
+    falling back to UTC only when no zone is configured."""
+    raw = state.get("reminder_due_at")
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+    if parsed.tzinfo is not None:
+        return parsed
+    user_zone = state.get("user_timezone")
+    if user_zone:
+        try:
+            from app.scheduling.timezone import resolve_timezone
+
+            zone = resolve_timezone(user_zone)
+            if zone is not None:
+                return parsed.replace(tzinfo=zone)
+        except Exception:
+            pass
+    from datetime import timezone as _utc
+
+    return parsed.replace(tzinfo=_utc.utc)
+
+
+def _local_schedule_parts(
+    due_at: datetime, user_timezone: str | None
+) -> dict[str, str | None]:
+    """Explicit local date/time in the effective zone so clients never derive
+    schedule fields by slicing the due_at instant."""
+    if user_timezone:
+        try:
+            from app.scheduling.timezone import resolve_timezone
+
+            zone = resolve_timezone(user_timezone)
+            if zone is not None:
+                local_due = due_at.astimezone(zone)
+                return {
+                    "date": local_due.date().isoformat(),
+                    "time": local_due.time().strftime("%H:%M"),
+                }
+        except Exception:
+            pass
+    local_due = due_at.astimezone() if due_at.tzinfo else due_at
+    return {
+        "date": local_due.date().isoformat(),
+        "time": local_due.time().strftime("%H:%M"),
+    }
+
+
+def _classification_confidence(state: AssistantState) -> float | None:
+    classification = state.get("care_classification")
+    confidence = getattr(classification, "confidence", None)
+    try:
+        return float(confidence) if confidence is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _reminder_evidence(state: AssistantState, selected: dict | None) -> dict:
+    evidence: dict = {
+        "taxonomy": state.get("plant_binomial_name") or state.get("plant_scientific_name"),
+        "location": (selected or {}).get("location"),
+        "notes": (selected or {}).get("notes"),
+        "profile_sections": [],
+        "active_reminders": 0,
+        "light_context": None,
+    }
+    if state.get("light_context_relevant") and state.get("light_context"):
+        evidence["light_context"] = "; ".join(light_reading_facts(state.get("light_context")))
+    return evidence
 
 
 async def clarify(owner, state: AssistantState) -> dict:

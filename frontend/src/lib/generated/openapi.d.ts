@@ -674,21 +674,33 @@ export interface components {
         AssistantReminderSuggestion: {
             /** Action */
             action: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Date */
+            date?: string | null;
             /**
              * Due At
              * Format: date-time
              */
             due_at: string;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Garden Plant Id
              * Format: uuid
              */
             garden_plant_id: string;
+            /** Limitations */
+            limitations?: string[];
             /** Plant Name */
             plant_name: string;
             recurrence: components["schemas"]["ReminderRecurrence"];
             /** Suggestion Justification */
             suggestion_justification: string;
+            /** Time */
+            time?: string | null;
             /** Timezone */
             timezone?: string | null;
         };

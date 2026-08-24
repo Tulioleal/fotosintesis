@@ -135,6 +135,13 @@ class CareClassification(BaseModel):
     needs_retrieval: bool = False
     light_context_relevant: bool = False
     source: Literal["llm", "deterministic"] = "llm"
+    # Schema-declared reminder scheduling fields: populated only for
+    # reminder_request intents, null/false otherwise. Creation logic reads
+    # these validated values; undeclared raw output never drives actions.
+    reminder_action: str | None = None
+    reminder_recurrence: str | None = None
+    reminder_due_at: str | None = None
+    reminder_suggestion_requested: bool = False
 
     @field_validator("language", "answer_language")
     @classmethod

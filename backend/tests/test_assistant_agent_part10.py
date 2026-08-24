@@ -102,6 +102,7 @@ async def test_reminder_success_generated_through_model() -> None:
             "needs_retrieval": False,
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": False,
         }
     )
