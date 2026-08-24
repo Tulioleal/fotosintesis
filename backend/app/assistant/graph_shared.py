@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.observability.logging import get_logger
 
@@ -121,12 +122,21 @@ class AnswerabilityResult:
         }
 
 
-def _extract_due_at(message: str) -> datetime | None:
+def _extract_due_at(message: str, user_timezone: str | None = None) -> datetime | None:
     match = re.search(r"(20\d{2}-\d{2}-\d{2})[ T](\d{2}:\d{2})", message)
     if not match:
         return None
     value = f"{match.group(1)}T{match.group(2)}"
-    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    naive = datetime.fromisoformat(value)
+    if user_timezone:
+        try:
+            return naive.replace(tzinfo=ZoneInfo(user_timezone))
+        except Exception:
+            logger.warning(
+                "assistant_due_at_invalid_timezone",
+                extra={"ctx_user_timezone": user_timezone},
+            )
+    return naive.replace(tzinfo=timezone.utc)
 
 
 def _shorten(text: str, limit: int) -> str:

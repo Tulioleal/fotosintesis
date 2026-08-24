@@ -190,7 +190,10 @@ async def _handle_reminder(owner, state: AssistantState) -> dict:
     missing: list[str] = []
     if not selected or selected.get("id") is None:
         missing.append("plant")
-    due_at = _extract_due_at(state["message"]) or state.get("reminder_due_at")
+    due_at = (
+        _extract_due_at(state["message"], state.get("user_timezone"))
+        or state.get("reminder_due_at")
+    )
     if due_at is None:
         missing.append("date or time")
     action = state.get("reminder_action")

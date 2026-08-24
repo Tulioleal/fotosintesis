@@ -79,7 +79,7 @@ describe("AssistantChat", () => {
       garden_plant_id: "garden-1",
       action: "Riego",
       date: "2026-06-01",
-      time: "10:30",
+      time: "07:30",
       recurrence: "weekly",
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
       timezone: "America/Argentina/Buenos_Aires",

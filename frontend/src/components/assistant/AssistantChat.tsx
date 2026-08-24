@@ -165,11 +165,12 @@ export function AssistantChat() {
     setAcceptingSuggestion(messageIndex);
     setError(null);
     try {
+      const schedule = localScheduleParts(suggestion.due_at, suggestion.timezone);
       await apiClient.createReminder({
         garden_plant_id: suggestion.garden_plant_id,
         action: normalizeReminderAction(suggestion.action),
-        date: suggestion.due_at.slice(0, 10),
-        time: suggestion.due_at.slice(11, 16),
+        date: schedule.date,
+        time: schedule.time,
         recurrence: suggestion.recurrence,
         suggestion_justification: suggestion.suggestion_justification,
         timezone: suggestion.timezone ?? null,
@@ -504,4 +505,25 @@ function formatDateTime(value: string, timezone?: string | null) {
     timeStyle: "short",
     timeZone: timezone || undefined,
   }).format(new Date(value));
+}
+
+function localScheduleParts(
+  value: string,
+  timezone?: string | null,
+): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone || undefined,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${get("hour")}:${get("minute")}`,
+  };
 }
