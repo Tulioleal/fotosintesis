@@ -145,6 +145,16 @@ async def test_protected_home_summary_requires_and_accepts_session(
         summary = await client.get("/home/summary", headers={"Authorization": f"Bearer {token}"})
         assert summary.status_code == 200
         assert summary.json()["empty_state"] is True
+        assert [
+            item["label"] for item in summary.json()["access"]
+        ] == [
+            "Identify plant",
+            "Search plants",
+            "Light meter",
+            "Reminders",
+            "My Garden",
+            "Assistant",
+        ]
 
         session_validation = await client.get(
             "/auth/session", headers={"Authorization": f"Bearer {token}"}

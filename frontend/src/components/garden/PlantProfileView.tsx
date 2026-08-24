@@ -16,6 +16,9 @@ import { apiClient } from "@/lib/api/client";
 import type { CandidateEnrichmentStatus } from "@/lib/api/client";
 import { buildAssistantHref } from "@/lib/assistant";
 import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
+import { activityItemsRelatedTo, claimRefreshReconciliation, outcomeVersion, terminalStatuses as activityTerminalStatuses } from "@/lib/enrichment-activity";
+import { useEnrichmentActivity } from "../enrichment/EnrichmentActivityProvider";
+import { EnrichmentActivitySummary } from "../enrichment/EnrichmentActivitySummary";
 import { ChatTextIcon, PlusCircleIcon, SunIcon } from "@phosphor-icons/react";
 import styles from "./PlantProfileView.module.scss";
 
@@ -78,8 +81,13 @@ const activeStatuses = new Set(["pending", "processing"]);
 export const ENRICHMENT_POLL_INTERVAL_MS = 3_000;
 export const ENRICHMENT_STALL_AFTER_MS = 300_000;
 
-export const plantProfileQueryKey = (candidateId: string, scientificName: string, language: string) =>
-  ["plant-profile", candidateId, scientificName, language] as const;
+export const plantProfileQueryKey = (
+  userId: string,
+  candidateId: string,
+  scientificName: string,
+  language: string,
+) =>
+  ["plant-profile", userId, candidateId, scientificName, language] as const;
 
 export { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 
@@ -107,6 +115,7 @@ export function PlantProfileView({
   confirmedCandidateId,
 }: Readonly<{ scientificName: string; confirmedCandidateId?: string }>) {
   const queryClient = useQueryClient();
+  const { userId, query: activity } = useEnrichmentActivity();
   const [language] = useState(() => typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es");
   const [message, setMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -119,9 +128,14 @@ export function PlantProfileView({
   // candidate or job change starts a fresh bounded window.
   const observationWindow = useRef<{ key: string; startedAt: number } | null>(null);
   const profileQuery = useQuery({
-    queryKey: plantProfileQueryKey(confirmedCandidateId ?? "", scientificName, language),
+    queryKey: plantProfileQueryKey(
+      userId,
+      confirmedCandidateId ?? "",
+      scientificName,
+      language,
+    ),
     queryFn: () => apiClient.getPlantProfile(scientificName, confirmedCandidateId!, language),
-    enabled: Boolean(confirmedCandidateId),
+    enabled: Boolean(confirmedCandidateId) && userId !== "anonymous",
   });
   const terminalObservedFor = (
     enrichment: CandidateEnrichmentStatus | null | undefined,
@@ -131,9 +145,14 @@ export function PlantProfileView({
     enrichment !== null &&
     terminalObservation.current === `${confirmedCandidateId}:${enrichment.job.id}`;
   const enrichmentQuery = useQuery({
-    queryKey: candidateEnrichmentQueryKey(confirmedCandidateId ?? "", scientificName, language),
+    queryKey: candidateEnrichmentQueryKey(
+      userId,
+      confirmedCandidateId ?? "",
+      scientificName,
+      language,
+    ),
     queryFn: () => apiClient.getCandidateEnrichment(confirmedCandidateId!),
-    enabled: Boolean(confirmedCandidateId),
+    enabled: Boolean(confirmedCandidateId) && userId !== "anonymous",
     refetchInterval: (query) =>
       enrichmentRefetchInterval(
         query,
@@ -204,10 +223,70 @@ export function PlantProfileView({
     if (invalidatedTerminal.current === observation) return;
     invalidatedTerminal.current = observation;
     void queryClient.invalidateQueries({
-      queryKey: plantProfileQueryKey(confirmedCandidateId, scientificName, language),
+      queryKey: plantProfileQueryKey(
+        userId,
+        confirmedCandidateId,
+        scientificName,
+        language,
+      ),
       exact: true,
     });
-  }, [confirmedCandidateId, enrichmentQuery.data, language, queryClient, scientificName]);
+  }, [confirmedCandidateId, enrichmentQuery.data, language, queryClient, scientificName, userId]);
+
+  // Shared refresh awareness: a terminal profile-refresh phase invalidates
+  // the exact profile query once per outcome version across the whole
+  // session (remount-safe via the shared claim helper). Evidence-phase
+  // terminal states never claim that the profile sections were updated.
+  useEffect(() => {
+    const profile = profileQuery.data;
+    if (!profile || !confirmedCandidateId) return;
+
+    const relatedActivity = activityItemsRelatedTo(
+      activity.data?.items ?? [],
+      {
+        candidateIds: [confirmedCandidateId],
+        speciesKeys: profile.canonical_species_key
+          ? [profile.canonical_species_key]
+          : [],
+        scientificNames: [profile.scientific_name, scientificName],
+      },
+    );
+    const terminalRefreshes = relatedActivity.filter(
+      (item) =>
+        item.phase === "profile_refresh" &&
+        activityTerminalStatuses.has(item.status),
+    );
+
+    for (const item of terminalRefreshes) {
+      const version = outcomeVersion(item);
+      const profileKey = plantProfileQueryKey(
+        userId,
+        confirmedCandidateId,
+        scientificName,
+        language,
+      );
+
+      if (
+        !version ||
+        !claimRefreshReconciliation(userId, version, profileKey)
+      ) {
+        continue;
+      }
+
+      void queryClient.invalidateQueries({
+        queryKey: profileKey,
+        exact: true,
+      });
+    }
+  }, [
+    activity.data,
+    confirmedCandidateId,
+    language,
+    profileQuery.data,
+    queryClient,
+    scientificName,
+    userId,
+  ]);
 
   async function savePlant(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -272,6 +351,16 @@ export function PlantProfileView({
           }}
         />
       ) : null}
+      <EnrichmentActivitySummary
+        variant="inline"
+        relatedTo={{
+          candidateIds: confirmedCandidateId ? [confirmedCandidateId] : [],
+          speciesKeys: profile.canonical_species_key
+            ? [profile.canonical_species_key]
+            : [],
+          scientificNames: [profile.scientific_name],
+        }}
+      />
       {profileQuery.isError ? (
         <Notice tone="warning" role="note" heading="No pudimos actualizar el perfil">
           Conservamos la ultima instantanea disponible. {profileQuery.error.message}

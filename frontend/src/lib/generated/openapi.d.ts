@@ -305,6 +305,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/enrichment-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Enrichment Activity */
+        get: operations["get_enrichment_activity_jobs_enrichment_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -745,6 +762,92 @@ export interface components {
             /** Session Token */
             session_token: string;
             user: components["schemas"]["PublicAuthUser"];
+        };
+        /** EnrichmentActivityItem */
+        EnrichmentActivityItem: {
+            /**
+             * Candidate Id
+             * Format: uuid
+             */
+            candidate_id: string;
+            /** Common Name */
+            common_name?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            job_type: components["schemas"]["JobType"];
+            last_error?: components["schemas"]["ReadJobError"] | null;
+            phase: components["schemas"]["EnrichmentActivityPhase"];
+            result?: components["schemas"]["EnrichmentActivityResult"] | null;
+            /** Scientific Name */
+            scientific_name: string;
+            /** Species Key */
+            species_key?: string | null;
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * EnrichmentActivityPhase
+         * @enum {string}
+         */
+        EnrichmentActivityPhase: "evidence" | "profile_refresh";
+        /** EnrichmentActivityResponse */
+        EnrichmentActivityResponse: {
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items?: components["schemas"]["EnrichmentActivityItem"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * EnrichmentActivityResult
+         * @description Bounded, metadata-only outcome for the cross-page activity view.
+         *
+         *     Counts and limitation categories only: never raw aspects, source bodies,
+         *     claims, quotes, or provider diagnostics.
+         */
+        EnrichmentActivityResult: {
+            /**
+             * Covered Count
+             * @default 0
+             */
+            covered_count: number;
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /**
+             * Missing Count
+             * @default 0
+             */
+            missing_count: number;
+            /** Outcome */
+            outcome?: ("complete" | "partial" | "noop") | null;
+            /**
+             * Regenerated Section Count
+             * @default 0
+             */
+            regenerated_section_count: number;
+            /**
+             * Stale Section Count
+             * @default 0
+             */
+            stale_section_count: number;
         };
         /** EnrichmentJobResult */
         EnrichmentJobResult: {
@@ -2375,6 +2478,47 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    get_enrichment_activity_jobs_enrichment_activity_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrichmentActivityResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

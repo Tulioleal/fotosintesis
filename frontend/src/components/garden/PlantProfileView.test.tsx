@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithQueryClient } from "@/test/renderWithQueryClient";
+import { renderWithActivityProvider as renderWithQueryClient } from "@/test/renderWithQueryClient";
 import {
   ENRICHMENT_POLL_INTERVAL_MS,
   ENRICHMENT_STALL_AFTER_MS,
@@ -9,6 +9,10 @@ import {
   enrichmentRefetchInterval,
   plantProfileQueryKey,
 } from "./PlantProfileView";
+import {
+  activityQueryKey,
+  resetRefreshReconciliationClaimsForTests,
+} from "@/lib/enrichment-activity";
 
 const profile = {
   aliases: [{ country: null, language: "es", name: "Helecho", region: null }],
@@ -78,6 +82,23 @@ const mocks = vi.hoisted(() => ({
   getCandidateEnrichment: vi.fn(),
   getPlantProfile: vi.fn(),
   saveGardenPlant: vi.fn(),
+  getEnrichmentActivity: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/garden",
+}));
+
+import * as sessionState from "@/test/mock-session";
+import {
+  TEST_USER_ID,
+  resetMockSession,
+  setMockSessionUser,
+} from "@/test/mock-session";
+
+vi.mock("next-auth/react", () => ({
+  signOut: vi.fn(),
+  useSession: () => sessionState.mockSessionState,
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -85,14 +106,40 @@ vi.mock("@/lib/api/client", () => ({
     getCandidateEnrichment: mocks.getCandidateEnrichment,
     getPlantProfile: mocks.getPlantProfile,
     saveGardenPlant: mocks.saveGardenPlant,
+    getEnrichmentActivity: mocks.getEnrichmentActivity,
   },
 }));
 
+const refreshItem = (
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  id: "refresh-1",
+  job_type: "refresh_profile",
+  phase: "profile_refresh",
+  status: "processing",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: "2026-08-01T00:05:00Z",
+  completed_at: null,
+  species_key: null,
+  scientific_name: "Nephrolepis exaltata",
+  common_name: null,
+  candidate_id: "candidate-1",
+  result: null,
+  last_error: null,
+  ...overrides,
+});
+
 describe("PlantProfileView", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     mocks.getCandidateEnrichment.mockReset().mockResolvedValue(enrichment("pending"));
     mocks.getPlantProfile.mockReset().mockResolvedValue(profile);
     mocks.saveGardenPlant.mockReset().mockResolvedValue(savedPlant);
+    mocks.getEnrichmentActivity.mockReset().mockResolvedValue({
+      items: [],
+      has_more: false,
+      next_cursor: null,
+    });
   });
 
   afterEach(() => {
@@ -107,8 +154,8 @@ describe("PlantProfileView", () => {
 
     const queries = queryClient.getQueryCache().getAll();
     expect(queries.map((query) => query.queryKey)).toEqual(expect.arrayContaining([
-      plantProfileQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
-      candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+      plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
+      candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
     ]));
     expect(enrichmentRefetchInterval({ state: { data: enrichment("pending") } } as never)).toBe(3_000);
     expect(enrichmentRefetchInterval({ state: { data: enrichment("processing") } } as never)).toBe(3_000);
@@ -120,6 +167,20 @@ describe("PlantProfileView", () => {
       { state: { data: enrichment("complete"), status: "error" } },
       enrichment("pending"),
     )).toBe(false);
+  });
+
+  it("never fires an enrichment or profile request while the session is anonymous", async () => {
+    setMockSessionUser(undefined);
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    await waitFor(() => {
+      expect(mocks.getCandidateEnrichment).not.toHaveBeenCalled();
+    });
+    expect(mocks.getPlantProfile).not.toHaveBeenCalled();
+    resetMockSession();
   });
 
   it("recovers status polling from the profile fallback, retains the snapshot after terminal refetch failure, and stops", async () => {
@@ -188,18 +249,18 @@ describe("PlantProfileView", () => {
     await screen.findByText(/La búsqueda está en espera/);
 
     await queryClient.refetchQueries({
-      queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+      queryKey: candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
 
     await screen.findByText(/La evidencia está lista/);
     await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(invalidate).toHaveBeenCalledWith({
-      queryKey: plantProfileQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+      queryKey: plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
     expect(invalidate).not.toHaveBeenCalledWith({
-      queryKey: candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+      queryKey: candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
       exact: true,
     });
     expect(screen.getByText("La evidencia encontrada puede tardar unos instantes más en reflejarse en las secciones del perfil.")).toBeInTheDocument();
@@ -531,7 +592,7 @@ describe("PlantProfileView", () => {
 
     act(() => {
       queryClient.setQueryData(
-        candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+        candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
         {
           ...enrichment("processing"),
           job: {
@@ -571,7 +632,7 @@ describe("PlantProfileView", () => {
     // A brand-new active job for the same candidate resumes polling.
     act(() => {
       queryClient.setQueryData(
-        candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+        candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
         {
           ...enrichment("processing"),
           job: {
@@ -609,7 +670,7 @@ describe("PlantProfileView", () => {
     for (const stamp of ["2026-01-01T00:00:01Z", "2026-01-01T00:00:02Z", "2026-01-01T00:00:03Z"]) {
       act(() => {
         queryClient.setQueryData(
-          candidateEnrichmentQueryKey("candidate-1", "Nephrolepis exaltata", "en"),
+          candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
           {
             ...enrichment("processing"),
             job: { ...jobBase, id: "job-1", status: "processing", updated_at: stamp },
@@ -703,5 +764,437 @@ describe("PlantProfileView", () => {
     expect(screen.getByRole("link", { name: "Crear recordatorio" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Agregar a Mi Jardin" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Guardar planta confirmada" })).toBeInTheDocument();
+  });
+});
+
+describe("PlantProfileView shared refresh awareness", () => {
+  beforeEach(() => {
+    resetRefreshReconciliationClaimsForTests();
+    window.sessionStorage.clear();
+    mocks.getCandidateEnrichment.mockReset().mockResolvedValue(enrichment("complete"));
+    mocks.getPlantProfile.mockReset().mockResolvedValue(profile);
+    mocks.saveGardenPlant.mockReset().mockResolvedValue(savedPlant);
+    mocks.getEnrichmentActivity
+      .mockReset()
+      .mockResolvedValue({ items: [], has_more: false, next_cursor: null });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows active refresh copy from the shared activity context", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [refreshItem()],
+      has_more: false,
+      next_cursor: null,
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(
+      await screen.findByText(/Actualizando las secciones del perfil/),
+    ).toBeInTheDocument();
+  });
+
+  it("distinguishes evidence completion from an active refresh", async () => {
+    mocks.getCandidateEnrichment.mockResolvedValue(enrichment("complete"));
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          job_type: "enrich_confirmed_plant",
+          phase: "evidence",
+          status: "complete",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:01:00Z",
+          completed_at: "2026-08-01T00:01:00Z",
+          species_key: null,
+          scientific_name: "Nephrolepis exaltata",
+          common_name: null,
+          candidate_id: "candidate-1",
+          result: {
+            outcome: "complete",
+            covered_count: 2,
+            missing_count: 0,
+            regenerated_section_count: 0,
+            stale_section_count: 0,
+            limitations: [],
+          },
+          last_error: null,
+        },
+        refreshItem(),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText(/La evidencia está lista/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Actualizando las secciones del perfil/),
+    ).toBeInTheDocument();
+  });
+
+  it("invalidates the exact profile query once per terminal refresh version", async () => {
+    const { queryClient } = renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await screen.findByText("Riego moderado");
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await act(async () => {
+      await queryClient.setQueryData(
+        activityQueryKey(TEST_USER_ID),
+        {
+          items: [
+            refreshItem({
+              status: "complete",
+              updated_at: "2026-08-01T00:06:00Z",
+              result: {
+                outcome: "complete",
+                covered_count: 0,
+                missing_count: 0,
+                regenerated_section_count: 1,
+                stale_section_count: 0,
+                limitations: [],
+              },
+            }),
+          ],
+          has_more: false,
+          next_cursor: null,
+        },
+      );
+    });
+    await waitFor(() => {
+      expect(
+        invalidate.mock.calls.filter(
+          (call) =>
+            JSON.stringify(call[0]?.queryKey) ===
+            JSON.stringify(plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en")),
+        ),
+      ).toHaveLength(1);
+    });
+
+    const profileInvalidations = invalidate.mock.calls.filter(
+      (call) =>
+        JSON.stringify(call[0]?.queryKey) ===
+        JSON.stringify(plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en")),
+    );
+    expect(profileInvalidations).toHaveLength(1);
+    expect(profileInvalidations[0][0]).toEqual({
+      queryKey: plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
+      exact: true,
+    });
+
+    // Repeating identical terminal data does not invalidate again.
+    await waitFor(() => {
+      expect(
+        invalidate.mock.calls.filter(
+          (call) =>
+            JSON.stringify(call[0]?.queryKey) ===
+            JSON.stringify(plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en")),
+        ),
+      ).toHaveLength(1);
+    });
+    expect(
+      invalidate.mock.calls.filter(
+        (call) =>
+          JSON.stringify(call[0]?.queryKey) ===
+          JSON.stringify(plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en")),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("never serves another owner's seeded profile payload", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    // Owner A's payload sits under A's namespace only; the observer for the
+    // current test user must issue its own request instead of reading it.
+    queryClient.setQueryData(
+      plantProfileQueryKey(
+        "user-other",
+        "candidate-1",
+        "Nephrolepis exaltata",
+        "en",
+      ),
+      profile,
+    );
+    const callsBefore = mocks.getPlantProfile.mock.calls.length;
+
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+      queryClient,
+    );
+
+    expect(await screen.findByText("Riego moderado")).toBeInTheDocument();
+    expect(
+      mocks.getPlantProfile.mock.calls.length,
+    ).toBeGreaterThan(callsBefore);
+  });
+
+  it("keeps the profile usable for a partial refresh outcome", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        refreshItem({
+          status: "partial",
+          result: {
+            outcome: "partial",
+            covered_count: 0,
+            missing_count: 0,
+            regenerated_section_count: 1,
+            stale_section_count: 1,
+            limitations: ["missing_required_aspects"],
+          },
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText("Riego moderado")).toBeInTheDocument();
+    expect(
+      screen.getByText(/El perfil se actualizó parcialmente/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Guardar/ })).toBeEnabled();
+  });
+
+  it("keeps content and shows sanitized guidance when refresh fails", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        refreshItem({
+          status: "failed",
+          last_error: { category: "provider_transient", retryable: true },
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    expect(await screen.findByText("Riego moderado")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No pudimos actualizar el perfil/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/El perfil sigue disponible/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/provider_transient/)).not.toBeInTheDocument();
+  });
+
+  it("hides unrelated refresh activity", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        refreshItem({
+          id: "refresh-other",
+          scientific_name: "Ficus elastica",
+          candidate_id: "candidate-999",
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+
+    await screen.findByText("Riego moderado");
+    expect(
+      screen.queryByText(/Actualizando las secciones del perfil/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("creates no additional activity observer beyond the app-shell one", async () => {
+    renderWithQueryClient(
+      <PlantProfileView scientificName="Nephrolepis exaltata" confirmedCandidateId="candidate-1" />,
+    );
+    await screen.findByText("Riego moderado");
+
+    expect(mocks.getEnrichmentActivity).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PlantProfileView refresh reconciliation across remounts", () => {
+  const terminalRefreshPayload = {
+    items: [
+      refreshItem({
+        status: "complete",
+        updated_at: "2026-08-01T00:06:00Z",
+        result: {
+          outcome: "complete",
+          covered_count: 0,
+          missing_count: 0,
+          regenerated_section_count: 1,
+          stale_section_count: 0,
+          limitations: [],
+        },
+      }),
+    ],
+    has_more: false,
+    next_cursor: null,
+  };
+
+  beforeEach(() => {
+    resetRefreshReconciliationClaimsForTests();
+    window.sessionStorage.clear();
+    mocks.getCandidateEnrichment
+      .mockReset()
+      .mockResolvedValue(enrichment("processing"));
+    mocks.getPlantProfile.mockReset().mockResolvedValue(profile);
+    mocks.saveGardenPlant.mockReset().mockResolvedValue(savedPlant);
+    mocks.getEnrichmentActivity.mockReset().mockResolvedValue({
+      items: [],
+      has_more: false,
+      next_cursor: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function renderProductionTree() {
+    // Import lazily so the module-level AppShell import (which pulls the
+    // private layout) does not affect the other suites.
+    const { AppShell } = await import("../layout/AppShell");
+    return renderWithQueryClient(
+      <AppShell>
+        <PlantProfileView
+          scientificName="Nephrolepis exaltata"
+          confirmedCandidateId="candidate-1"
+        />
+      </AppShell>,
+    );
+  }
+
+  function profileInvalidationCount(
+    invalidate: { mock: { calls: Array<Array<unknown>> } },
+  ): number {
+    return invalidate.mock.calls.filter((call) =>
+      JSON.stringify((call[0] as { queryKey?: unknown } | undefined)?.queryKey) ===
+      JSON.stringify(
+        plantProfileQueryKey(TEST_USER_ID, "candidate-1", "Nephrolepis exaltata", "en"),
+      ),
+    ).length;
+  }
+
+  it("invalidates exactly once per version; remount and rerender never repeat", async () => {
+    const { queryClient, unmount } = await renderProductionTree();
+    await screen.findByText("Riego moderado");
+    // Let the provider's initial activity fetch settle so a late empty
+    // response cannot overwrite the seeded terminal payload.
+    await waitFor(() => {
+      expect(queryClient.getQueryData(activityQueryKey(TEST_USER_ID))).toBeDefined();
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await act(async () => {
+      queryClient.setQueryData(activityQueryKey(TEST_USER_ID), terminalRefreshPayload);
+    });
+    await waitFor(() => {
+      expect(profileInvalidationCount(invalidate)).toBe(1);
+    });
+
+    // Rerender with identical data.
+    await act(async () => {
+      queryClient.setQueryData(activityQueryKey(TEST_USER_ID), terminalRefreshPayload);
+    });
+    expect(profileInvalidationCount(invalidate)).toBe(1);
+
+    // Unmount/remount within the same session: still claimed.
+    unmount();
+    const second = await renderProductionTree();
+    await screen.findByText("Riego moderado");
+    await waitFor(() => {
+      expect(
+        second.queryClient.getQueryData(activityQueryKey(TEST_USER_ID)),
+      ).toBeDefined();
+    });
+    const invalidate2 = vi.spyOn(second.queryClient, "invalidateQueries");
+    await act(async () => {
+      second.queryClient.setQueryData(
+        activityQueryKey(TEST_USER_ID),
+        terminalRefreshPayload,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Riego moderado")).toBeInTheDocument();
+    });
+    expect(profileInvalidationCount(invalidate2)).toBe(0);
+
+    // A new outcome version invalidates exactly once.
+    const newer = {
+      items: [
+        refreshItem({
+          status: "complete",
+          updated_at: "2026-08-01T00:09:00Z",
+        }),
+      ],
+      has_more: false,
+      next_cursor: null,
+    };
+    await act(async () => {
+      second.queryClient.setQueryData(activityQueryKey(TEST_USER_ID), newer);
+    });
+    await waitFor(() => {
+      expect(profileInvalidationCount(invalidate2)).toBe(1);
+    });
+  });
+
+  it("evidence-only terminal activity never enters refresh reconciliation", async () => {
+    const { queryClient } = await renderProductionTree();
+    await screen.findByText("Riego moderado");
+    await waitFor(() => {
+      expect(queryClient.getQueryData(activityQueryKey(TEST_USER_ID))).toBeDefined();
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await act(async () => {
+      queryClient.setQueryData(activityQueryKey(TEST_USER_ID), {
+        items: [
+          {
+            id: "99999999-9999-4999-8999-999999999999",
+            job_type: "enrich_confirmed_plant",
+            phase: "evidence",
+            status: "complete",
+            created_at: "2026-08-01T00:00:00Z",
+            updated_at: "2026-08-01T00:07:00Z",
+            completed_at: "2026-08-01T00:07:00Z",
+            species_key: null,
+            scientific_name: "Nephrolepis exaltata",
+            common_name: null,
+            candidate_id: "candidate-1",
+            result: {
+              outcome: "complete",
+              covered_count: 1,
+              missing_count: 0,
+              regenerated_section_count: 0,
+              stale_section_count: 0,
+              limitations: [],
+            },
+            last_error: null,
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+    });
+    // The announcer and the inline summary both surface evidence copy.
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(/La evidencia está lista/).length,
+      ).toBeGreaterThan(0);
+    });
+    expect(profileInvalidationCount(invalidate)).toBe(0);
   });
 });

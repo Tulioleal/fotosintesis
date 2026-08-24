@@ -16,6 +16,8 @@ from sqlalchemy import func, select, text, update
 from app.auth.tables import (
     application_jobs,
     enrichment_validation_evidence,
+    enrichment_validation_runs,
+    profile_refresh_enrichment_jobs,
     knowledge_chunks,
     knowledge_document_aspect_supports,
     knowledge_documents,
@@ -1186,3 +1188,119 @@ async def test_final_redirect_url_and_provenance_are_persisted(
         "embeddings": 1,
         "supports": 1,
     }
+
+
+async def _phase_a_counts(pg_session_factory) -> dict[str, int]:
+    from app.auth.tables import profile_refresh_enrichment_jobs
+
+    async with pg_session_factory() as session:
+        async def _count(table) -> int:
+            return int(
+                await session.scalar(select(func.count()).select_from(table)) or 0
+            )
+
+        return {
+            "documents": await _count(knowledge_documents),
+            "validation_runs": await _count(enrichment_validation_runs),
+            "refresh_jobs": int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(application_jobs)
+                    .where(application_jobs.c.job_type == "refresh_profile")
+                )
+                or 0
+            ),
+            "associations": await _count(profile_refresh_enrichment_jobs),
+        }
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_phase_a_failure_rolls_back_everything(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    provider_environment,
+    failure,
+    monkeypatch,
+) -> None:
+    """A failure after association insertion must roll back the entire Phase A
+    transaction: no evidence, no validation run, no refresh signal, and no
+    causal association may survive."""
+    service = _production_service(
+        pg_session_factory,
+        _providers(
+            judge=DeterministicJudgeProvider(pages={PAGE_URL: tuple(REQUIRED)}),
+            search=DeterministicSearchProvider(page=_page()),
+        ),
+    )
+
+    def _boom(*args, **kwargs):
+        raise failure("forced Phase A failure")
+
+    monkeypatch.setattr(
+        "app.enrichment.service.enqueue_profile_refresh", _boom
+    )
+    payload = await _confirmed_payload(pg_session_factory)
+
+    if failure is asyncio.CancelledError:
+        with pytest.raises(asyncio.CancelledError):
+            await service.execute(payload)
+    else:
+        with pytest.raises(RuntimeError, match="forced Phase A failure"):
+            await service.execute(payload)
+
+    assert await _phase_a_counts(pg_session_factory) == {
+        "documents": 0,
+        "validation_runs": 0,
+        "refresh_jobs": 0,
+        "associations": 0,
+    }
+
+
+async def test_successful_execution_commits_phase_a_atomically(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    provider_environment,
+) -> None:
+    from app.auth.tables import (
+        application_jobs,
+        profile_refresh_enrichment_jobs,
+    )
+
+    service = _production_service(
+        pg_session_factory,
+        _providers(
+            judge=DeterministicJudgeProvider(pages={PAGE_URL: tuple(REQUIRED)}),
+            search=DeterministicSearchProvider(page=_page()),
+        ),
+    )
+    payload = await _confirmed_payload(pg_session_factory)
+
+    execution = await service.execute(payload)
+
+    assert {aspect.value for aspect in execution.covered_aspects} == set(REQUIRED)
+    counts = await _phase_a_counts(pg_session_factory)
+    assert counts["documents"] >= 1
+    assert counts["validation_runs"] == 1
+    assert counts["refresh_jobs"] == 1
+    assert counts["associations"] == 1
+
+    # The association links the refresh to this exact enrichment run.
+    async with pg_session_factory() as session:
+        row = (
+            await session.execute(
+                select(
+                    profile_refresh_enrichment_jobs.c.refresh_job_id,
+                    profile_refresh_enrichment_jobs.c.enrichment_job_id,
+                )
+            )
+        ).first()
+        assert row is not None
+        assert row._mapping["enrichment_job_id"] == payload.run_id
+        causing_type = await session.scalar(
+            select(application_jobs.c.job_type).where(
+                application_jobs.c.id == row._mapping["enrichment_job_id"]
+            )
+        )
+        assert causing_type == "enrich_confirmed_plant"

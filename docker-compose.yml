@@ -38,6 +38,8 @@ services:
       JOBS_PRODUCER_ENABLED: "${JOBS_PRODUCER_ENABLED:-true}"
       KNOWLEDGE_VECTOR_TABLE: "llamaindex_knowledge_vectors"
       JOBS_WORKER_ENABLED: "false"
+      ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS: "24"
+      ENRICHMENT_ACTIVITY_MAX_ITEMS: "20"
     ports:
       - "8000:8000"
     volumes:
@@ -70,7 +72,7 @@ services:
       JOBS_BACKOFF_BASE_SECONDS: "10"
       JOBS_BACKOFF_CAP_SECONDS: "3600"
       JOBS_SHUTDOWN_DRAIN_SECONDS: "30"
-      JOBS_REQUIRED_CONTRACTS: "enrich_confirmed_plant:1"
+      JOBS_REQUIRED_CONTRACTS: "enrich_confirmed_plant:1,refresh_profile:1"
     volumes:
       - .:/workspace
     depends_on:

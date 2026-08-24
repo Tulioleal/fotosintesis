@@ -1,0 +1,13 @@
+@use "@/styles/tokens" as *;
+
+.wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+
+  :global(a) {
+    font-weight: $font-weight-medium;
+  }
+}

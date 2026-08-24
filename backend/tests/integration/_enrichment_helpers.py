@@ -60,12 +60,26 @@ SAFETY = tuple(
 )
 
 
+def fake_embedding_dimension() -> int:
+    """Dimension of the migrated ``embedding_vector`` pgvector column."""
+    return 1536
+
+
 class DeterministicEmbeddingProvider:
+    """Deterministic embeddings sized to the configured schema dimension.
+
+    The pgvector column is migrated to ``settings.embedding_dimension``
+    dimensions, so fake vectors must use the same dimension or every
+    insert fails with a dimension mismatch.
+    """
+
     async def create_embeddings(self, texts: list[str], **kwargs) -> EmbeddingResult:
+        dimension = fake_embedding_dimension()
+
         return EmbeddingResult(
             provider="deterministic",
-            model="deterministic-8d",
-            embeddings=[[0.1] * 8 for _ in texts],
+            model=f"deterministic-{dimension}d",
+            embeddings=[[0.1] * dimension for _ in texts],
         )
 
 
@@ -326,7 +340,7 @@ async def vector_store(pg_schema):
         user=url.username,
         table_name="enrichment_efficacy",
         schema_name=pg_schema,
-        embed_dim=8,
+        embed_dim=fake_embedding_dimension(),
         use_jsonb=True,
     )
     try:

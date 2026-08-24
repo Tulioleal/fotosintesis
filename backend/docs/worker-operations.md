@@ -17,7 +17,7 @@ The application setting defaults the worker to disabled. Set
 `JOBS_PRODUCER_ENABLED=true` independently in the API process to enable job
 enqueueing; enabling a worker does not enable producers.
 
-Set `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1` on enrichment-capable
+Set `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1,refresh_profile:1` on enrichment-capable
 workers. Startup fails before readiness if the closed worker registry does not
 contain that exact job type and payload version. Docker Compose sets this check
 for the local worker.

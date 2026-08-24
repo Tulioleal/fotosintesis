@@ -31,6 +31,59 @@ def pg_available() -> bool:
     return os.environ.get("SKIP_PG_TESTS", "").lower() not in ("1", "true", "yes")
 
 
+@pytest.fixture(autouse=True)
+def integration_embedding_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``settings.embedding_dimension`` to the migrated pgvector column.
+
+    The shared unit-test conftest forces ``EMBEDDING_DIMENSION=8`` while the
+    PostgreSQL schema's ``embedding_vector`` column has a fixed dimension;
+    fake providers and repository validation must agree with the real column,
+    not the unit-test default.
+    """
+    from app.core.settings import get_settings
+
+    from ._enrichment_helpers import fake_embedding_dimension
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", str(fake_embedding_dimension()))
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def integration_nltk_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point NLTK at a de-hardlinked copy of the bundled cache.
+
+    uv installs the llama_index ``_static/nltk_cache`` with hardlinks into
+    the wheel cache; nltk's pathsec guard refuses to open multiply-linked
+    files. A one-time real-file copy keeps corpus loads working offline.
+    """
+    import pathlib
+    import shutil
+
+    try:
+        import llama_index.core
+    except ImportError:  # pragma: no cover - environment without llama_index
+        return
+
+    bundled = (
+        pathlib.Path(llama_index.core.__file__).parent
+        / "_static"
+        / "nltk_cache"
+    )
+    if not bundled.exists():
+        return
+
+    target = (
+        pathlib.Path(os.environ.get("TMPDIR", "/tmp"))
+        / "photosynthesis-nltk-data"
+    )
+    if not target.exists():
+        shutil.copytree(bundled, target)
+
+    monkeypatch.setenv("NLTK_DATA", str(target))
+
+
 def _create_schema_engine(database_url: str, schema: str) -> AsyncEngine:
     """Create an engine whose connections always operate on ``schema``.
 
@@ -71,13 +124,23 @@ async def pg_schema() -> AsyncIterator[str]:
 
 @pytest.fixture
 async def pg_engine(pg_schema: str) -> AsyncIterator[AsyncEngine]:
-    """Create an engine bound to the per-test schema and load all tables."""
+    """Create an engine bound to the per-test schema and load all tables.
+
+    ``checkfirst=False`` is required for isolation: SQLAlchemy's existence
+    probe uses ``pg_table_is_visible`` which follows the ``{schema},public``
+    search path, so pre-existing dev tables in ``public`` would silently skip
+    creation and every statement would fall through to the shared tables.
+    Forcing DDL guarantees each table is materialized inside this test's
+    own schema.
+    """
     engine = _create_schema_engine(BASE_DATABASE_URL, pg_schema)
 
     from app.auth.tables import metadata
 
     async with engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
+        await conn.run_sync(
+            lambda sync_conn: metadata.create_all(sync_conn, checkfirst=False)
+        )
     try:
         yield engine
     finally:

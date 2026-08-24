@@ -22,6 +22,7 @@ from app.auth.tables import (
     knowledge_documents,
     knowledge_sources,
     plant_profiles,
+    profile_refresh_enrichment_jobs,
     taxonomy_provenance_snapshots,
 )
 from app.enrichment.policy import CURRENT_ENRICHMENT_POLICY_VERSION
@@ -359,3 +360,206 @@ async def test_legacy_reconciliation_signals_insufficient_sections(pg_session_fa
         "Insufficient evidence for description of Monstera deliciosa."
     ]
     assert row.sections["care"] == ["Sourced care content."]
+
+
+async def _associations(pg_session_factory) -> list:
+    async with pg_session_factory() as session:
+        return (
+            await session.execute(select(profile_refresh_enrichment_jobs))
+        ).all()
+
+
+async def _seed_enrichment_job(pg_session_factory) -> object:
+    """Insert one durable enrichment job and return its id."""
+    job_id = uuid4()
+    async with pg_session_factory() as session:
+        await session.execute(
+            application_jobs.insert().values(
+                id=job_id,
+                job_type="enrich_confirmed_plant",
+                payload_version=1,
+                payload={"run_id": str(job_id)},
+                status="processing",
+                idempotency_key=f"enrich-{uuid4()}",
+                attempt_count=1,
+                max_attempts=3,
+            )
+        )
+        await session.commit()
+    return job_id
+
+
+async def test_enrichment_causes_one_refresh_association(pg_session_factory) -> None:
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.profile_garden.signals import enqueue_profile_refresh
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=SPECIES_GBIF,
+        normalized_binomial=SPECIES_NAME,
+        taxonomy_validated=True,
+    )
+    evidence = [
+        {"source_url": "https://example.org/monstera-care", "source_version": "v2"}
+    ]
+    enrichment_job_id = await _seed_enrichment_job(pg_session_factory)
+    async with pg_session_factory() as session:
+        result = await enqueue_profile_refresh(
+            session,
+            identity=identity,
+            changed_aspects=["light_exposure"],
+            generation_policy_version=1,
+            evidence=evidence,
+            caused_by_enrichment_job_id=enrichment_job_id,
+        )
+        await session.commit()
+
+    associations = await _associations(pg_session_factory)
+    assert len(associations) == 1
+    mapping = associations[0]._mapping
+    assert mapping["refresh_job_id"] == result.job_id
+    assert mapping["enrichment_job_id"] == enrichment_job_id
+
+
+async def test_same_fingerprint_reuse_does_not_duplicate_association(
+    pg_session_factory,
+) -> None:
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.profile_garden.signals import enqueue_profile_refresh
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=SPECIES_GBIF,
+        normalized_binomial=SPECIES_NAME,
+        taxonomy_validated=True,
+    )
+    evidence = [
+        {"source_url": "https://example.org/monstera-care", "source_version": "v2"}
+    ]
+    enrichment_job_id = await _seed_enrichment_job(pg_session_factory)
+    job_ids: set = set()
+    for _ in range(2):
+        async with pg_session_factory() as session:
+            result = await enqueue_profile_refresh(
+                session,
+                identity=identity,
+                changed_aspects=["light_exposure"],
+                generation_policy_version=1,
+                evidence=evidence,
+                caused_by_enrichment_job_id=enrichment_job_id,
+            )
+            await session.commit()
+            job_ids.add(result.job_id)
+
+    # Same fingerprint collapses to one refresh job...
+    async with pg_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(application_jobs).where(
+                    application_jobs.c.job_type == "refresh_profile"
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert len(job_ids) == 1
+    # ...and the identical association is not duplicated.
+    associations = await _associations(pg_session_factory)
+    assert len(associations) == 1
+
+
+async def test_two_enrichments_share_one_refresh_association(
+    pg_session_factory,
+) -> None:
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.profile_garden.signals import enqueue_profile_refresh
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=SPECIES_GBIF,
+        normalized_binomial=SPECIES_NAME,
+        taxonomy_validated=True,
+    )
+    evidence = [
+        {"source_url": "https://example.org/monstera-care", "source_version": "v2"}
+    ]
+    first_enrichment = await _seed_enrichment_job(pg_session_factory)
+    second_enrichment = await _seed_enrichment_job(pg_session_factory)
+    refresh_job_ids: set = set()
+    for enrichment_job_id in (first_enrichment, second_enrichment):
+        async with pg_session_factory() as session:
+            result = await enqueue_profile_refresh(
+                session,
+                identity=identity,
+                changed_aspects=["light_exposure"],
+                generation_policy_version=1,
+                evidence=evidence,
+                caused_by_enrichment_job_id=enrichment_job_id,
+            )
+            await session.commit()
+            refresh_job_ids.add(result.job_id)
+
+    # The reused refresh job carries both causal associations.
+    assert len(refresh_job_ids) == 1
+    refresh_job_id = next(iter(refresh_job_ids))
+    associations = await _associations(pg_session_factory)
+    pairs = {
+        (
+            row._mapping["refresh_job_id"],
+            row._mapping["enrichment_job_id"],
+        )
+        for row in associations
+    }
+    assert pairs == {
+        (refresh_job_id, first_enrichment),
+        (refresh_job_id, second_enrichment),
+    }
+
+
+async def test_legacy_reconciliation_creates_no_false_association(
+    pg_session_factory,
+) -> None:
+    sections = {
+        "description": ["Insufficient evidence for description of Monstera deliciosa."],
+        "care": ["Sourced care content."],
+    }
+    await _seed_profile(pg_session_factory, sections=sections, section_versions={})
+
+    async with pg_session_factory() as session:
+        summary = await LegacyReconciliationService(session).reconcile_batch(limit=10)
+
+    assert summary["signalled"] >= 1
+    associations = await _associations(pg_session_factory)
+    assert associations == [], (
+        "legacy reconciliation must not fabricate enrichment causality"
+    )
+
+
+async def test_association_rolls_back_with_surrounding_transaction(
+    pg_session_factory,
+) -> None:
+    from app.enrichment.identity import CanonicalSpeciesIdentity
+    from app.profile_garden.signals import enqueue_profile_refresh
+
+    identity = CanonicalSpeciesIdentity(
+        accepted_gbif_key=SPECIES_GBIF,
+        normalized_binomial=SPECIES_NAME,
+        taxonomy_validated=True,
+    )
+    evidence = [
+        {"source_url": "https://example.org/monstera-care", "source_version": "v2"}
+    ]
+    # The causing enrichment job must exist durably; only the association is
+    # rolled back together with the surrounding evidence transaction.
+    enrichment_job_id = await _seed_enrichment_job(pg_session_factory)
+    async with pg_session_factory() as session:
+        await enqueue_profile_refresh(
+            session,
+            identity=identity,
+            changed_aspects=["light_exposure"],
+            generation_policy_version=1,
+            evidence=evidence,
+            caused_by_enrichment_job_id=enrichment_job_id,
+        )
+        await session.rollback()
+
+    associations = await _associations(pg_session_factory)
+    assert associations == [], (
+        "association insertion must roll back with the evidence transaction"
+    )

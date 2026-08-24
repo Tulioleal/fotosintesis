@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import {
   GlobeHemisphereWestIcon,
   MagnifyingGlassIcon,
@@ -23,6 +25,7 @@ import {
   type SearchLocalResponse,
 } from "@/lib/api/client";
 import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
+import { ACTIVITY_QUERY_KEY } from "@/lib/enrichment-activity";
 import styles from "./SearchFlow.module.scss";
 
 type LocalResult = NonNullable<SearchLocalResponse["results"]>[number];
@@ -30,6 +33,9 @@ type LocalResult = NonNullable<SearchLocalResponse["results"]>[number];
 export function SearchFlow() {
   const inputId = useId();
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const userId = session?.user?.id ?? "anonymous";
+  const router = useRouter();
   const resultsLiveRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -83,16 +89,21 @@ export function SearchFlow() {
   const confirmMutation = useMutation({
     mutationFn: (candidateId: string) =>
       apiClient.confirmManualCandidate(candidateId),
-    onSuccess: (response) => {
+    onSuccess: async (response) => {
       const scientific =
         response.candidate.accepted_scientific_name ??
         response.candidate.suggested_scientific_name;
       const language = typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es";
       queryClient.setQueryData(
-        candidateEnrichmentQueryKey(response.candidate.id, scientific, language),
+        candidateEnrichmentQueryKey(userId, response.candidate.id, scientific, language),
         response.enrichment,
       );
-      window.location.href = `/profiles/${encodeURIComponent(scientific)}?candidateId=${encodeURIComponent(response.candidate.id)}`;
+      await queryClient.invalidateQueries({
+        queryKey: ACTIVITY_QUERY_KEY,
+      });
+      router.push(
+        `/profiles/${encodeURIComponent(scientific)}?candidateId=${encodeURIComponent(response.candidate.id)}`,
+      );
     },
   });
 

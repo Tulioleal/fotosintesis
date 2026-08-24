@@ -2,6 +2,16 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
+vi.mock("next-auth/react", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("next-auth/react")>();
+  const { mockSessionState } = await import("./mock-session");
+  return {
+    ...actual,
+    useSession: () => mockSessionState,
+  };
+});
+
 vi.mock("next/image", () => {
   const MockImage = (props: {
     src?: string;
@@ -37,4 +47,7 @@ vi.mock("next/image", () => {
 
 afterEach(() => {
   cleanup();
+  void import("./mock-session").then(({ resetMockSession }) =>
+    resetMockSession(),
+  );
 });

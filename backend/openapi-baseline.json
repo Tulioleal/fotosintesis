@@ -546,6 +546,208 @@
         "title": "CredentialsVerifyResponse",
         "type": "object"
       },
+      "EnrichmentActivityItem": {
+        "properties": {
+          "candidate_id": {
+            "format": "uuid",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_type": {
+            "$ref": "#/components/schemas/JobType"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/EnrichmentActivityPhase"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrichmentActivityResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scientific_name": {
+            "minLength": 1,
+            "title": "Scientific Name",
+            "type": "string"
+          },
+          "species_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Species Key"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_type",
+          "phase",
+          "status",
+          "created_at",
+          "updated_at",
+          "scientific_name",
+          "candidate_id"
+        ],
+        "title": "EnrichmentActivityItem",
+        "type": "object"
+      },
+      "EnrichmentActivityPhase": {
+        "enum": [
+          "evidence",
+          "profile_refresh"
+        ],
+        "title": "EnrichmentActivityPhase",
+        "type": "string"
+      },
+      "EnrichmentActivityResponse": {
+        "properties": {
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentActivityItem"
+            },
+            "maxItems": 100,
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "title": "EnrichmentActivityResponse",
+        "type": "object"
+      },
+      "EnrichmentActivityResult": {
+        "additionalProperties": false,
+        "description": "Bounded, metadata-only outcome for the cross-page activity view.\n\nCounts and limitation categories only: never raw aspects, source bodies,\nclaims, quotes, or provider diagnostics.",
+        "properties": {
+          "covered_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Covered Count",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "missing_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Missing Count",
+            "type": "integer"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "noop"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "regenerated_section_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Regenerated Section Count",
+            "type": "integer"
+          },
+          "stale_section_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Stale Section Count",
+            "type": "integer"
+          }
+        },
+        "title": "EnrichmentActivityResult",
+        "type": "object"
+      },
       "EnrichmentJobResult": {
         "additionalProperties": false,
         "properties": {
@@ -4438,6 +4640,102 @@
         "summary": "Confirm Candidate",
         "tags": [
           "identifications"
+        ]
+      }
+    },
+    "/jobs/enrichment-activity": {
+      "get": {
+        "operationId": "get_enrichment_activity_jobs_enrichment_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichmentActivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "422": {
+            "description": "Malformed cursor"
+          }
+        },
+        "summary": "Get Enrichment Activity",
+        "tags": [
+          "jobs"
         ]
       }
     },

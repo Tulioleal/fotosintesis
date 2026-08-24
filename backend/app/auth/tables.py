@@ -466,6 +466,33 @@ sa.Index(
 )
 sa.Index("ix_candidate_enrichment_jobs_job_id", candidate_enrichment_jobs.c.job_id)
 
+profile_refresh_enrichment_jobs = sa.Table(
+    "profile_refresh_enrichment_jobs",
+    metadata,
+    sa.Column(
+        "refresh_job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "enrichment_job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+)
+sa.Index(
+    "ix_profile_refresh_enrichment_jobs_enrichment_id",
+    profile_refresh_enrichment_jobs.c.enrichment_job_id,
+)
+
 taxonomy_provenance_snapshots = sa.Table(
     "taxonomy_provenance_snapshots",
     metadata,

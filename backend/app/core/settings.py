@@ -113,6 +113,25 @@ class Settings(BaseSettings):
         default="",
         validation_alias="JOBS_REQUIRED_CONTRACTS",
     )
+    enrichment_activity_terminal_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        le=24 * 30,
+        validation_alias="ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS",
+        description=(
+            "How long terminal enrichment jobs remain visible in the "
+            "owner-scoped background activity view. Capped at 30 days."
+        ),
+    )
+    enrichment_activity_max_items: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        validation_alias="ENRICHMENT_ACTIVITY_MAX_ITEMS",
+        description=(
+            "Cap on enrichment activity items returned in a single response."
+        ),
+    )
 
     auth_limiter_enabled: bool = Field(default=False, validation_alias="AUTH_LIMITER_ENABLED")
     auth_limiter_hmac_secret: str | None = Field(

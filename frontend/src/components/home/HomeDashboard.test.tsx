@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeDashboard } from "./HomeDashboard";
+import { EnrichmentActivityProvider } from "@/components/enrichment/EnrichmentActivityProvider";
 import { API_BASE_URL } from "@/lib/api/config";
 
 const recentPlant = {
@@ -30,6 +31,7 @@ const homeSummary = {
 
 const mocks = vi.hoisted(() => ({
   getHomeSummary: vi.fn(),
+  getEnrichmentActivity: vi.fn(),
   useSession: vi.fn(),
 }));
 
@@ -40,6 +42,7 @@ vi.mock("next-auth/react", () => ({
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     getHomeSummary: mocks.getHomeSummary,
+    getEnrichmentActivity: mocks.getEnrichmentActivity,
   },
 }));
 
@@ -56,7 +59,7 @@ function Wrapper({ children }: Readonly<{ children: ReactNode }>) {
         })
       }
     >
-      {children}
+      <EnrichmentActivityProvider>{children}</EnrichmentActivityProvider>
     </QueryClientProvider>
   );
 }
@@ -65,6 +68,11 @@ describe("HomeDashboard", () => {
   beforeEach(() => {
     mocks.getHomeSummary.mockReset();
     mocks.getHomeSummary.mockResolvedValue(homeSummary);
+    mocks.getEnrichmentActivity.mockReset();
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [],
+      has_more: false,
+    });
     mocks.useSession.mockReset();
     mocks.useSession.mockReturnValue({
       status: "authenticated",
@@ -234,5 +242,104 @@ describe("HomeDashboard", () => {
 
     await screen.findByRole("heading", { name: /Hola, Tuli/ });
     expect(container.textContent).not.toMatch(/PlantCare/);
+  });
+
+  it("shows a compact background-work indicator with plant context and a profile link", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      has_more: false,
+      items: [
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          job_type: "enrich_confirmed_plant",
+          phase: "evidence",
+          status: "processing",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+          completed_at: null,
+          species_key: "gbif:2878688|binomial:Monstera deliciosa",
+          scientific_name: "Monstera deliciosa",
+          common_name: "Monstera",
+          candidate_id: "candidate-1",
+          result: null,
+          last_error: null,
+        },
+      ],
+    });
+
+    render(<HomeDashboard />, { wrapper: Wrapper });
+
+    expect(
+      await screen.findByRole("heading", { name: "Trabajo en segundo plano" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Monstera")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Ver perfil de Monstera/ }),
+    ).toHaveAttribute(
+      "href",
+      "/profiles/Monstera%20deliciosa?candidateId=candidate-1",
+    );
+  });
+});
+
+describe("HomeDashboard activity states", () => {
+  beforeEach(() => {
+    mocks.getHomeSummary.mockReset().mockResolvedValue(homeSummary);
+    mocks.getEnrichmentActivity
+      .mockReset()
+      .mockResolvedValue({ items: [], has_more: false });
+    mocks.useSession.mockReset();
+    mocks.useSession.mockReturnValue({
+      status: "authenticated",
+      data: { user: { id: "1", name: "Tuli", email: "t@example.com" } },
+    });
+  });
+
+  it("renders nothing for activity when the list is empty", async () => {
+    render(<HomeDashboard />, { wrapper: Wrapper });
+    await screen.findByRole("heading", { name: /Hola, Tuli/ });
+    expect(
+      screen.queryByRole("heading", { name: "Trabajo en segundo plano" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Actividad reciente" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("surfaces retained terminal outcomes on Home", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          job_type: "enrich_confirmed_plant",
+          phase: "evidence",
+          status: "complete",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:01:00Z",
+          completed_at: "2026-08-01T00:01:00Z",
+          species_key: null,
+          scientific_name: "Monstera deliciosa",
+          common_name: null,
+          candidate_id: "00000000-0000-4000-8000-000000000011",
+          result: {
+            outcome: "complete",
+            covered_count: 2,
+            missing_count: 0,
+            regenerated_section_count: 0,
+            stale_section_count: 0,
+            limitations: [],
+          },
+          last_error: null,
+        },
+      ],
+      has_more: false,
+      next_cursor: null,
+    });
+
+    render(<HomeDashboard />, { wrapper: Wrapper });
+
+    expect(
+      await screen.findByRole("heading", { name: "Actividad reciente" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/La evidencia está lista/)).toBeInTheDocument();
   });
 });

@@ -10,12 +10,12 @@ fingerprint — never raw evidence content or job payload internals.
 from __future__ import annotations
 
 import hashlib
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enrichment.identity import CanonicalSpeciesIdentity
-from app.jobs.repository import JobRepository
+from app.jobs.repository import EnqueueResult, JobRepository
 from app.jobs.schemas import (
     JobPayloadVersion,
     JobType,
@@ -42,12 +42,17 @@ async def enqueue_profile_refresh(
     changed_aspects: list[str],
     generation_policy_version: int,
     evidence: list[dict[str, object]],
-) -> None:
+    caused_by_enrichment_job_id: UUID | None = None,
+) -> EnqueueResult:
     """Enqueue a durable refresh job for the affected species sections.
 
     The job is enqueued in the caller's transaction so the signal is
     transactional with the accepted-ingestion commit. ``evidence`` items must
     expose ``source_url`` and ``source_version`` to derive the fingerprint.
+    When ``caused_by_enrichment_job_id`` is provided, a durable association
+    between the refresh and its causing enrichment run is recorded in the same
+    transaction; legacy reconciliation passes ``None`` and creates no
+    association.
     """
     fingerprint = compute_evidence_fingerprint(
         evidence=evidence,
@@ -64,7 +69,7 @@ async def enqueue_profile_refresh(
         run_id=uuid4(),
     )
     repository = JobRepository(session)
-    await repository.enqueue_result(
+    result = await repository.enqueue_result(
         job_type=JobType.refresh_profile.value,
         payload_version=JobPayloadVersion.REFRESH_PROFILE_V1,
         payload=payload.model_dump(mode="json"),
@@ -74,6 +79,14 @@ async def enqueue_profile_refresh(
         ),
         max_attempts=3,
     )
+
+    if caused_by_enrichment_job_id is not None:
+        await repository.associate_profile_refresh(
+            refresh_job_id=result.job_id,
+            enrichment_job_id=caused_by_enrichment_job_id,
+        )
+
+    return result
 
 
 __all__ = [

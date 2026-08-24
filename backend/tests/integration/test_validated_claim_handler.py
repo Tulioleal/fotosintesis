@@ -34,14 +34,17 @@ from app.providers.errors import ProviderError
 from app.providers.types import EmbeddingResult
 
 from .conftest import BASE_DATABASE_URL
+from ._enrichment_helpers import fake_embedding_dimension
 
 
 class _EmbeddingProvider:
     async def create_embeddings(self, texts: list[str], **kwargs) -> EmbeddingResult:
+        dimension = fake_embedding_dimension()
+
         return EmbeddingResult(
             provider="integration",
-            model="integration-8d",
-            embeddings=[[0.1] * 8 for _ in texts],
+            model=f"integration-{dimension}d",
+            embeddings=[[0.1] * dimension for _ in texts],
         )
 
 
@@ -91,7 +94,7 @@ async def vector_store(pg_schema):
         user=url.username,
         table_name="validated_claim_handler",
         schema_name=pg_schema,
-        embed_dim=8,
+        embed_dim=fake_embedding_dimension(),
         use_jsonb=True,
     )
     try:

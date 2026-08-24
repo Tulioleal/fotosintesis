@@ -161,6 +161,16 @@ Neither the 0013 nor the 0014 downgrade is a routine production rollback path.
 Use image rollback, backup restore, or a forward-fix migration instead, and keep
 `JOBS_PRODUCER_ENABLED=false` when rolling back across these migrations.
 
+## Migration 0020: profile refresh enrichment association
+
+Migration `0020_refresh_enrichment_assoc` adds the durable
+`profile_refresh_enrichment_jobs` causality table that links a profile-refresh
+job to the owner-scoped enrichment job that caused it. Routine application
+rollback must not downgrade migration 0020; roll back with a compatibility
+image or a forward-fix migration instead. Never drop the table while workers may
+write associations — see
+[`background-enrichment-tracker.md#rollback`](../background-enrichment-tracker.md#rollback).
+
 The deploy workflow does not attempt to undo a migration. It always
 runs `alembic upgrade head`. Operators must pick restore or forward-fix
 based on the data loss tolerance for the affected environment.

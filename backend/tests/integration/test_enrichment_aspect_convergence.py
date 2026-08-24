@@ -32,7 +32,10 @@ from app.knowledge.rag import KnowledgeVectorIndex, LlamaIndexRuntime, VectorInd
 from app.knowledge.repository import KnowledgeRepository
 from app.knowledge.schemas import KnowledgeRetrievalFilters
 
-from ._enrichment_helpers import _all_vector_node_ids
+from ._enrichment_helpers import (
+    _all_vector_node_ids,
+    fake_embedding_dimension,
+)
 from app.providers.types import EmbeddingResult
 
 from .conftest import BASE_DATABASE_URL
@@ -82,10 +85,12 @@ async def test_concurrent_progress_updates_preserve_accepted_aspect_union(
 
 class _EmbeddingProvider:
     async def create_embeddings(self, texts: list[str], **kwargs) -> EmbeddingResult:
+        dimension = fake_embedding_dimension()
+
         return EmbeddingResult(
             provider="convergence",
-            model="convergence-8d",
-            embeddings=[[0.1] * 8 for _ in texts],
+            model=f"convergence-{dimension}d",
+            embeddings=[[0.1] * dimension for _ in texts],
         )
 
 
@@ -178,7 +183,7 @@ async def vector_store(pg_schema):
         user=url.username,
         table_name="enrichment_aspect_convergence",
         schema_name=pg_schema,
-        embed_dim=8,
+        embed_dim=fake_embedding_dimension(),
         use_jsonb=True,
     )
     try:
@@ -269,7 +274,7 @@ async def _retrieve_chunk(
                 covered_aspect=aspect,
             ),
             query_text=f"Monstera deliciosa {aspect}",
-            query_embedding=[0.1] * 8,
+            query_embedding=[0.1] * fake_embedding_dimension(),
             limit=5,
         )
 
@@ -1039,12 +1044,12 @@ class _AspectRankEmbeddingProvider:
         embeddings = []
         for text in texts:
             if "REQUESTED_MARKER" in text:
-                embeddings.append([0.0] * 8)
+                embeddings.append([0.0] * fake_embedding_dimension())
             else:
-                embeddings.append([0.1] * 8)
+                embeddings.append([0.1] * fake_embedding_dimension())
         return EmbeddingResult(
             provider="convergence",
-            model="convergence-8d",
+            model=f"convergence-{fake_embedding_dimension()}d",
             embeddings=embeddings,
         )
 
@@ -1212,7 +1217,7 @@ async def test_balanced_ordering_survives_production_local_judge_budget(
             accepted_gbif_key=2878688,
             required_aspects=[WATERING, LIGHT],
             query_text="care",
-            query_embedding=[0.0] * 8,
+            query_embedding=[0.0] * fake_embedding_dimension(),
             per_aspect_limit=5,
             budget=MAX_JUDGE_SOURCES,
         )
@@ -1520,3 +1525,84 @@ async def _insert_canonical_fixture(
                 document_id=document_id,
             )
         )
+
+
+async def test_duplicate_evidence_under_outer_transaction_converges_via_savepoint(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    taxonomy_provenance_id: object,
+) -> None:
+    """With commit=False, a duplicate-evidence race must converge through a
+    SAVEPOINT: the winner's document is adopted and the caller's outer
+    transaction stays alive and committable."""
+    from sqlalchemy import select
+
+    from app.auth.tables import knowledge_documents
+
+    service, session = _service(pg_session_factory, vector_index_factory)
+    claim = _claim(aspects=(WATERING,))
+    identity = _identity()
+
+    # First persist commits standalone (legacy behavior).
+    first = await service.persist_claim_relational(
+        identity=identity,
+        taxonomy_provenance_id=taxonomy_provenance_id,
+        claim=claim,
+        job_id=None,
+    )
+    assert first is not None
+
+    # Second persistence runs inside an outer transaction with commit=False:
+    # the stable content key collides, the savepoint rolls back only its own
+    # writes, and convergence adopts the winner.
+    second = await service.persist_claim_relational(
+        identity=identity,
+        taxonomy_provenance_id=taxonomy_provenance_id,
+        claim=claim,
+        job_id=None,
+        commit=False,
+    )
+    assert second.document_id == first.document_id
+
+    # The outer transaction is still usable and can be committed.
+    await session.commit()
+
+    async with pg_session_factory() as verify:
+        rows = (
+            await verify.execute(
+                select(knowledge_documents.c.id).where(
+                    knowledge_documents.c.canonical_species_key == identity.key
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+
+
+async def test_standalone_persistence_still_commits_without_flag(
+    pg_session_factory,
+    vector_store,
+    vector_index_factory,
+    taxonomy_provenance_id: object,
+) -> None:
+    """Legacy callers without commit=False must keep their commit behavior."""
+    from sqlalchemy import func, select
+
+    from app.auth.tables import knowledge_documents
+
+    service, _session = _service(pg_session_factory, vector_index_factory)
+    state = await service.persist_claim_relational(
+        identity=_identity(),
+        taxonomy_provenance_id=taxonomy_provenance_id,
+        claim=_claim(aspects=(WATERING,)),
+        job_id=None,
+    )
+    await _session.close()
+
+    async with pg_session_factory() as verify:
+        count = await verify.scalar(
+            select(func.count())
+            .select_from(knowledge_documents)
+            .where(knowledge_documents.c.id == state.document_id)
+        )
+    assert count == 1

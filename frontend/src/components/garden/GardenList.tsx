@@ -6,6 +6,7 @@ import { apiClient, type GardenPlant } from "@/lib/api/client";
 import { resolveImageUrl } from "@/lib/images";
 import { formatDueDate } from "@/lib/timezones";
 import { AppLink, Card, ImageCard, Notice, PageHeader } from "@/components/ui";
+import { EnrichmentActivitySummary } from "../enrichment/EnrichmentActivitySummary";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./GardenList.module.scss";
 import Image from "next/image";
@@ -68,6 +69,8 @@ export function GardenList() {
           </AppLink>
         }
       />
+
+      <EnrichmentActivitySummary />
 
       {garden.isError ? (
         <Notice tone="error" role="alert">

@@ -21,8 +21,17 @@ services:
       retries: 30
 
   backend:
+    build:
+      context: ./backend
+    image: photosynthesis-backend-e2e
+    working_dir: /app
+    volumes: !override []
     ports: !override []
-    command: sh -c "if [ -x .venv/bin/python ]; then .venv/bin/alembic upgrade head && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload; else pip install -e . && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload; fi"
+    # Dependencies are baked into the image at build time; startup only runs
+    # migrations and the server. No --reload in E2E containers.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
       GBIF_BASE_URL: http://mock-gbif:8080/v1/species/match
       MODEL_PROVIDER: mock
@@ -55,7 +64,10 @@ services:
       start_period: 20s
 
   worker:
-    command: sh -c "if [ -x .venv/bin/python ]; then .venv/bin/python -m app.jobs.worker; else pip install -e . && python -m app.jobs.worker; fi"
+    image: photosynthesis-backend-e2e
+    working_dir: /app
+    volumes: !override []
+    command: python -m app.jobs.worker
     environment:
       GBIF_BASE_URL: http://mock-gbif:8080/v1/species/match
       MODEL_PROVIDER: mock

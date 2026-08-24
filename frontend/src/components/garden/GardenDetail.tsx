@@ -26,6 +26,7 @@ import { buildAssistantHref } from "@/lib/assistant";
 import { resolveImageUrl } from "@/lib/images";
 import { formatDueDate } from "@/lib/timezones";
 import { AppLink, Button, Card, Chip, Notice } from "@/components/ui";
+import { EnrichmentActivitySummary } from "../enrichment/EnrichmentActivitySummary";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./GardenDetail.module.scss";
 import type { PlantProfile } from "./types";
@@ -202,6 +203,15 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
           </Chip>
         </div>
       </header>
+
+      <EnrichmentActivitySummary
+        relatedTo={{
+          candidateIds: plant.confirmed_candidate_id
+            ? [plant.confirmed_candidate_id]
+            : [],
+          scientificNames: [plant.profile.scientific_name],
+        }}
+      />
 
       <div className={styles.mainGrid}>
         <div className={styles.imageFrame}>

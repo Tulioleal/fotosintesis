@@ -28,8 +28,15 @@ NEXT_FONT_GOOGLE_MOCKED_RESPONSES="$ROOT/frontend/e2e/next-font-mocked-responses
 NODE_OPTIONS="--max-old-space-size=3072" \
 pnpm --dir "$ROOT" --filter frontend build
 
+# Build the backend image up front with the host docker builder (the compose
+# bake builder resolves PyPI unreliably in some environments): dependency
+# installation must never run inside health-critical startup commands. Compose
+# reuses this exact tag because the e2e override pins image:
+# photosynthesis-backend-e2e for both backend and worker.
+docker build -t photosynthesis-backend-e2e "$ROOT/backend"
+
 $COMPOSE up -d --wait --wait-timeout 600 \
   postgres mock-gbif backend worker frontend
 
 PLAYWRIGHT_EXTERNAL_SERVER=1 \
-pnpm --dir "$ROOT" --filter frontend test:e2e:enrichment
+pnpm --dir "$ROOT" --filter frontend test:e2e:enrichment "$@"

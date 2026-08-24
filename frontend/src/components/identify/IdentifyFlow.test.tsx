@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IdentifyFlow } from "./IdentifyFlow";
+import { ACTIVITY_QUERY_KEY } from "@/lib/enrichment-activity";
 
 const mocks = vi.hoisted(() => ({
   confirmCandidate: vi.fn(),
   push: vi.fn(),
+  setQueryData: vi.fn(),
+  invalidateQueries: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -13,7 +16,10 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@tanstack/react-query", async () => ({
   ...(await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query")),
-  useQueryClient: () => ({ setQueryData: vi.fn() }),
+  useQueryClient: () => ({
+    setQueryData: mocks.setQueryData,
+    invalidateQueries: mocks.invalidateQueries,
+  }),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -56,6 +62,8 @@ describe("IdentifyFlow", () => {
       status: "confirmed",
     });
     mocks.push.mockReset();
+    mocks.setQueryData.mockReset();
+    mocks.invalidateQueries.mockReset().mockResolvedValue(undefined);
     URL.createObjectURL = vi.fn(() => "blob:preview");
   });
 
@@ -163,9 +171,42 @@ describe("IdentifyFlow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Seleccionar esta planta" }));
 
     await waitFor(() => expect(mocks.confirmCandidate).toHaveBeenCalledWith("identification-1", "candidate-1"));
+    // The candidate enrichment cache is seeded before the activity tracker
+    // is invalidated, and navigation happens in-app afterwards.
+    await waitFor(() => {
+      expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.setQueryData).toHaveBeenCalled();
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ACTIVITY_QUERY_KEY,
+    });
+    const setOrder = mocks.setQueryData.mock.invocationCallOrder[0];
+    const invalidateOrder = mocks.invalidateQueries.mock.invocationCallOrder[0];
+    expect(setOrder).toBeLessThan(invalidateOrder);
     expect(mocks.push).toHaveBeenCalledWith(
       "/profiles/Cotyledon%20tomentosa?candidateId=candidate-1",
     );
+  });
+
+  it("does not invalidate activity when confirmation fails", async () => {
+    mocks.confirmCandidate.mockReset().mockRejectedValue(new Error("nope"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({ ok: true, json: async () => identificationPayload }),
+    );
+    const { container } = render(<IdentifyFlow />);
+    const upload = container.querySelector(
+      'input[accept="image/jpeg,image/png,image/webp"]',
+    ) as HTMLInputElement;
+    fireEvent.change(upload, {
+      target: { files: [new File(["image"], "plant.jpg", { type: "image/jpeg" })] },
+    });
+    await screen.findByRole("heading", { name: "Pata de oso" });
+    fireEvent.click(screen.getByRole("button", { name: "Seleccionar esta planta" }));
+
+    await screen.findByText("nope");
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 
   it("links to the assistant with candidate, binomial and scientific context after confirmation", async () => {

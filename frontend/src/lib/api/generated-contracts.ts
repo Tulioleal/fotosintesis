@@ -13,6 +13,9 @@ export type ConfirmationResponse =
 export type CandidateEnrichmentResponse =
   operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"]["responses"][200]["content"]["application/json"];
 
+export type EnrichmentActivityResponse =
+  operations["get_enrichment_activity_jobs_enrichment_activity_get"]["responses"][200]["content"]["application/json"];
+
 export type SearchLocalResponse =
   operations["search_local_search_get"]["responses"][200]["content"]["application/json"];
 
@@ -106,6 +109,161 @@ export const candidateEnrichmentSchema: z.ZodType<CandidateEnrichmentResponse> =
     candidate_id: z.string().uuid(),
     policy_version: z.number().int().positive(),
     job: jobStatusResponseSchema,
+  });
+
+const activityCountSchema = z.number().int().min(0).max(32);
+
+const enrichmentLimitationSchema = z.enum([
+  "missing_required_aspects",
+  "safety_evidence_rejected",
+  "retry_exhausted",
+  "workflow_incomplete",
+  "indexing_deferred",
+]);
+
+export const enrichmentActivityResultSchema = z.object({
+  outcome: z.enum(["complete", "partial", "noop"]).nullable().optional(),
+  covered_count: activityCountSchema,
+  missing_count: activityCountSchema,
+  regenerated_section_count: activityCountSchema,
+  stale_section_count: activityCountSchema,
+  limitations: z.array(enrichmentLimitationSchema).max(10),
+});
+
+export const enrichmentActivityItemSchema = z
+  .object({
+    id: z.string().uuid(),
+    job_type: z.enum([
+      "ingest_validated_claims",
+      "enrich_confirmed_plant",
+      "refresh_profile",
+    ]),
+    phase: z.enum(["evidence", "profile_refresh"]),
+    status: jobStatusSchema,
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    completed_at: z.string().datetime({ offset: true }).nullable().optional(),
+    species_key: z.string().nullable().optional(),
+    scientific_name: z.string().min(1),
+    common_name: z.string().nullable().optional(),
+    candidate_id: z.string().uuid(),
+    result: enrichmentActivityResultSchema.nullable().optional(),
+    last_error: z
+      .object({
+        category: z.enum([
+          "invalid_payload",
+          "unsupported_payload_version",
+          "unknown_job_type",
+          "database_transient",
+          "provider_transient",
+          "indexing_transient",
+          "invariant_violation",
+          "attempts_exhausted",
+          "unexpected_error",
+          "lease_expired",
+          "lease_lost",
+          "insufficient_evidence",
+        ]),
+        retryable: z.boolean(),
+      })
+      .nullable()
+      .optional(),
+  })
+  .superRefine((item, context) => {
+    const phaseMatches =
+      (item.job_type === "enrich_confirmed_plant" &&
+        item.phase === "evidence") ||
+      (item.job_type === "refresh_profile" &&
+        item.phase === "profile_refresh");
+
+    if (!phaseMatches) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid activity phase",
+        path: ["phase"],
+      });
+    }
+
+    // Lifecycle and timestamp consistency mirrors the backend validator.
+    const created = Date.parse(item.created_at);
+    const updated = Date.parse(item.updated_at);
+    if (Number.isFinite(created) && updated < created) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid timestamps",
+        path: ["updated_at"],
+      });
+    }
+    const completed = item.completed_at ? Date.parse(item.completed_at) : NaN;
+    if (Number.isFinite(created) && Number.isFinite(completed) && completed < created) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid timestamps",
+        path: ["completed_at"],
+      });
+    }
+    if (Number.isFinite(completed) && Number.isFinite(updated) && completed > updated) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid timestamps",
+        path: ["completed_at"],
+      });
+    }
+
+    const active = item.status === "pending" || item.status === "processing";
+    if (active && item.completed_at) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Active activity cannot carry completed_at",
+        path: ["completed_at"],
+      });
+    }
+    if (!active && !item.completed_at) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Terminal activity requires completed_at",
+        path: ["completed_at"],
+      });
+    }
+
+    // Results may only appear on terminal-success rows; contradictory
+    // metadata is rejected wholesale.
+    const terminalSuccess =
+      item.status === "complete" || item.status === "partial";
+    if (item.result && !terminalSuccess) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid activity result for status",
+        path: ["result"],
+      });
+    }
+
+    // Mirror the backend's status/outcome map so an incomplete evidence or
+    // refresh outcome can never be announced as a contradicting phase.
+    const allowedOutcome: Record<string, string[]> = {
+      "enrich_confirmed_plant|complete": ["complete"],
+      "enrich_confirmed_plant|partial": ["partial"],
+      "refresh_profile|complete": ["complete", "noop"],
+      "refresh_profile|partial": ["partial"],
+    };
+    const outcomeKey = `${item.job_type}|${item.status}`;
+    if (
+      item.result?.outcome &&
+      !allowedOutcome[outcomeKey]?.includes(item.result.outcome)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Result outcome contradicts status/phase",
+        path: ["result", "outcome"],
+      });
+    }
+  });
+
+export const enrichmentActivityResponseSchema: z.ZodType<EnrichmentActivityResponse> =
+  z.object({
+    items: z.array(enrichmentActivityItemSchema).max(100),
+    has_more: z.boolean(),
+    next_cursor: z.string().max(512).nullable().optional(),
   });
 
 export const taxonomyCandidateSchema = z.object({

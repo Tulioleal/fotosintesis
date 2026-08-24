@@ -5,10 +5,12 @@ import json
 import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Mapping
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import (
@@ -17,20 +19,29 @@ from app.auth.tables import (
     enrichment_telemetry_observations,
     identification_candidates,
     identification_images,
+    profile_refresh_enrichment_jobs,
 )
 from app.core.settings import Settings, get_settings
 from app.db.repository import RepositoryBase
+from app.enrichment.identity import CanonicalSpeciesIdentity
 from app.enrichment.policy import enrichment_policy_label
 from app.jobs.schemas import (
     CandidateEnrichmentStatus,
     ClaimedJob,
+    EnrichmentActivityCursor,
+    EnrichmentActivityItem,
+    EnrichmentActivityPhase,
+    EnrichmentActivityResult,
     EnrichmentJobResult,
+    EnrichmentLimitation,
     JobError,
     JobFailureCategory,
     JobResult,
     JobStatus,
     JobStatusResponse,
     JobType,
+    MAX_ENRICHMENT_ASPECTS,
+    MAX_LIMITATIONS_PER_RESULT,
     ReadJobError,
     ReadJobResult,
 )
@@ -171,6 +182,114 @@ def canonical_idempotency_key(
         separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _bounded_count(value: object) -> int:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return min(max(count, 0), MAX_ENRICHMENT_ASPECTS)
+
+
+def _bounded_limitations(value: object) -> list[EnrichmentLimitation]:
+    if not isinstance(value, list):
+        return []
+
+    limitations: list[EnrichmentLimitation] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            continue
+        try:
+            limitation = EnrichmentLimitation(raw)
+        except ValueError:
+            continue
+        limitations.append(limitation)
+        if len(limitations) == MAX_LIMITATIONS_PER_RESULT:
+            break
+
+    return limitations
+
+
+ALLOWED_ACTIVITY_OUTCOMES = frozenset({"complete", "partial", "noop"})
+
+# Upper bound on per-phase pagination batches so a run of malformed rows can
+# never turn one activity page into an unbounded loop.
+MAX_ACTIVITY_BATCHES_PER_PHASE = 10
+
+
+def _bounded_outcome(value: object) -> str | None:
+    if isinstance(value, str) and value in ALLOWED_ACTIVITY_OUTCOMES:
+        return value
+    return None
+
+
+# Public results must agree with lifecycle: only terminal-success rows may
+# expose an outcome, and refresh rows additionally allow "noop". Evidence
+# results populate evidence counts; refresh results populate refresh counts.
+_ALLOWED_OUTCOMES_BY_PHASE_STATUS: dict[
+    tuple[EnrichmentActivityPhase, JobStatus], frozenset[str]
+] = {
+    (EnrichmentActivityPhase.evidence, JobStatus.complete): frozenset(
+        {"complete"}
+    ),
+    (EnrichmentActivityPhase.evidence, JobStatus.partial): frozenset(
+        {"partial"}
+    ),
+    (
+        EnrichmentActivityPhase.profile_refresh,
+        JobStatus.complete,
+    ): frozenset({"complete", "noop"}),
+    (
+        EnrichmentActivityPhase.profile_refresh,
+        JobStatus.partial,
+    ): frozenset({"partial"}),
+}
+
+
+def _activity_result(
+    result_data: Mapping[str, object] | None,
+    *,
+    phase: EnrichmentActivityPhase,
+    status: JobStatus,
+) -> EnrichmentActivityResult | None:
+    """Build a phase-consistent public result, or ``None`` when stored
+    metadata contradicts the job's lifecycle."""
+    if result_data is None or status not in {
+        JobStatus.complete,
+        JobStatus.partial,
+    }:
+        return None
+
+    allowed = _ALLOWED_OUTCOMES_BY_PHASE_STATUS.get((phase, status), frozenset())
+    outcome = _bounded_outcome(result_data.get("outcome"))
+    if outcome not in allowed:
+        return None
+
+    limitations = _bounded_limitations(result_data.get("limitations"))
+    if phase == EnrichmentActivityPhase.profile_refresh:
+        regenerated = result_data.get("regenerated_sections")
+        stale_sections = result_data.get("stale_sections")
+        return EnrichmentActivityResult(
+            outcome=outcome,
+            regenerated_section_count=_bounded_count(
+                len(regenerated)
+                if isinstance(regenerated, list)
+                else result_data.get("regenerated_section_count", 0)
+            ),
+            stale_section_count=_bounded_count(
+                len(stale_sections)
+                if isinstance(stale_sections, list)
+                else result_data.get("stale_section_count", 0)
+            ),
+            limitations=limitations,
+        )
+    return EnrichmentActivityResult(
+        outcome=outcome,
+        covered_count=_bounded_count(result_data.get("covered_count", 0)),
+        missing_count=_bounded_count(result_data.get("missing_count", 0)),
+        limitations=limitations,
+    )
 
 
 def compute_claims_hash(claims: list[dict]) -> str:
@@ -441,6 +560,76 @@ class JobRepository(RepositoryBase):
             job_id=winner._mapping["job_id"],
             job_created=False,
             association_created=False,
+        )
+
+    async def associate_profile_refresh(
+        self,
+        *,
+        refresh_job_id: UUID,
+        enrichment_job_id: UUID,
+    ) -> None:
+        """Durably link a profile refresh to its causing enrichment job.
+
+        Idempotent: re-associating the same pair is a harmless no-op. The
+        association lives in the caller's transaction so it commits or rolls
+        back together with the evidence that motivated the refresh. Job types
+        are validated so application code cannot associate reversed or
+        unrelated roles.
+        """
+        job_types = dict(
+            (
+                await self.session.execute(
+                    select(
+                        application_jobs.c.id,
+                        application_jobs.c.job_type,
+                    ).where(
+                        application_jobs.c.id.in_(
+                            [refresh_job_id, enrichment_job_id]
+                        )
+                    )
+                )
+            ).all()
+        )
+
+        if job_types.get(refresh_job_id) != JobType.refresh_profile.value:
+            raise ValueError("refresh_job_id is not a profile refresh job")
+
+        if job_types.get(enrichment_job_id) != JobType.enrich_confirmed_plant.value:
+            raise ValueError("enrichment_job_id is not an enrichment job")
+
+        values = {
+            "refresh_job_id": refresh_job_id,
+            "enrichment_job_id": enrichment_job_id,
+        }
+        if (
+            self.session.bind is not None
+            and self.session.bind.dialect.name == "postgresql"
+        ):
+            statement = pg_insert(profile_refresh_enrichment_jobs).values(**values)
+            statement = statement.on_conflict_do_nothing(
+                index_elements=[
+                    profile_refresh_enrichment_jobs.c.refresh_job_id,
+                    profile_refresh_enrichment_jobs.c.enrichment_job_id,
+                ]
+            )
+            await self.session.execute(statement)
+            return
+
+        # SQLite only backs repository unit tests; PostgreSQL is production.
+        existing = (
+            await self.session.execute(
+                select(profile_refresh_enrichment_jobs.c.refresh_job_id).where(
+                    profile_refresh_enrichment_jobs.c.refresh_job_id
+                    == refresh_job_id,
+                    profile_refresh_enrichment_jobs.c.enrichment_job_id
+                    == enrichment_job_id,
+                )
+            )
+        ).first()
+        if existing is not None:
+            return
+        await self.session.execute(
+            profile_refresh_enrichment_jobs.insert().values(**values)
         )
 
     async def claim_jobs(
@@ -1126,6 +1315,328 @@ class JobRepository(RepositoryBase):
             candidate_id=candidate_id,
             policy_version=policy_version,
             job=self._row_to_status_response(row._mapping),
+        )
+
+    async def get_enrichment_activity(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        terminal_retention_window: timedelta,
+        cursor: EnrichmentActivityCursor | None = None,
+    ) -> tuple[list[EnrichmentActivityItem], bool]:
+        """Return one bounded page of owner-scoped enrichment activity.
+
+        Evidence jobs arrive through candidate associations owned by the
+        requesting user; candidate ownership is revalidated at read time via
+        the same predicate as the direct candidate-status query. Profile
+        refreshes are surfaced only through the durable
+        ``profile_refresh_enrichment_jobs`` causality chain, never by payload
+        species matching, so globally visible refresh jobs are never scanned
+        and historical unassociated refreshes stay hidden.
+
+        Each phase selects exactly one deterministic owner candidate per job
+        (window function rank 1) and returns at most ``limit + 1`` valid
+        items, with the keyset cursor applied inside SQL. Because stored rows
+        that fail serialization are filtered after fetch, each phase walks at
+        most ``MAX_ACTIVITY_BATCHES_PER_PHASE`` bounded batches until its
+        valid-item target is met or the window is exhausted, so malformed
+        rows can never make older valid jobs unreachable. Rows are merged and
+        re-sorted on the stable ``(updated_at DESC, id DESC)`` tuple;
+        ``has_more`` reports whether more than ``limit`` visible jobs exist.
+        """
+        active_statuses = [JobStatus.pending.value, JobStatus.processing.value]
+        cutoff = datetime.now(UTC) - terminal_retention_window
+        visible = or_(
+            application_jobs.c.status.in_(active_statuses),
+            application_jobs.c.completed_at >= cutoff,
+        )
+        candidate_owned = or_(
+            identification_candidates.c.user_id == user_id,
+            identification_images.c.user_id == user_id,
+        )
+        # Every surfaced item must carry usable profile context: a candidate
+        # row and at least one display name. Rows without context are filtered
+        # out in SQL instead of being serialized without an actionable link.
+        display_name = func.coalesce(
+            identification_candidates.c.accepted_scientific_name,
+            identification_candidates.c.suggested_scientific_name,
+        )
+        valid_candidate_context = and_(
+            identification_candidates.c.id.is_not(None),
+            display_name.is_not(None),
+            func.length(func.trim(display_name)) > 0,
+        )
+
+        candidate_rank = (
+            func.row_number()
+            .over(
+                partition_by=application_jobs.c.id,
+                order_by=(
+                    candidate_enrichment_jobs.c.created_at.desc(),
+                    identification_candidates.c.id.desc(),
+                ),
+            )
+            .label("candidate_rank")
+        )
+        owner_context = [
+            identification_candidates.c.id.label("ctx_candidate_id"),
+            func.coalesce(
+                identification_candidates.c.accepted_scientific_name,
+                identification_candidates.c.suggested_scientific_name,
+            ).label("ctx_scientific_name"),
+            identification_candidates.c.common_name.label("ctx_common_name"),
+        ]
+
+        def _phase_page(statement, *, page_limit, selected_cursor):
+            cursor_condition = (
+                true()
+                if selected_cursor is None
+                else or_(
+                    application_jobs.c.updated_at < selected_cursor.updated_at,
+                    and_(
+                        application_jobs.c.updated_at == selected_cursor.updated_at,
+                        application_jobs.c.id < selected_cursor.job_id,
+                    ),
+                )
+            )
+            ranked = (
+                statement.where(cursor_condition)
+                .add_columns(candidate_rank)
+                .subquery()
+            )
+            return (
+                select(ranked)
+                .where(ranked.c.candidate_rank == 1)
+                .order_by(
+                    ranked.c.updated_at.desc(),
+                    ranked.c.id.desc(),
+                )
+                .limit(page_limit)
+            )
+
+        def _build(
+            mapping: Mapping[str, object],
+            phase: EnrichmentActivityPhase,
+        ) -> EnrichmentActivityItem | None:
+            # Legacy rows with contradictory lifecycle metadata (e.g. a
+            # completion preceding creation) are excluded rather than
+            # allowed to fail the whole owner-scoped page.
+            try:
+                return self._row_to_activity_item(
+                    mapping,
+                    phase=phase,
+                    candidate_id=mapping["ctx_candidate_id"],
+                    scientific_name=mapping["ctx_scientific_name"],
+                    common_name=mapping["ctx_common_name"],
+                )
+            except ValidationError:
+                return None
+
+        async def _collect_phase(
+            statement,
+            *,
+            phase: EnrichmentActivityPhase,
+            needed: int,
+            selected_cursor: EnrichmentActivityCursor | None,
+        ) -> list[EnrichmentActivityItem]:
+            """Fetch bounded batches until ``needed`` valid items or exhaustion.
+
+            Python-side schema filtering can shrink a single SQL page below
+            the limit, so the keyset window is re-advanced until enough valid
+            items accumulate or the window truly runs out.
+            """
+            items: list[EnrichmentActivityItem] = []
+            phase_cursor = selected_cursor
+            for _ in range(MAX_ACTIVITY_BATCHES_PER_PHASE):
+                want = needed - len(items)
+                rows = (
+                    await self.session.execute(
+                        _phase_page(
+                            statement,
+                            page_limit=want + 1,
+                            selected_cursor=phase_cursor,
+                        )
+                    )
+                ).mappings().all()
+                if not rows:
+                    break
+                items.extend(
+                    item
+                    for item in (_build(m, phase=phase) for m in rows)
+                    if item is not None
+                )
+                if len(rows) < want + 1:
+                    # Window returned fewer rows than requested: genuinely
+                    # exhausted for this phase.
+                    break
+                last = rows[-1]
+                phase_cursor = EnrichmentActivityCursor(
+                    updated_at=last["updated_at"],
+                    job_id=last["id"],
+                )
+                if len(items) >= needed:
+                    break
+            return items
+
+        evidence_base = (
+            select(application_jobs, *owner_context)
+            .join(
+                candidate_enrichment_jobs,
+                candidate_enrichment_jobs.c.job_id
+                == application_jobs.c.id,
+            )
+            .join(
+                identification_candidates,
+                identification_candidates.c.id
+                == candidate_enrichment_jobs.c.candidate_id,
+            )
+            .outerjoin(
+                identification_images,
+                identification_images.c.id
+                == identification_candidates.c.identification_id,
+            )
+            .where(
+                candidate_enrichment_jobs.c.user_id == user_id,
+                application_jobs.c.job_type
+                == JobType.enrich_confirmed_plant.value,
+                visible,
+                candidate_owned,
+                valid_candidate_context,
+            )
+        )
+
+        # The causing enrichment job must genuinely be an enrichment job:
+        # a malformed association row pointing at another job type can never
+        # authorize a refresh.
+        causing_job = application_jobs.alias("causing_enrichment_job")
+        refresh_base = (
+            select(application_jobs, *owner_context)
+            .join(
+                profile_refresh_enrichment_jobs,
+                profile_refresh_enrichment_jobs.c.refresh_job_id
+                == application_jobs.c.id,
+            )
+            .join(
+                causing_job,
+                causing_job.c.id
+                == profile_refresh_enrichment_jobs.c.enrichment_job_id,
+            )
+            .join(
+                candidate_enrichment_jobs,
+                candidate_enrichment_jobs.c.job_id
+                == profile_refresh_enrichment_jobs.c.enrichment_job_id,
+            )
+            .join(
+                identification_candidates,
+                identification_candidates.c.id
+                == candidate_enrichment_jobs.c.candidate_id,
+            )
+            .outerjoin(
+                identification_images,
+                identification_images.c.id
+                == identification_candidates.c.identification_id,
+            )
+            .where(
+                application_jobs.c.job_type
+                == JobType.refresh_profile.value,
+                causing_job.c.job_type
+                == JobType.enrich_confirmed_plant.value,
+                # Association-owner predicate: the candidate association on
+                # the causing enrichment job must belong to the requester.
+                candidate_enrichment_jobs.c.user_id == user_id,
+                visible,
+                candidate_owned,
+                valid_candidate_context,
+            )
+        )
+
+        evidence_items = await _collect_phase(
+            evidence_base,
+            phase=EnrichmentActivityPhase.evidence,
+            needed=limit + 1,
+            selected_cursor=cursor,
+        )
+        refresh_items = await _collect_phase(
+            refresh_base,
+            phase=EnrichmentActivityPhase.profile_refresh,
+            needed=limit + 1,
+            selected_cursor=cursor,
+        )
+
+        items = [*evidence_items, *refresh_items]
+        items.sort(
+            key=lambda item: (item.updated_at, item.id),
+            reverse=True,
+        )
+        has_more = len(items) > limit
+        return items[:limit], has_more
+
+    @staticmethod
+    def _activity_species_key(species: object) -> str | None:
+        if not isinstance(species, dict):
+            return None
+        try:
+            identity = CanonicalSpeciesIdentity(
+                accepted_gbif_key=species.get("accepted_gbif_key"),
+                normalized_binomial=species.get("normalized_binomial") or "",
+                taxonomy_validated=True,
+            )
+        except (TypeError, ValueError):
+            return None
+        return identity.key
+
+    def _row_to_activity_item(
+        self,
+        row: Mapping[str, object],
+        *,
+        phase: EnrichmentActivityPhase,
+        candidate_id: UUID,
+        scientific_name: str,
+        common_name: str | None = None,
+    ) -> EnrichmentActivityItem:
+        """Build one public activity item from durable storage.
+
+        Persisted result and error JSON may be corrupt or oversized (legacy
+        rows, partial writes): only mapping-shaped values are processed,
+        outcomes are validated by phase, counts are clamped, limitations are
+        filtered, and malformed errors degrade to ``None``. Invalid data is
+        never surfaced raw.
+        """
+        payload_raw = row.get("payload")
+        payload = payload_raw if isinstance(payload_raw, Mapping) else {}
+
+        result_raw = row.get("result")
+        result_data = result_raw if isinstance(result_raw, Mapping) else None
+        status = JobStatus(row["status"])
+        job_type = JobType(row["job_type"])
+        result = _activity_result(
+            result_data,
+            phase=phase,
+            status=status,
+        )
+        last_error = None
+        error_raw = row.get("last_error")
+
+        if isinstance(error_raw, Mapping):
+            try:
+                last_error = ReadJobError.model_validate(error_raw)
+            except ValidationError:
+                last_error = None
+        return EnrichmentActivityItem(
+            id=row["id"],
+            job_type=job_type,
+            phase=phase,
+            status=status,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            completed_at=row.get("completed_at"),
+            species_key=self._activity_species_key(payload.get("species")),
+            scientific_name=scientific_name,
+            common_name=common_name,
+            candidate_id=candidate_id,
+            result=result,
+            last_error=last_error,
         )
 
     async def get_backlog_counts(self) -> dict[tuple[str, str], int]:

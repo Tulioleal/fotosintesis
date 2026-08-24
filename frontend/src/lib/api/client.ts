@@ -51,6 +51,8 @@ export type GbifSearchResponse = components["schemas"]["GbifSearchResponse"];
 export type GbifCandidate = components["schemas"]["GbifCandidate"];
 export type ManualCandidateCreate = components["schemas"]["ManualCandidateCreate"];
 export type TaxonomyCandidate = components["schemas"]["TaxonomyCandidate"];
+export type EnrichmentActivityResponse = components["schemas"]["EnrichmentActivityResponse"];
+export type EnrichmentActivityItem = components["schemas"]["EnrichmentActivityItem"];
 
 type ErrorPayload = {
   detail?: string;
@@ -168,6 +170,22 @@ export const apiClient = {
   getCandidateEnrichment(candidateId: string) {
     return frontendRequest<CandidateEnrichmentStatus>(
       `/api/identifications/candidates/${encodeURIComponent(candidateId)}/enrichment`,
+    );
+  },
+  getEnrichmentActivity(options?: {
+    limit?: number;
+    cursor?: string;
+  }): Promise<EnrichmentActivityResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.cursor) {
+      params.set("cursor", options.cursor);
+    }
+    const query = params.toString();
+    return frontendRequest<EnrichmentActivityResponse>(
+      `/api/jobs/enrichment-activity${query ? `?${query}` : ""}`,
     );
   },
   getPlantProfile(scientificName: string, candidateId: string, language: string) {

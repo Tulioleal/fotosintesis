@@ -168,7 +168,7 @@ class TestRenderedWorkerContract:
             "JOBS_METRICS_PORT",
             "JOBS_REQUIRED_CONTRACTS",
         } <= worker_env.keys()
-        assert worker_env["JOBS_REQUIRED_CONTRACTS"] == "enrich_confirmed_plant:1"
+        assert worker_env["JOBS_REQUIRED_CONTRACTS"] == "enrich_confirmed_plant:1,refresh_profile:1"
         assert "__" not in (rendered / "30-backend.yaml").read_text(encoding="utf-8")
         assert "__" not in (rendered / "55-worker.yaml").read_text(encoding="utf-8")
 
@@ -558,7 +558,7 @@ def test_compose_runs_local_worker_with_postgresql_and_production_entrypoint() -
         "${JOBS_WORKER_ENABLED:-true}"
     )
     assert worker["environment"]["JOBS_REQUIRED_CONTRACTS"] == (
-        "enrich_confirmed_plant:1"
+        "enrich_confirmed_plant:1,refresh_profile:1"
     )
     assert ".:/workspace" in worker["volumes"]
 
@@ -651,7 +651,7 @@ def test_deploy_verifies_compatible_worker_before_backend_can_schedule() -> None
 
     assert worker_apply < compatibility < backend_apply
     step = text[compatibility:backend_apply]
-    assert "enrich_confirmed_plant:1" in step
+    assert "enrich_confirmed_plant:1,refresh_profile:1" in step
     assert "JOBS_REQUIRED_CONTRACTS" in step
     assert "rollout-deployment.sh" in step
     assert "--for=condition=Ready" in step
@@ -925,3 +925,23 @@ class TestDeploymentSwitchPolicy:
         assert "JOBS_REQUIRED_CONTRACTS" in readiness
         assert "rollout-deployment.sh" in readiness
         assert "JOBS_WORKER_ENABLED" in readiness
+
+
+@pytest.mark.parametrize("values_fixture", [DEV_VALUES, PROD_VALUES])
+def test_enrichment_activity_settings_render_into_backend(
+    tmp_path: Path, values_fixture: Path
+) -> None:
+    rendered = _render(tmp_path, values_fixture)
+    config_text = (rendered / "20-config.yaml").read_text(encoding="utf-8")
+    backend_text = (rendered / "30-backend.yaml").read_text(encoding="utf-8")
+
+    assert "__ENRICHMENT_ACTIVITY_" not in config_text
+    assert "__ENRICHMENT_ACTIVITY_" not in backend_text
+    assert (
+        "ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS" in backend_text
+    )
+    assert "ENRICHMENT_ACTIVITY_MAX_ITEMS" in backend_text
+
+    values = values_fixture.read_text(encoding="utf-8")
+    assert "ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS=24" in values
+    assert "ENRICHMENT_ACTIVITY_MAX_ITEMS=20" in values

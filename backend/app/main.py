@@ -1,6 +1,7 @@
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.assistant import router as assistant_router
@@ -46,6 +47,19 @@ def create_app() -> CorsApplication:
     app = FastAPI(title=settings.app_name)
 
     app.middleware("http")(request_observability_middleware)
+
+    @app.middleware("http")
+    async def private_activity_cache_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Any]]
+    ) -> Any:
+        # Owner-scoped activity data must never be stored by any cache layer,
+        # including on error statuses produced before the route body runs.
+        response = await call_next(request)
+        if request.url.path.endswith("/jobs/enrichment-activity"):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
     app.include_router(auth_router)
     app.include_router(home_router)
     app.include_router(identifications_router)

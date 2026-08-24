@@ -170,6 +170,16 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: EMBEDDING_DIMENSION
+            - name: ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS
+            - name: ENRICHMENT_ACTIVITY_MAX_ITEMS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: ENRICHMENT_ACTIVITY_MAX_ITEMS
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:

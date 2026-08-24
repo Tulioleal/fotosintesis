@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { apiClient } from "@/lib/api/client";
 import { resolveImageUrl } from "@/lib/images";
+import { EnrichmentActivitySummary } from "../enrichment/EnrichmentActivitySummary";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./HomeDashboard.module.scss";
 import { AppLink, ImageCard } from "../ui";
@@ -123,6 +124,8 @@ export function HomeDashboard() {
         </h1>
         <p className={styles.lead}>Bienvenido de vuelta a tu espacio verde.</p>
       </header>
+
+      <EnrichmentActivitySummary />
 
       <section className={styles.mosaic} aria-label="Acceso rápido">
         <h2 className={styles.sectionHeading}>Acceso rápido</h2>

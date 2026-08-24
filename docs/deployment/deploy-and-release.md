@@ -124,7 +124,7 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
     diagnostics before failing the workflow.
 7. **Enrichment worker compatibility** - after migrations, the worker is applied
    and must become ready with
-   `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1` before the backend is
+   `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1,refresh_profile:1` before the backend is
    applied. Worker startup verifies that the exact closed job type and payload
    version are registered, so confirmation scheduling cannot lead the consumer.
 8. **Backend in-cluster smoke** - a one-off curl pod hits

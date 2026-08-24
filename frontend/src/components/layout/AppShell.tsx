@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { BottomNavigation } from "./BottomNavigation";
+import { EnrichmentActivityAnnouncer } from "../enrichment/EnrichmentActivityAnnouncer";
+import { EnrichmentActivityProvider } from "../enrichment/EnrichmentActivityProvider";
 import { LogoutButton } from "./LogoutButton";
 import styles from "./AppShell.module.scss";
 
@@ -9,41 +11,45 @@ export function AppShell({
 }: Readonly<{ children: ReactNode; fullBleed?: boolean }>) {
   const canvasClass = `${styles.canvas}${fullBleed ? ` ${styles.canvasFullBleed}` : ""}`;
   return (
-    <div className={styles.shell}>
-      <header className={styles.topBar}>
-        <div className={styles.topBarInner}>
-          <a className={styles.brand} href="/home">
-            Fotosíntesis
-          </a>
-          <nav
-            className={styles.topNav}
-            aria-label="Navegación principal de escritorio"
-          >
-            <BottomNavigation variant="top" />
-          </nav>
-          <div className={styles.topActions}>
-            <LogoutButton />
+    <EnrichmentActivityProvider>
+      <div className={styles.shell}>
+        <header className={styles.topBar}>
+          <div className={styles.topBarInner}>
+            <a className={styles.brand} href="/home">
+              Fotosíntesis
+            </a>
+            <nav
+              className={styles.topNav}
+              aria-label="Navegación principal de escritorio"
+            >
+              <BottomNavigation variant="top" />
+            </nav>
+            <div className={styles.topActions}>
+              <LogoutButton />
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className={canvasClass}>{children}</main>
+        <EnrichmentActivityAnnouncer />
 
-      <nav
-        className={styles.bottomNav}
-        aria-label="Navegación principal"
-      >
-        <BottomNavigation variant="bottom" />
-      </nav>
+        <main className={canvasClass}>{children}</main>
 
-      <footer className={styles.footer}>
-        <div className={styles.footerInner}>
-          <span className={styles.footerBrand}>Fotosíntesis</span>
-          <span className={styles.footerCopy}>
-            © {new Date().getFullYear()} Fotosíntesis. Todos los derechos reservados.
-          </span>
-        </div>
-      </footer>
-    </div>
+        <nav
+          className={styles.bottomNav}
+          aria-label="Navegación principal"
+        >
+          <BottomNavigation variant="bottom" />
+        </nav>
+
+        <footer className={styles.footer}>
+          <div className={styles.footerInner}>
+            <span className={styles.footerBrand}>Fotosíntesis</span>
+            <span className={styles.footerCopy}>
+              © {new Date().getFullYear()} Fotosíntesis. Todos los derechos reservados.
+            </span>
+          </div>
+        </footer>
+      </div>
+    </EnrichmentActivityProvider>
   );
 }

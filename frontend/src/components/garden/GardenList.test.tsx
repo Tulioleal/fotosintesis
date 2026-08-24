@@ -1,6 +1,6 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithQueryClient } from "@/test/renderWithQueryClient";
+import { renderWithActivityProvider as renderWithQueryClient } from "@/test/renderWithQueryClient";
 import { GardenList } from "./GardenList";
 
 const plant = {
@@ -30,11 +30,13 @@ const plant = {
 
 const mocks = vi.hoisted(() => ({
   listGardenPlants: vi.fn(),
+  getEnrichmentActivity: vi.fn(),
 }));
 
 vi.mock("@/lib/api/client", () => ({
   apiClient: {
     listGardenPlants: mocks.listGardenPlants,
+    getEnrichmentActivity: mocks.getEnrichmentActivity,
   },
 }));
 
@@ -42,6 +44,11 @@ describe("GardenList", () => {
   beforeEach(() => {
     mocks.listGardenPlants.mockReset();
     mocks.listGardenPlants.mockResolvedValue([plant]);
+    mocks.getEnrichmentActivity.mockReset();
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [],
+      has_more: false,
+    });
   });
 
   it("renders the loading state while the garden list query is pending", () => {
@@ -146,5 +153,126 @@ describe("GardenList", () => {
     expect(card).not.toBeNull();
     expect(card).toHaveAttribute("href", "/garden/garden-2");
     expect(screen.queryByRole("img", { name: "Sin foto" })).not.toBeInTheDocument();
+  });
+});
+
+const activityItem = (
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  id: "22222222-2222-4222-8222-222222222222",
+  job_type: "enrich_confirmed_plant",
+  phase: "evidence",
+  status: "processing",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: "2026-08-01T00:00:00Z",
+  completed_at: null,
+  species_key: "gbif:1|binomial:Nephrolepis exaltata",
+  scientific_name: "Nephrolepis exaltata",
+  common_name: null,
+  candidate_id: "candidate-1",
+  result: null,
+  last_error: null,
+  ...overrides,
+});
+
+describe("GardenList enrichment activity", () => {
+  beforeEach(() => {
+    mocks.listGardenPlants.mockReset().mockResolvedValue([plant]);
+    mocks.getEnrichmentActivity
+      .mockReset()
+      .mockResolvedValue({ items: [], has_more: false });
+  });
+
+  it("shows processing evidence activity with a valid profile link", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [activityItem()],
+      has_more: false,
+    });
+
+    renderWithQueryClient(<GardenList />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Trabajo en segundo plano" }),
+    ).toBeVisible();
+    expect(screen.getAllByText(/continúa en segundo plano/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("link", { name: /Ver perfil de Nephrolepis exaltata/ }),
+    ).toHaveAttribute(
+      "href",
+      "/profiles/Nephrolepis%20exaltata?candidateId=candidate-1",
+    );
+  });
+
+  it("retains partial evidence activity in the recent list", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        activityItem({
+          status: "partial",
+          completed_at: "2026-08-01T00:05:00Z",
+          result: {
+            outcome: "partial",
+            covered_count: 2,
+            missing_count: 1,
+            regenerated_section_count: 0,
+            stale_section_count: 0,
+            limitations: ["missing_required_aspects"],
+          },
+        }),
+      ],
+      has_more: false,
+    });
+
+    renderWithQueryClient(<GardenList />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Actividad reciente" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Encontramos evidencia útil/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows failed activity with recovery guidance", async () => {
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [
+        activityItem({
+          status: "failed",
+          completed_at: "2026-08-01T00:05:00Z",
+          last_error: { category: "attempts_exhausted", retryable: false },
+        }),
+      ],
+      has_more: false,
+    });
+
+    renderWithQueryClient(<GardenList />);
+
+    expect(
+      await screen.findByText(/No pudimos ampliar la evidencia/),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/ampliar la evidencia nuevamente/),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the garden usable when the activity request fails and retries", async () => {
+    mocks.getEnrichmentActivity.mockRejectedValue(new Error("offline"));
+
+    renderWithQueryClient(<GardenList />);
+
+    const retry = await screen.findByRole("button", { name: "Reintentar" });
+    expect(
+      screen.getByText(/No pudimos actualizar el estado del trabajo/),
+    ).toBeInTheDocument();
+    // The garden cards remain rendered and usable.
+    expect(screen.getByText("Helecho")).toBeInTheDocument();
+
+    mocks.getEnrichmentActivity.mockResolvedValue({
+      items: [activityItem()],
+      has_more: false,
+    });
+    fireEvent.click(retry);
+    expect(
+      await screen.findByRole("heading", { name: "Trabajo en segundo plano" }),
+    ).toBeInTheDocument();
   });
 });

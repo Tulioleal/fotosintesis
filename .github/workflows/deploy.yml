@@ -110,6 +110,8 @@ env:
   GEMINI_JUDGE_MODEL: ${{ vars.GEMINI_JUDGE_MODEL || 'gemini-2.5-flash' }}
   GEMINI_SEARCH_MODEL: ${{ vars.GEMINI_SEARCH_MODEL || 'gemini-2.5-flash' }}
   EMBEDDING_DIMENSION: ${{ vars.EMBEDDING_DIMENSION || '8' }}
+  ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS: ${{ vars.ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS || '24' }}
+  ENRICHMENT_ACTIVITY_MAX_ITEMS: ${{ vars.ENRICHMENT_ACTIVITY_MAX_ITEMS || '20' }}
   FRONTEND_EXPOSURE_MODE: ${{ vars.FRONTEND_EXPOSURE_MODE || 'ip-http' }}
   FRONTEND_HOSTNAME: ${{ vars.FRONTEND_HOSTNAME || '' }}
   MANAGED_CERTIFICATE_NAME: ${{ vars.MANAGED_CERTIFICATE_NAME || 'fotosintesis-managed-cert' }}
@@ -141,7 +143,7 @@ env:
   JOBS_SHUTDOWN_DRAIN_SECONDS: ${{ vars.JOBS_SHUTDOWN_DRAIN_SECONDS || '30' }}
   JOBS_METRICS_HOST: ${{ vars.JOBS_METRICS_HOST || '0.0.0.0' }}
   JOBS_METRICS_PORT: ${{ vars.JOBS_METRICS_PORT || '9100' }}
-  JOBS_REQUIRED_CONTRACTS: enrich_confirmed_plant:1
+  JOBS_REQUIRED_CONTRACTS: enrich_confirmed_plant:1,refresh_profile:1
   JOBS_TERMINATION_GRACE_PERIOD_SECONDS: ${{ vars.JOBS_TERMINATION_GRACE_PERIOD_SECONDS || '90' }}
   # Container resource profiles (requests/limits). The renderer fails when any
   # is absent, so no container relies on an implicit default. Set via repo vars
@@ -579,6 +581,8 @@ jobs:
             echo "GEMINI_JUDGE_MODEL=${GEMINI_JUDGE_MODEL}"
             echo "GEMINI_SEARCH_MODEL=${GEMINI_SEARCH_MODEL}"
             echo "EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION}"
+            echo "ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS=${ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS}"
+            echo "ENRICHMENT_ACTIVITY_MAX_ITEMS=${ENRICHMENT_ACTIVITY_MAX_ITEMS}"
             echo "JOBS_PRODUCER_ENABLED=${JOBS_PRODUCER_ENABLED}"
             echo "JOBS_WORKER_ENABLED=${JOBS_WORKER_ENABLED}"
             echo "JOBS_POLL_INTERVAL_SECONDS=${JOBS_POLL_INTERVAL_SECONDS}"
@@ -988,8 +992,8 @@ jobs:
               --namespace "$TF_OUT_NAMESPACE" \
               -o jsonpath='{.spec.template.spec.containers[?(@.name=="worker")].env[?(@.name=="JOBS_REQUIRED_CONTRACTS")].value}'
           )"
-          if [ "$worker_contract" != "enrich_confirmed_plant:1" ]; then
-            echo "::error::Worker does not require enrich_confirmed_plant payload version 1." >&2
+          if [ "$worker_contract" != "enrich_confirmed_plant:1,refresh_profile:1" ]; then
+            echo "::error::Worker must require both enrich_confirmed_plant:1 and refresh_profile:1 contracts." >&2
             echo "result=fail" >> "$GITHUB_OUTPUT"
             exit 1
           fi

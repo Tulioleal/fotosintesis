@@ -305,55 +305,65 @@ class ProductionEnrichmentService:
                 allowed_aspects=allowed_aspects,
             )
 
-            states: list[object] = []
-            if final.answerability.status in {"full", "partial"}:
-                for claim in accepted_claims:
-                    state = await persistence.persist_claim_relational(
-                        identity=identity,
-                        taxonomy_provenance_id=payload.taxonomy_provenance_id,
-                        claim=claim,
-                        job_id=payload.run_id,
-                        progress=progress,
-                    )
-                    states.append(state)
+            # Phase A atomicity: evidence, validation, final-judging progress,
+            # the refresh signal, and its causal association commit together or
+            # not at all. No intermediate commits may run inside this block.
+            try:
+                states: list[object] = []
+                if final.answerability.status in {"full", "partial"}:
+                    for claim in accepted_claims:
+                        state = await persistence.persist_claim_relational(
+                            identity=identity,
+                            taxonomy_provenance_id=payload.taxonomy_provenance_id,
+                            claim=claim,
+                            job_id=payload.run_id,
+                            progress=progress,
+                            commit=False,
+                        )
+                        states.append(state)
 
-            validation_id = await persistence.record_validation(
-                job_id=payload.run_id,
-                taxonomy_provenance_id=payload.taxonomy_provenance_id,
-                policy_version=policy.version,
-                required_aspects=[item.value for item in required],
-                covered_aspects=[item.value for item in covered],
-                missing_aspects=[item.value for item in missing],
-                answerability_status=final.answerability.status,
-                judge_confidence=final.answerability.confidence,
-                validation_metadata={
-                    "acquisition_avoided": False,
-                    "search_count": len(acquisition.searched_groups),
-                    "accepted_claim_count": len(accepted_claims),
-                },
-            )
-            await progress.record_final_judging(
-                job_id=payload.run_id,
-                final_covered_aspects=[item.value for item in covered],
-                final_missing_aspects=[item.value for item in missing],
-                answerability_status=final.answerability.status,
-                last_validation_run_id=validation_id,
-            )
-            if accepted_claims and covered:
-                await enqueue_profile_refresh(
-                    session,
-                    identity=identity,
-                    changed_aspects=[item.value for item in covered],
-                    generation_policy_version=policy.version,
-                    evidence=[
-                        {
-                            "source_url": claim.source_url,
-                            "source_version": claim.source_version,
-                        }
-                        for claim in accepted_claims
-                    ],
+                validation_id = await persistence.record_validation(
+                    job_id=payload.run_id,
+                    taxonomy_provenance_id=payload.taxonomy_provenance_id,
+                    policy_version=policy.version,
+                    required_aspects=[item.value for item in required],
+                    covered_aspects=[item.value for item in covered],
+                    missing_aspects=[item.value for item in missing],
+                    answerability_status=final.answerability.status,
+                    judge_confidence=final.answerability.confidence,
+                    validation_metadata={
+                        "acquisition_avoided": False,
+                        "search_count": len(acquisition.searched_groups),
+                        "accepted_claim_count": len(accepted_claims),
+                    },
+                    commit=False,
                 )
-            await session.commit()
+                await progress.record_final_judging(
+                    job_id=payload.run_id,
+                    final_covered_aspects=[item.value for item in covered],
+                    final_missing_aspects=[item.value for item in missing],
+                    answerability_status=final.answerability.status,
+                    last_validation_run_id=validation_id,
+                )
+                if accepted_claims and covered:
+                    await enqueue_profile_refresh(
+                        session,
+                        identity=identity,
+                        changed_aspects=[item.value for item in covered],
+                        generation_policy_version=policy.version,
+                        evidence=[
+                            {
+                                "source_url": claim.source_url,
+                                "source_version": claim.source_version,
+                            }
+                            for claim in accepted_claims
+                        ],
+                        caused_by_enrichment_job_id=payload.run_id,
+                    )
+                await session.commit()
+            except BaseException:
+                await session.rollback()
+                raise
 
             states_by_document_id = {
                 state.document_id: state for state in states

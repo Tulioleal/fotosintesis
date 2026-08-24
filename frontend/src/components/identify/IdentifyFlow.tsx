@@ -25,8 +25,10 @@ import { buildAssistantHref } from "@/lib/assistant";
 import styles from "./IdentifyFlow.module.scss";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { apiClient } from "@/lib/api/client";
 import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
+import { ACTIVITY_QUERY_KEY } from "@/lib/enrichment-activity";
 
 type Candidate = {
   id: string;
@@ -107,6 +109,8 @@ const recoveryCopy: Record<string, { heading: string; message: string }> = {
 export function IdentifyFlow() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const userId = session?.user?.id ?? "anonymous";
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const confirmingCandidateRef = useRef<string | null>(null);
@@ -198,9 +202,14 @@ export function IdentifyFlow() {
       const scientificName = candidateScientificName(candidate);
       const language = typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es";
       queryClient.setQueryData(
-        candidateEnrichmentQueryKey(candidate.id, scientificName, language),
+        candidateEnrichmentQueryKey(userId, candidate.id, scientificName, language),
         confirmation.enrichment,
       );
+
+      await queryClient.invalidateQueries({
+        queryKey: ACTIVITY_QUERY_KEY,
+      });
+
       router.push(
         `/profiles/${encodeURIComponent(scientificName)}?candidateId=${encodeURIComponent(candidate.id)}`,
       );

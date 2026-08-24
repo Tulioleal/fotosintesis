@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+import base64
+import binascii
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Literal, TypeAlias
+from typing import Literal, Self, TypeAlias
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
@@ -367,6 +371,148 @@ class CandidateEnrichmentStatus(ApiSchema):
     candidate_id: UUID
     policy_version: int = Field(ge=1)
     job: JobStatusResponse
+
+
+class EnrichmentActivityPhase(str, Enum):
+    evidence = "evidence"
+    profile_refresh = "profile_refresh"
+
+
+class EnrichmentActivityResult(BaseModel):
+    """Bounded, metadata-only outcome for the cross-page activity view.
+
+    Counts and limitation categories only: never raw aspects, source bodies,
+    claims, quotes, or provider diagnostics.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["complete", "partial", "noop"] | None = None
+    covered_count: int = Field(default=0, ge=0, le=MAX_ENRICHMENT_ASPECTS)
+    missing_count: int = Field(default=0, ge=0, le=MAX_ENRICHMENT_ASPECTS)
+    regenerated_section_count: int = Field(
+        default=0, ge=0, le=MAX_ENRICHMENT_ASPECTS
+    )
+    stale_section_count: int = Field(default=0, ge=0, le=MAX_ENRICHMENT_ASPECTS)
+    limitations: list[EnrichmentLimitation] = Field(
+        default_factory=list,
+        max_length=MAX_LIMITATIONS_PER_RESULT,
+    )
+
+
+class EnrichmentActivityItem(ApiSchema):
+    id: UUID
+    job_type: JobType
+    phase: EnrichmentActivityPhase
+    status: JobStatus
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    species_key: str | None = None
+    # Every surfaced item must carry usable profile context: the accepted
+    # display name and the authorized candidate id behind its link.
+    scientific_name: str = Field(min_length=1)
+    common_name: str | None = None
+    candidate_id: UUID
+    result: EnrichmentActivityResult | None = None
+    last_error: ReadJobError | None = None
+
+    @model_validator(mode="after")
+    def validate_phase(self) -> Self:
+        expected_phase = {
+            JobType.enrich_confirmed_plant: EnrichmentActivityPhase.evidence,
+            JobType.refresh_profile: EnrichmentActivityPhase.profile_refresh,
+        }.get(self.job_type)
+
+        if expected_phase is None or self.phase != expected_phase:
+            raise ValueError("invalid activity job type and phase combination")
+
+        if self.status in {JobStatus.pending, JobStatus.processing}:
+            if self.completed_at is not None:
+                raise ValueError("active activity cannot carry completed_at")
+        elif self.completed_at is None:
+            raise ValueError("terminal activity requires completed_at")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at precedes created_at")
+        if self.completed_at is not None and self.completed_at < self.created_at:
+            raise ValueError("completed_at precedes created_at")
+        if (
+            self.completed_at is not None
+            and self.updated_at is not None
+            and self.completed_at > self.updated_at
+        ):
+            raise ValueError("completed_at follows updated_at")
+
+        return self
+
+
+class EnrichmentActivityResponse(ApiSchema):
+    items: list[EnrichmentActivityItem] = Field(
+        default_factory=list, max_length=100
+    )
+    has_more: bool = False
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class EnrichmentActivityCursor:
+    """Opaque keyset cursor over the stable activity ordering tuple."""
+
+    updated_at: datetime
+    job_id: UUID
+
+
+def encode_enrichment_activity_cursor(
+    item: EnrichmentActivityItem,
+) -> str:
+    payload = json.dumps(
+        {
+            "updated_at": item.updated_at.isoformat(),
+            "id": str(item.id),
+        }
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def decode_enrichment_activity_cursor(
+    raw: str,
+) -> EnrichmentActivityCursor | None:
+    """Decode defensively; malformed cursors yield ``None`` (HTTP 422).
+
+    Accepts only canonical urlsafe base64, exactly the two expected fields,
+    and timezone-aware timestamps (normalized to UTC).
+    """
+    try:
+        padding = "=" * (-len(raw) % 4)
+        decoded = base64.b64decode(
+            raw + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        payload = json.loads(decoded)
+    except (ValueError, binascii.Error):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if set(payload) != {"updated_at", "id"}:
+        return None
+    updated_at_raw = payload["updated_at"]
+    job_id_raw = payload["id"]
+    if not isinstance(updated_at_raw, str) or not isinstance(job_id_raw, str):
+        return None
+    try:
+        updated_at = datetime.fromisoformat(updated_at_raw)
+        job_id = UUID(job_id_raw)
+    except ValueError:
+        return None
+    # A cursor without zone information cannot order rows durably across
+    # storage and serialization boundaries.
+    if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+        return None
+    return EnrichmentActivityCursor(
+        updated_at=updated_at.astimezone(UTC),
+        job_id=job_id,
+    )
 
 
 class EnqueueRequest(ApiSchema):

@@ -133,7 +133,16 @@ class EnrichmentEvidencePersistenceService:
         claim: AcceptedEnrichmentClaim,
         job_id: UUID | None = None,
         progress: EnrichmentProgressRepository | None = None,
+        commit: bool = True,
     ) -> EnrichmentEvidenceState:
+        """Persist one accepted claim's relational evidence.
+
+        With ``commit=True`` (the historical standalone behavior) each write
+        commits immediately. With ``commit=False`` nothing is committed:
+        unique-conflict convergence runs inside a SAVEPOINT so the caller's
+        outer transaction stays usable, and the caller owns the final commit
+        so evidence, validation, and refresh causality land atomically.
+        """
         if not claim.supported_aspects:
             raise ValueError("accepted enrichment evidence requires supported aspects")
         progress = progress or _NoOpProgress()
@@ -169,7 +178,8 @@ class EnrichmentEvidencePersistenceService:
                     job_id=job_id,
                     persisted_aspects=claim.supported_aspects,
                 )
-                await self.repository.session.commit()
+                if commit:
+                    await self.repository.session.commit()
             except BaseException:
                 await self.repository.session.rollback()
                 raise
@@ -224,37 +234,16 @@ class EnrichmentEvidencePersistenceService:
         )
         document_id = stable_enrichment_document_id(content_key)
 
-        try:
-            await self.vector_index.persist_enrichment_relational(
-                document,
-                ingestion=stable_ingestion,
-                enrichment=metadata,
-                document_id=document_id,
-            )
-            await self.repository.add_enrichment_aspect_supports(
-                document_id=document_id,
-                aspects=list(claim.supported_aspects),
-                confidence=claim.confidence,
-                review_status=ReviewStatus.auto_ingested,
-            )
-            await progress.record_persisted_aspects(
-                job_id=job_id,
-                persisted_aspects=claim.supported_aspects,
-            )
-            await self.repository.session.commit()
-        except IntegrityError as exc:
-            await self.repository.session.rollback()
-
-            if not _is_expected_enrichment_conflict(exc):
-                raise
-
-            winner = await self.repository.get_enrichment_evidence_state(metadata)
-            if winner is None:
-                raise
-
+        if commit:
             try:
+                await self.vector_index.persist_enrichment_relational(
+                    document,
+                    ingestion=stable_ingestion,
+                    enrichment=metadata,
+                    document_id=document_id,
+                )
                 await self.repository.add_enrichment_aspect_supports(
-                    document_id=winner.document_id,
+                    document_id=document_id,
                     aspects=list(claim.supported_aspects),
                     confidence=claim.confidence,
                     review_status=ReviewStatus.auto_ingested,
@@ -264,18 +253,90 @@ class EnrichmentEvidencePersistenceService:
                     persisted_aspects=claim.supported_aspects,
                 )
                 await self.repository.session.commit()
+            except IntegrityError as exc:
+                await self.repository.session.rollback()
+
+                if not _is_expected_enrichment_conflict(exc):
+                    raise
+
+                winner = await self.repository.get_enrichment_evidence_state(metadata)
+                if winner is None:
+                    raise
+
+                try:
+                    await self.repository.add_enrichment_aspect_supports(
+                        document_id=winner.document_id,
+                        aspects=list(claim.supported_aspects),
+                        confidence=claim.confidence,
+                        review_status=ReviewStatus.auto_ingested,
+                    )
+                    await progress.record_persisted_aspects(
+                        job_id=job_id,
+                        persisted_aspects=claim.supported_aspects,
+                    )
+                    await self.repository.session.commit()
+                except BaseException:
+                    await self.repository.session.rollback()
+                    raise
+                refreshed = await self.repository.get_enrichment_evidence_state(metadata)
+                if refreshed is None:
+                    raise RuntimeError(
+                        "enrichment evidence state disappeared after aspect association"
+                    )
+                return refreshed
             except BaseException:
                 await self.repository.session.rollback()
                 raise
-            refreshed = await self.repository.get_enrichment_evidence_state(metadata)
-            if refreshed is None:
-                raise RuntimeError(
-                    "enrichment evidence state disappeared after aspect association"
+        else:
+            # Nested inside the caller's transaction: converge duplicate-evidence
+            # races through a SAVEPOINT instead of rolling back the whole outer
+            # transaction.
+            try:
+                async with self.repository.session.begin_nested():
+                    await self.vector_index.persist_enrichment_relational(
+                        document,
+                        ingestion=stable_ingestion,
+                        enrichment=metadata,
+                        document_id=document_id,
+                    )
+                    await self.repository.add_enrichment_aspect_supports(
+                        document_id=document_id,
+                        aspects=list(claim.supported_aspects),
+                        confidence=claim.confidence,
+                        review_status=ReviewStatus.auto_ingested,
+                    )
+            except IntegrityError as exc:
+                if not _is_expected_enrichment_conflict(exc):
+                    raise
+
+                winner = await self.repository.get_enrichment_evidence_state(metadata)
+                if winner is None:
+                    raise
+
+                await self.repository.add_enrichment_aspect_supports(
+                    document_id=winner.document_id,
+                    aspects=list(claim.supported_aspects),
+                    confidence=claim.confidence,
+                    review_status=ReviewStatus.auto_ingested,
                 )
-            return refreshed
-        except BaseException:
-            await self.repository.session.rollback()
-            raise
+                refreshed = await self.repository.get_enrichment_evidence_state(
+                    metadata
+                )
+                if refreshed is None:
+                    raise RuntimeError(
+                        "enrichment evidence state disappeared after aspect association"
+                    )
+
+                await progress.record_persisted_aspects(
+                    job_id=job_id,
+                    persisted_aspects=claim.supported_aspects,
+                )
+                return refreshed
+
+            await progress.record_persisted_aspects(
+                job_id=job_id,
+                persisted_aspects=claim.supported_aspects,
+            )
 
         authoritative = await self.repository.get_enrichment_evidence_state_by_document_id(
             document_id
@@ -354,6 +415,7 @@ class EnrichmentEvidencePersistenceService:
         answerability_status: str,
         judge_confidence: float,
         validation_metadata: dict[str, object],
+        commit: bool = True,
     ) -> UUID:
         fingerprint = json.dumps(
             {
@@ -381,7 +443,8 @@ class EnrichmentEvidencePersistenceService:
             judge_confidence=judge_confidence,
             validation_metadata=validation_metadata,
         )
-        await self.repository.session.commit()
+        if commit:
+            await self.repository.session.commit()
         return validation_id
 
 

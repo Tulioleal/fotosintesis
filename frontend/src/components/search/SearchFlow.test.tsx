@@ -2,12 +2,32 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchFlow } from "./SearchFlow";
 import { renderWithQueryClient } from "@/test/renderWithQueryClient";
+import { ACTIVITY_QUERY_KEY } from "@/lib/enrichment-activity";
+import { TEST_USER_ID } from "@/test/mock-session";
+import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
 
 const mocks = vi.hoisted(() => ({
   searchPlants: vi.fn(),
   searchGbif: vi.fn(),
   createManualCandidate: vi.fn(),
   confirmManualCandidate: vi.fn(),
+  push: vi.fn(),
+  setQueryData: vi.fn(),
+  invalidateQueries: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mocks.push }),
+}));
+
+vi.mock("@tanstack/react-query", async () => ({
+  ...(await vi.importActual<typeof import("@tanstack/react-query")>(
+    "@tanstack/react-query",
+  )),
+  useQueryClient: () => ({
+    setQueryData: mocks.setQueryData,
+    invalidateQueries: mocks.invalidateQueries,
+  }),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -34,6 +54,9 @@ describe("SearchFlow", () => {
     mocks.searchGbif.mockReset();
     mocks.createManualCandidate.mockReset();
     mocks.confirmManualCandidate.mockReset();
+    mocks.push.mockReset();
+    mocks.setQueryData.mockReset();
+    mocks.invalidateQueries.mockReset();
   });
 
   it("shows local results and labels them as local", async () => {
@@ -169,6 +192,77 @@ describe("SearchFlow", () => {
     await waitFor(() => {
       expect(mocks.confirmManualCandidate).toHaveBeenCalledWith("candidate-1");
     });
+    // Confirmation seeds the candidate enrichment cache, wakes the shared
+    // activity tracker, and only then navigates in-app.
+    await waitFor(() => {
+      expect(mocks.invalidateQueries).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.setQueryData).toHaveBeenCalledWith(
+      candidateEnrichmentQueryKey(TEST_USER_ID, "candidate-1", "Monstera deliciosa", "en"),
+      undefined,
+    );
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ACTIVITY_QUERY_KEY,
+    });
+    const setOrder = mocks.setQueryData.mock.invocationCallOrder[0];
+    const invalidateOrder = mocks.invalidateQueries.mock.invocationCallOrder[0];
+    expect(setOrder).toBeLessThan(invalidateOrder);
+    await waitFor(() => {
+      expect(mocks.push).toHaveBeenCalledWith(
+        "/profiles/Monstera%20deliciosa?candidateId=candidate-1",
+      );
+    });
+    const navigationOrder = mocks.push.mock.invocationCallOrder[0];
+    expect(invalidateOrder).toBeLessThan(navigationOrder);
+  });
+
+  it("does not invalidate activity or navigate when confirmation fails", async () => {
+    mocks.searchPlants.mockResolvedValue({ results: [] });
+    mocks.searchGbif.mockResolvedValue({
+      candidates: [
+        {
+          key: 1,
+          accepted_key: 100,
+          accepted_scientific_name: "Monstera deliciosa",
+          binomial_name: "Monstera deliciosa",
+          rank: "SPECIES",
+          taxonomic_status: "ACCEPTED",
+        },
+      ],
+    });
+    mocks.createManualCandidate.mockResolvedValue({
+      id: "candidate-1",
+      suggested_scientific_name: "Monstera deliciosa",
+      binomial_name: "Monstera deliciosa",
+      accepted_scientific_name: "Monstera deliciosa",
+      validation_status: "validated",
+      confidence_label: "manual",
+    });
+    mocks.confirmManualCandidate.mockRejectedValue(new Error("nope"));
+
+    renderWithQueryClient(<SearchFlow />);
+    fireEvent.change(screen.getByLabelText("Nombre de la planta"), {
+      target: { value: "Monstera" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Buscar" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Candidatas externas (GBIF)")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Seleccionar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Crear candidata" }));
+
+    await waitFor(() => {
+      expect(mocks.createManualCandidate).toHaveBeenCalled();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirmar y ver perfil" }),
+    );
+
+    await screen.findByText("No pudimos confirmar la candidata. Reintentá.");
+    expect(mocks.invalidateQueries).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 
   it("provides keyboard-operable controls and a live region", async () => {
