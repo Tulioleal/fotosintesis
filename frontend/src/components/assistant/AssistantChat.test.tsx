@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantChat, AssistantMessageContent } from "./AssistantChat";
 
@@ -380,5 +380,73 @@ describe("AssistantChat", () => {
     expect(workspace).not.toBeNull();
     expect(workspace?.children.length).toBe(1);
     expect(workspace?.firstElementChild).toBe(chatArea);
+  });
+
+  it("shows an informative stage message while waiting and rotates through stages", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveResponse: (value: unknown) => void = () => undefined;
+      mocks.sendAssistantMessage.mockReturnValue(
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        }),
+      );
+
+      render(<AssistantChat />);
+
+      fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+        target: { value: "Como riego?" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+      expect(screen.getByText("Clasificando tu consulta...")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText("Buscando en fuentes confiables...")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(7000);
+      });
+      expect(screen.getByText("Redactando respuesta...")).toBeInTheDocument();
+
+      await act(async () => {
+        resolveResponse({
+          conversation_id: "conversation-1",
+          message: { role: "assistant", content: "Listo.", content_format: "plain_text" },
+          sources: [],
+          requires_confirmation: false,
+          reminder_suggestion: null,
+          tool_failures: [],
+        });
+      });
+
+      expect(screen.queryByText("Redactando respuesta...")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Clasificando tu consulta..."),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scrolls to the newest message when the thread updates", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Hola" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
   });
 });

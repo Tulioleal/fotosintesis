@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   apiClient,
@@ -45,6 +45,15 @@ const recurrenceLabels: Record<ReminderCreate["recurrence"], string> = {
   monthly: "Mensual",
 };
 
+const PENDING_STAGES = [
+  "Clasificando tu consulta...",
+  "Buscando en fuentes confiables...",
+  "Contrastando la informacion...",
+  "Redactando respuesta...",
+];
+
+const PENDING_STAGE_INTERVAL_MS = 3500;
+
 export function AssistantChat() {
   const searchParams = useSearchParams();
   const plant = searchParams.get("plant");
@@ -64,6 +73,33 @@ export function AssistantChat() {
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<number | null>(
     null,
   );
+  const [pendingStage, setPendingStage] = useState(0);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!pending) {
+      setPendingStage(0);
+      return;
+    }
+    setPendingStage(0);
+    const timer = window.setInterval(
+      () => setPendingStage((current) => (current + 1) % PENDING_STAGES.length),
+      PENDING_STAGE_INTERVAL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [pending]);
+
+  useEffect(() => {
+    const node = threadEndRef.current;
+    if (!node || !messages.length) return;
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    node.scrollIntoView?.({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [messages.length, pending]);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -361,10 +397,11 @@ export function AssistantChat() {
               </div>
             ))}
             {pending ? (
-              <p className={styles.meta}>
-                Consultando fuentes y herramientas...
+              <p className={styles.meta} role="status">
+                {PENDING_STAGES[pendingStage]}
               </p>
             ) : null}
+            <div ref={threadEndRef} aria-hidden="true" />
           </div>
 
           {error ? (

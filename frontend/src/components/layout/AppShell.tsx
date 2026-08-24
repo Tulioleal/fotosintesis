@@ -9,10 +9,15 @@ export function AppShell({
   children,
   fullBleed = false,
 }: Readonly<{ children: ReactNode; fullBleed?: boolean }>) {
-  const canvasClass = `${styles.canvas}${fullBleed ? ` ${styles.canvasFullBleed}` : ""}`;
+  const shellClass = fullBleed
+    ? `${styles.shell} ${styles.shellFixed}`
+    : styles.shell;
+  const canvasClass = fullBleed
+    ? `${styles.canvas} ${styles.canvasFullBleed} ${styles.canvasBounded}`
+    : styles.canvas;
   return (
     <EnrichmentActivityProvider>
-      <div className={styles.shell}>
+      <div className={shellClass}>
         <header className={styles.topBar}>
           <div className={styles.topBarInner}>
             <a className={styles.brand} href="/home">
