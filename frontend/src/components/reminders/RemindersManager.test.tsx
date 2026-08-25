@@ -400,16 +400,18 @@ describe("RemindersManager suggestion autopropose UX", () => {
     expect(screen.getByLabelText("Hora")).toHaveValue("09:00");
   });
 
-  it("hides the create-form timezone selector behind advanced options", () => {
+  it("renders a single timezone select in the preference card with no advanced block", () => {
     renderWithQueryClient(<RemindersManager />);
 
-    const details = document.querySelector("details");
-    expect(details).not.toBeNull();
-    expect(details).not.toHaveAttribute("open");
-    expect(details?.querySelector("select")).not.toBeNull();
+    expect(document.querySelector("details")).toBeNull();
+    expect(screen.queryByText("Opciones avanzadas")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("Opciones avanzadas"));
-    expect(details).toHaveAttribute("open");
+    const selects = screen.getAllByLabelText(/^Zona horaria/);
+    expect(selects).toHaveLength(1);
+    const heading = document.getElementById("timezone-preference-heading");
+    expect(heading?.closest("[class*='formCard']")?.contains(selects[0])).toBe(
+      true,
+    );
   });
 
   it("passes the optional context text to the suggestion request", async () => {

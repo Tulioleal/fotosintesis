@@ -38,7 +38,6 @@ type FormState = {
   date: string;
   time: string;
   recurrence: ReminderCreate["recurrence"];
-  timezone: string;
 };
 
 type FormErrors = Partial<Record<keyof FormState, string>>;
@@ -161,7 +160,6 @@ export function RemindersManager() {
     date: "",
     time: "",
     recurrence: "none",
-    timezone: "",
   });
   const [errors, setErrors] = useState<FormErrors>({});
   const [editing, setEditing] = useState<Reminder | null>(null);
@@ -182,9 +180,9 @@ export function RemindersManager() {
   // selectable instead of silently rendering an empty select.
   const timezoneChoices = (() => {
     const known = new Set(TIMEZONE_OPTIONS.map((option) => option.value));
-    const extras = [userTimezone, form.timezone]
-      .filter((value): value is string => Boolean(value) && !known.has(value))
-      .map((value) => ({ value, label: `${value} (detectada)` }));
+    const extras = Array.from(
+      new Set([userTimezone].filter((value): value is string => Boolean(value) && !known.has(value))),
+    ).map((value) => ({ value, label: `${value} (detectada)` }));
     return extras.length ? [...extras, ...TIMEZONE_OPTIONS] : TIMEZONE_OPTIONS;
   })();
 
@@ -224,7 +222,6 @@ export function RemindersManager() {
     if (tz) {
       setUserTimezone(tz);
       setTimezoneDetected(false);
-      setForm((current) => ({ ...current, timezone: current.timezone || tz }));
       return;
     }
     // No stored preference: adopt the device-detected IANA zone as default.
@@ -232,7 +229,6 @@ export function RemindersManager() {
     if (detected) {
       setUserTimezone(detected);
       setTimezoneDetected(true);
-      setForm((current) => ({ ...current, timezone: current.timezone || detected }));
     }
   }, [currentUser.data, currentUser.isSuccess]);
 
@@ -319,7 +315,7 @@ export function RemindersManager() {
       time: form.time,
       recurrence: form.recurrence,
       suggestion_justification: editing?.suggestion_justification ?? null,
-      timezone: form.timezone || userTimezone || null,
+      timezone: userTimezone || null,
     };
     if (editing) updateReminder.mutate({ id: editing.id, payload });
     else createReminder.mutate(payload);
@@ -334,7 +330,6 @@ export function RemindersManager() {
       date: toLocalDateInput(reminder.due_at, reminder.timezone),
       time: toLocalTimeInput(reminder.due_at, reminder.timezone),
       recurrence: reminder.recurrence,
-      timezone: reminder.timezone ?? "",
     });
     setNotice(null);
   }
@@ -349,7 +344,6 @@ export function RemindersManager() {
       date: "",
       time: "",
       recurrence: "none",
-      timezone: userTimezone,
     }));
   }
 
@@ -362,7 +356,6 @@ export function RemindersManager() {
       date: "",
       time: "",
       recurrence: "none",
-      timezone: userTimezone,
     }));
   }
 
@@ -414,14 +407,12 @@ export function RemindersManager() {
 
   function editSuggestionBeforeSave(suggestion: ReminderSuggestionResult) {
     recordSuggestionMetric("edited");
-    const zone = suggestion.timezone || userTimezone || null;
     setForm({
       garden_plant_id: suggestion.garden_plant_id,
       taskType: matchTaskType(suggestion.action),
       date: suggestion.date,
       time: suggestion.time.slice(0, 5),
       recurrence: suggestion.recurrence,
-      timezone: zone ?? "",
     });
     setEditing(null);
     setErrors({});
@@ -443,8 +434,8 @@ export function RemindersManager() {
     try {
       const updated = await apiClient.updateTimezone(userTimezone || null);
       setUserTimezone(updated.timezone ?? "");
-      setForm((current) => ({ ...current, timezone: updated.timezone ?? "" }));
       setTimezoneNotice("Zona horaria guardada.");
+      await queryClient.invalidateQueries({ queryKey: ["user", "me"] });
     } catch (caught) {
       setTimezoneNotice(
         caught instanceof ApiClientError
@@ -653,26 +644,6 @@ export function RemindersManager() {
                   </p>
                 ) : null}
               </div>
-
-              <details className={styles.advancedGroup}>
-                <summary>Opciones avanzadas</summary>
-                <SelectField
-                  kind="select"
-                  label="Zona horaria"
-                  hint="Hora local de este recordatorio."
-                  value={form.timezone}
-                  onChange={(event) => setField("timezone", event.target.value)}
-                  error={errors.timezone}
-                  optionalLabel="opcional"
-                >
-                  <option value="">Usar mi zona horaria</option>
-                  {timezoneChoices.map((tz) => (
-                    <option key={tz.value} value={tz.value}>
-                      {tz.label}
-                    </option>
-                  ))}
-                </SelectField>
-              </details>
 
               <div className={styles.formActions}>
                 <Button

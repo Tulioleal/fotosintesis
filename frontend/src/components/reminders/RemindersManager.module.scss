@@ -605,22 +605,3 @@
   white-space: nowrap;
   border: 0;
 }
-
-.advancedGroup {
-  display: grid;
-  gap: $space-xs;
-}
-
-.advancedGroup > summary {
-  cursor: pointer;
-  color: var(--color-on-surface-variant, #5f6b5f);
-  font-family: $font-body-stack;
-  font-size: 0.8rem;
-  font-weight: $font-weight-medium;
-  letter-spacing: 0.02em;
-  user-select: none;
-
-  &:hover {
-    color: var(--color-on-surface, #1c1b1a);
-  }
-}
