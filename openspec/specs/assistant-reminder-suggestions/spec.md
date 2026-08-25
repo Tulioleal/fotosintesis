@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines the user confirmation and creation flow for reminder suggestions originating from assistant conversations.
-
 ## Requirements
-
 ### Requirement: Assistant reminder suggestion confirmation
 
 The system SHALL let users review and accept reminder suggestions that originate from assistant conversations before those reminders are created.
@@ -61,28 +59,31 @@ Reminder suggestions originating from assistant conversations SHALL include ligh
 
 ### Requirement: Timezone-aware reminder suggestions
 
-Assistant-origin reminder suggestions SHALL carry an effective IANA timezone through display and acceptance so the created reminder schedules at the intended local time.
+Assistant-origin reminder suggestions SHALL carry an effective IANA timezone and explicit local date and time fields through display and acceptance so the created reminder schedules at the intended local time. The frontend SHALL NOT derive local schedule values by slicing formatted timestamps.
 
 #### Scenario: Suggestion carries effective timezone
 
-- **WHEN** an assistant chat response includes a reminder suggestion requiring confirmation
-- **THEN** the suggestion includes the effective IANA timezone used to interpret its due date and time
+- WHEN an assistant chat response includes a reminder suggestion requiring confirmation
+- THEN the suggestion includes the effective IANA timezone used to interpret its due date and time
 
 #### Scenario: Accepted suggestion schedules in effective timezone
 
-- **WHEN** the user accepts an assistant-origin reminder suggestion
-- **THEN** the system creates the reminder through the reminders API using the suggestion's effective timezone and local date and time
+- WHEN the user accepts an assistant-origin reminder suggestion
+- THEN the system creates the reminder through the reminders API using the suggestion's effective timezone and local date and time
+- AND the acceptance payload does not reconstruct date or time by string-splitting an instant
 
 ### Requirement: Evidence-grounded reminder suggestion contract
 
-Reminder suggestions SHALL include the evidence context used to derive them, a confidence indication, limitations, and a concise justification. The justification SHALL persist with the created reminder.
+Chat-origin reminder suggestions SHALL carry the same grounding payload as page-flow suggestions: the evidence context used to derive them, a confidence indication, limitations, and a concise justification, together with the effective IANA timezone and explicit local date and time. Suggestions flagged as requiring confirmation SHALL be presented for review before creation and MUST NOT auto-create. The justification SHALL persist with the created reminder.
 
-#### Scenario: Suggestion returns evidence context
+#### Scenario: Chat suggestion reaches payload parity
 
-- **WHEN** the backend returns a reminder suggestion
-- **THEN** the suggestion includes the evidence context used to derive it, confidence, limitations, and a concise justification
+- WHEN an assistant conversation produces a reminder suggestion
+- THEN the suggestion schema matches the page-flow suggestion contract for evidence, confidence, limitations, justification, timezone, and explicit local schedule fields
 
-#### Scenario: Justification persists on acceptance
+#### Scenario: Confirmation flag is honored
 
-- **WHEN** the user accepts a suggestion
-- **THEN** the created reminder stores the suggestion justification
+- WHEN a chat-origin suggestion is flagged as requiring confirmation
+- THEN the frontend presents the confirmation card and creates only after explicit acceptance
+- AND duplicate acceptance is disabled while creation is in progress
+

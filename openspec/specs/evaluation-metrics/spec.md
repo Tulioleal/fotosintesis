@@ -1,9 +1,7 @@
 ## Purpose
 
 Define correctness requirements for automatic evaluation metrics used by offline evaluation runs.
-
 ## Requirements
-
 ### Requirement: Real BERTScore for referenced text evaluation
 
 The system SHALL compute BERTScore for referenced text outputs using a model-backed BERTScore implementation rather than token-overlap or lexical F1 logic.
@@ -87,3 +85,20 @@ A metric runtime failure SHALL be reported as a metric error and SHALL NOT silen
 - **WHEN** a required metric cannot be computed at runtime
 - **THEN** the case is classified as a metric error
 - **AND** no score is recorded under a different metric name as a substitute
+
+### Requirement: Enforced profiles reject zero thresholds
+
+An enforced evaluation profile MUST NOT contain a `0.0` threshold value: each gated metric is either explicitly configured above zero or omitted from the profile. Loading a profile containing a zero-valued threshold SHALL fail with an explicit configuration error identifying the offending metric.
+
+#### Scenario: Zero thresholds are invalid configuration
+
+- **WHEN** an evaluation profile declares any threshold equal to `0.0`
+- **THEN** profile loading fails with an explicit error naming the metric
+- **AND** the runner does not start a run with that profile
+
+#### Scenario: Omitted metrics contribute nothing silently
+
+- **WHEN** a profile omits a metric threshold entirely
+- **THEN** that metric is reported as observed-but-ungated in the run report
+- **AND** it does not affect approval
+

@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines manual and suggested plant-care reminders, recurrence, lifecycle actions, and notification permission fallback behavior.
-
 ## Requirements
-
 ### Requirement: Reminder lifecycle
 
 The system SHALL allow users to create, list, edit, delete and complete plant-care reminders. All user-facing reminder lifecycle error messages SHALL be in English.
@@ -142,19 +140,13 @@ The system SHALL provide an idempotent reconciliation operation that recomputes 
 
 ### Requirement: Backend-generated reminder suggestions
 
-AI-labeled reminder suggestions SHALL originate from a backend operation that accepts a selected garden plant and an optional user request, resolves the plant's confirmed taxonomy through existing ownership checks, and loads profile evidence, garden location, notes, active reminders, and timezone before proposing a suggestion. The frontend SHALL NOT generate AI-labeled suggestions with local semantic regular expressions or fixed calendar defaults.
+AI-labeled reminder suggestions SHALL originate from a backend operation that accepts a selected garden plant and an optional user request, resolves the plant's confirmed taxonomy through existing ownership checks, and loads profile evidence, garden location, notes, active reminders, and timezone before proposing a suggestion. The frontend SHALL NOT generate AI-labeled suggestions with local semantic regular expressions or fixed calendar defaults, and SHALL NOT rewrite, normalize, or remap backend-supplied action values through local semantic mappings on any acceptance surface, including assistant chat.
 
-#### Scenario: Suggestion originates in the backend
+#### Scenario: Chat acceptance preserves backend semantics
 
-- **WHEN** the reminders page requests a suggestion for a selected garden plant
-- **THEN** the backend generates and returns the suggestion
-- **AND** the frontend does not derive the action with local semantic regexes or fixed calendar defaults
-
-#### Scenario: Suggestion resolves confirmed taxonomy
-
-- **WHEN** the backend generates a suggestion for a selected garden plant
-- **THEN** it resolves the plant's confirmed taxonomy through the existing ownership checks
-- **AND** it does not treat nickname or display name as evidence taxonomy
+- WHEN the user accepts an assistant-origin reminder suggestion from chat
+- THEN the creation request carries the backend-supplied action value unchanged
+- AND no client-side regex or keyword mapping alters the action before creation
 
 ### Requirement: Reminder suggestion duplicate detection
 
@@ -188,3 +180,4 @@ The system SHALL select each garden plant's earliest pending reminder without is
 
 - **WHEN** a garden list is retrieved for many plants
 - **THEN** next-reminder summaries are resolved with a batched selection rather than one query per plant
+
