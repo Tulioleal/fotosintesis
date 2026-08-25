@@ -74,16 +74,22 @@ Assistant-origin reminder suggestions SHALL carry an effective IANA timezone and
 
 ### Requirement: Evidence-grounded reminder suggestion contract
 
-Chat-origin reminder suggestions SHALL carry the same grounding payload as page-flow suggestions: the evidence context used to derive them, a confidence indication, limitations, and a concise justification, together with the effective IANA timezone and explicit local date and time. Suggestions flagged as requiring confirmation SHALL be presented for review before creation and MUST NOT auto-create. The justification SHALL persist with the created reminder.
+AI-labeled reminder suggestions SHALL originate from a backend operation that accepts a selected garden plant and an optional user request, resolves the plant's confirmed taxonomy through existing ownership checks, and loads profile evidence, garden location, notes, active reminders, and timezone before proposing a suggestion. Generation SHALL propose a concrete local date, time and recurrence derived from the task type, plant profile cadence, eligible light data, location and current local time, and SHALL justify that derivation in one concise sentence. A schedule field MAY be null only when it is genuinely undeterminable from the delivered context. The timezone SHALL be resolved server-side from the stored user timezone and MUST NOT be requested from the model. The frontend SHALL NOT generate AI-labeled suggestions with local semantic regular expressions or fixed calendar defaults.
 
-#### Scenario: Chat suggestion reaches payload parity
+#### Scenario: Suggestion originates in the backend
 
-- WHEN an assistant conversation produces a reminder suggestion
-- THEN the suggestion schema matches the page-flow suggestion contract for evidence, confidence, limitations, justification, timezone, and explicit local schedule fields
+- **WHEN** the reminders page requests a suggestion for a selected garden plant
+- **THEN** the backend generates and returns the suggestion
 
-#### Scenario: Confirmation flag is honored
+#### Scenario: Proposal includes a justified concrete schedule
 
-- WHEN a chat-origin suggestion is flagged as requiring confirmation
-- THEN the frontend presents the confirmation card and creates only after explicit acceptance
-- AND duplicate acceptance is disabled while creation is in progress
+- **WHEN** generation completes for an ordinary care task with profile context
+- **THEN** the outcome is a suggestion carrying a future local date, time, recurrence and a derivation justification
+- **AND** no clarification for date, time or recurrence is emitted
+
+#### Scenario: Clarification is reserved for undeterminable schedules
+
+- **WHEN** the delivered context makes a schedule genuinely undeterminable
+- **THEN** the backend returns a clarification naming only the fields it could not determine
+- **AND** an unset account timezone is clarified by naming the timezone field
 

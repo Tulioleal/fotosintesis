@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Timezone-aware reminder creation
+### Requirement: Timezone-aware scheduling
 
 The system SHALL resolve every reminder schedule in an effective IANA timezone taken from the reminder override when present, otherwise from the stored user timezone, and SHALL reject creation without any resolvable timezone. The creation interface SHALL treat the stored user timezone as the default and MAY expose a per-reminder override as an advanced option; the override MUST NOT be a required field.
 

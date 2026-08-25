@@ -59,37 +59,17 @@ The system SHALL preserve reminders when notification permissions are rejected.
 
 ### Requirement: Timezone-aware scheduling
 
-The system SHALL require an effective IANA timezone when scheduling a reminder and SHALL convert the submitted local date and time to a UTC instant in that timezone. The effective timezone is the reminder's timezone override when present, otherwise the user's stored timezone.
+The system SHALL resolve every reminder schedule in an effective IANA timezone taken from the reminder override when present, otherwise from the stored user timezone, and SHALL reject creation without any resolvable timezone. The creation interface SHALL treat the stored user timezone as the default and MAY expose a per-reminder override as an advanced option; the override MUST NOT be a required field.
 
-#### Scenario: Reminder resolves to correct UTC instant
+#### Scenario: Creation uses the account timezone by default
 
-- **WHEN** the user submits a valid plant, action, local date, local time, and an effective IANA timezone
-- **THEN** the system stores a UTC instant that corresponds to that local wall-clock value in that timezone
+- **WHEN** a user creates a reminder without selecting a timezone
+- **THEN** the schedule resolves in the stored user timezone
 
-#### Scenario: Reminder timezone override wins
+#### Scenario: Override remains available as an advanced option
 
-- **WHEN** a reminder supplies a timezone override that differs from the user's stored timezone
-- **THEN** the system schedules using the reminder override
-
-#### Scenario: Missing effective timezone
-
-- **WHEN** the user submits a reminder with no reminder timezone and no stored user timezone
-- **THEN** the system returns a 4xx error whose user-facing message is in English and asks for a timezone
-
-#### Scenario: Invalid timezone
-
-- **WHEN** the submitted timezone is not a valid IANA timezone
-- **THEN** the system returns a 4xx error whose user-facing message is in English
-
-#### Scenario: Nonexistent local time
-
-- **WHEN** the submitted local time falls inside a DST spring-forward gap in the effective timezone
-- **THEN** the system returns a recoverable validation error listing the surrounding valid local times
-
-#### Scenario: Ambiguous local time
-
-- **WHEN** the submitted local time falls inside a DST fall-back overlap and no explicit offset choice is provided
-- **THEN** the system applies a documented deterministic rule (the earlier offset) to resolve the instant
+- **WHEN** the creation or edit form exposes the timezone control
+- **THEN** it is presented as optional and collapsed behind advanced options on the create form
 
 ### Requirement: DST-safe recurrence
 
