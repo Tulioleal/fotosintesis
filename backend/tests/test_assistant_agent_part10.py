@@ -515,8 +515,12 @@ async def test_pest_question_with_relevant_context_routes_to_disclaimed_guidance
     assert result["sufficient"] is False
     assert result["answerability_status"] == "insufficient"
     assert result["llm_general_guidance_used"] is True
-    assert "What the sources validated" in result["answer"]
-    assert "Details that would help" in result["answer"]
+    # Retired section headers are stripped by the post-generation guard.
+    assert "What the sources validated" not in result["answer"]
+    assert "no part was validated by retrieved sources." in result["answer"]
+    # Guard strips retired headers; the closing beat's content survives.
+    assert "Details that would help" not in result["answer"]
+    assert "a close-up photo of the insect and observed symptoms." in result["answer"]
     assert result["diagnostics"]["llm_general_guidance_used"] is True
     assert result["diagnostics"]["missing_aspects"] == ["pest_identification", "pest_isolation_steps", "pest_prevention_steps"]
     assert result["diagnostics"]["covered_aspects"] == []
@@ -553,16 +557,19 @@ async def test_disclaimed_guidance_diagnostic_flag_and_no_prompt_leakage() -> No
 
     disclaimed_prompts = [
         p for p in tools.model_prompts
-        if "What the sources validated" in p and "General unvalidated guidance" in p
+        if "general_guidance_with_disclaimer mode" in p and "Beat 3 (general guidance)" in p
     ]
     assert len(disclaimed_prompts) >= 1
     full_prompt = disclaimed_prompts[0]
     prompt_blob = full_prompt.lower()
     assert "requires moderate watering and substrate" not in prompt_blob
     assert "do not cite any source" in prompt_blob
-    assert "what the sources validated" in prompt_blob
+    assert "what the sources validated" not in prompt_blob.lower() or "beat 1 (opening)" in prompt_blob
+    assert "beat 3 (general guidance)" in prompt_blob
     assert "general unvalidated guidance" in prompt_blob
-    assert "Details that would help" in full_prompt
+    # Retired section header replaced by prose Beat 4.
+    assert "Beat 4 (closing)" in full_prompt
+    assert "Details that would help" not in full_prompt
 
     diagnostics_blob = json.dumps(diagnostics, default=str)
     assert "What the sources validated" not in diagnostics_blob

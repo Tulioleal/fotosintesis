@@ -212,7 +212,7 @@ async def _generate_disclaimed_guidance(owner, state: AssistantState) -> dict:
         rendered = await owner._generate_fallback_response({**marked_state, "tool_failures": state.get("tool_failures", []) + [failure]}, _recovery_draft_for_answer_generation(state, intent="model_generation_failed", evidence_type="disclaimed_guidance", evidence="", limitations=[], source_metadata=[]))
         rendered["llm_general_guidance_used"] = True
         return rendered
-    answer = str(result.data or "").strip()
+    answer = _strip_source_attribution_from_answer(str(result.data or "").strip())
     if not answer:
         rendered = await owner._generate_fallback_response({**marked_state, "tool_failures": state.get("tool_failures", []) + ["model_generate_text failed: empty response"]}, _recovery_draft_for_answer_generation(state, intent="model_generation_failed", evidence_type="disclaimed_guidance", evidence="", limitations=[], source_metadata=[]))
         rendered["llm_general_guidance_used"] = True

@@ -350,11 +350,6 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
               </p>
             </div>
           </div>
-
-          <div className={styles.notes}>
-            <span className={styles.kicker}>Notas de Usuario</span>
-            <p>{notes}</p>
-          </div>
         </Card>
 
         <Card variant="tonal" padding="md" className={styles.infoCard}>

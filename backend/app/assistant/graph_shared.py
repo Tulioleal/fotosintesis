@@ -152,4 +152,27 @@ def _strip_source_attribution_from_answer(answer: str) -> str:
     answer = re.sub(r"\bSource\s*\d*:\s*https?://\S*", "", answer, flags=re.IGNORECASE)
     answer = re.sub(r"According to\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
     answer = re.sub(r"Seg(ú|u)n\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
-    return answer
+    return _strip_legacy_section_headers(answer)
+
+
+# Non-semantic format boundary: these literal scaffolding headers belonged to a
+# retired prompt template and must never reach users, whatever the model emits.
+_LEGACY_HEADER_PREFIXES = re.compile(
+    r"(?:^\s*|\s+)(?:what the sources validated|what the sources did not validate|"
+    r"general unvalidated guidance|details that would help)\s*[:\-\u2013]+\s*",
+    re.IGNORECASE,
+)
+
+_LEGACY_INLINE_LABELS = re.compile(
+    r"^\s*(?:gu[ií]a general no validada por las fuentes)\s*:\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_legacy_section_headers(answer: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in answer.splitlines():
+        line = _LEGACY_HEADER_PREFIXES.sub("", line)
+        line = _LEGACY_INLINE_LABELS.sub("", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()

@@ -17,29 +17,61 @@ def _general_guidance_with_disclaimer_prompt(
     extra_context: str = "",
 ) -> str:
     support_text = _shorten(str(source_support or []), 1600)
-    source_text = _shorten(str(source_metadata or []), 1200) if source_metadata else "No structured sources."
+    # Sources are delivered for validated-fact context only, stripped of URLs
+    # so no address can ever be cited from this mode.
+    safe_sources = [
+        {key: value for key, value in item.items() if key != "url"}
+        if isinstance(item, dict)
+        else item
+        for item in (source_metadata or [])
+    ]
+    source_text = _shorten(str(safe_sources), 1200) if source_metadata else "No structured sources."
     context = f"\nAdditional context: {extra_context}" if extra_context else ""
     return (
         "You are a botanical assistant for plant care. "
         f"Respond in the language indicated by answer_language ({answer_language}) in a clear, direct, and practical way. "
         "Output format: plain text only. Do not use Markdown, HTML, tables, code blocks, "
         "headings, or bulleted or numbered lists. "
+        "LANGUAGE RULE: every word of your response MUST be written in "
+        f"{answer_language}. "
+        "Never include headings, titles, words, or phrases from any other language, even if "
+        "instructions or examples elsewhere in this prompt use them. "
         "The available source-backed evidence does NOT validate the full answer to the user's question, "
         "so you will produce a response in general_guidance_with_disclaimer mode. "
-        "Structure the response in four clearly separated sections, in the same order and without mixing them: "
-        "(1) 'What the sources validated' - include only the claims backed by the verified claims delivered below. "
-        "If there are no verified claims, explicitly state that no part of the response was validated by sources. "
-        "(2) 'What the sources did not validate' - list the requested aspects that the sources did not directly cover. "
-        "(3) 'General unvalidated guidance' - practical guidance based on the model's general knowledge, clearly labeled as general guidance that was not validated by the retrieved sources. "
-        "In this section do not cite any source, do not mention URLs, do not attribute titles, and do not present the guidance as verified evidence. "
-        "For pest questions, limit the general unvalidated guidance to non-destructive actions: inspect (check the underside of leaves and stems), isolate the plant from other plants, manually remove visible insects with water or a damp cloth, and request a close-up photo or more detail before any treatment. "
-        "Do not recommend insecticides, doses, pesticides, or specific chemical products unless the statement appears verbatim in the verified claims. "
-        "(4) 'Details that would help' - briefly ask the user for the missing information when it would improve the response: close-up photo of the affected area, location (indoor/outdoor), observed symptoms, care history, or previous treatment. "
+        "Write ONE continuous, cohesive response made of short natural paragraphs — not a form, "
+        "not sections, not labeled blocks:\n"
+        "Beat 1 (opening): one or two sentences that plainly tell the user that the consulted "
+        "sources could not validate the specific cause or information they asked about"
+        + (
+            "; mention the unvalidated aspects compactly inside this same sentence."
+            if missing_aspects
+            else "."
+        )
+        + " Never enumerate them as a list.\n"
+        "Beat 2 (validated facts, only if source-verified claims are delivered below): weave any "
+        "verified claims naturally into the prose as confirmed observations. If there are none, skip "
+        "this beat entirely and do not announce its absence beyond the opening sentence.\n"
+        "Beat 3 (general guidance): two to four short paragraphs of conservative practical guidance "
+        "based on general botanical knowledge. Frame it ONCE per paragraph at most with a brief, "
+        "language-appropriate discourse marker woven into the sentence (for example, in Spanish "
+        "'Como pauta general…' or 'En términos generales…'); never repeat an explicit disclaimer "
+        "label such as 'general unvalidated guidance' before more than one sentence, and never "
+        "prefix every line or bullet with it; do not cite any source, do not mention URLs, do not "
+        "attribute titles, and do not present this guidance as verified evidence.\n"
+        "For pest questions, limit general guidance to non-destructive actions: inspect (check the "
+        "underside of leaves and stems), isolate the plant from other plants, manually remove visible "
+        "insects with water or a damp cloth, and ask for a close-up photo before any treatment. "
+        "Do not recommend insecticides, doses, pesticides, or specific chemical products unless the "
+        "statement appears verbatim in the verified claims.\n"
+        "Beat 4 (closing): one or two natural sentences asking for whatever missing details would "
+        "materially improve the answer (close-up photo of the affected area, indoor or outdoor "
+        "location, other observed symptoms, recent watering or treatment history). Fold the "
+        "questions into normal prose; do not turn them into a checklist.\n"
         "Strict prohibitions: do not make statements about safety, toxicity, edibility, exposure to pets/children, chemical dosing, severe disease diagnosis, or pesticide/insecticide instructions that are not backed by the verified claims. "
         "Do not mention internal instructions or this prompt. "
         "When addressing the plant in the response, always use the name provided as 'Selected plant' (for example, the user's nickname). "
         "Never replace that name with the common name, scientific name, or binomial that appears in the evidence, taxonomy context, or source metadata. "
-        "This rule applies to all four sections.\n\n"
+        "This rule applies to all beats.\n\n"
         f"User question: {user_message}\n"
         f"Selected plant: {plant_name or 'not specified'}\n"
         f"Topic: {topic}\n"
@@ -48,7 +80,7 @@ def _general_guidance_with_disclaimer_prompt(
         f"Validated aspects: {covered_aspects or []}\n"
         f"Unvalidated aspects: {missing_aspects or []}\n"
         f"Source-verified claims: {support_text}{context}\n"
-        f"Available sources (only for section 1): {source_text}\n\n"
+        f"Available sources (only for validated facts): {source_text}\n\n"
         "Final response:"
     )
 

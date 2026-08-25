@@ -698,10 +698,12 @@ def test_general_guidance_prompt_requires_separation_and_safety_prohibitions() -
 
     assert "answer_language (es)" in prompt
     assert "plain text only" in prompt
-    assert "What the sources validated" in prompt
-    assert "What the sources did not validate" in prompt
-    assert "General unvalidated guidance" in prompt
-    assert "Details that would help" in prompt
+    # Cohesive-prose contract: no legacy four-section headers, output must be
+    # single-language, guidance framed once with discourse markers.
+    assert "What the sources validated" not in prompt
+    assert "every word of your response MUST be written in" in prompt
+    assert "ONE continuous, cohesive response" in prompt
+    assert "never repeat an explicit disclaimer label" in prompt
     assert "do not cite any source" in prompt
     assert "insecticides" in prompt
     assert "toxicity" in prompt
@@ -809,7 +811,7 @@ async def test_unsupported_safety_missing_aspects_avoid_disclaimed_guidance(
 
     disclaimed_prompts = [
         p for p in tools.model_prompts
-        if "What the sources validated" in p and "General unvalidated guidance" in p
+        if "general_guidance_with_disclaimer mode" in p and "Beat 3 (general guidance)" in p
     ]
     assert disclaimed_prompts == []
 
