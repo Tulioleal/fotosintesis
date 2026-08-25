@@ -18,7 +18,6 @@ import {
   BellIcon,
   DotsThreeVerticalIcon,
   PlantIcon,
-  SparkleIcon,
 } from "@phosphor-icons/react";
 import {
   Button,
@@ -176,6 +175,18 @@ export function RemindersManager() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [userTimezone, setUserTimezone] = useState<string>("");
   const [timezoneNotice, setTimezoneNotice] = useState<string | null>(null);
+  const [suggestionRequest, setSuggestionRequest] = useState("");
+  const [timezoneDetected, setTimezoneDetected] = useState(false);
+
+  // Keep off-list IANA zones (device-detected or legacy stored values)
+  // selectable instead of silently rendering an empty select.
+  const timezoneChoices = (() => {
+    const known = new Set(TIMEZONE_OPTIONS.map((option) => option.value));
+    const extras = [userTimezone, form.timezone]
+      .filter((value): value is string => Boolean(value) && !known.has(value))
+      .map((value) => ({ value, label: `${value} (detectada)` }));
+    return extras.length ? [...extras, ...TIMEZONE_OPTIONS] : TIMEZONE_OPTIONS;
+  })();
 
   const garden = useQuery({
     queryKey: ["garden", "list", ""],
@@ -208,10 +219,22 @@ export function RemindersManager() {
   }, [form.garden_plant_id, plantHint, plants]);
 
   useEffect(() => {
+    if (!currentUser.isSuccess) return;
     const tz = currentUser.data?.timezone ?? "";
-    setUserTimezone(tz);
-    setForm((current) => ({ ...current, timezone: current.timezone || tz }));
-  }, [currentUser.data]);
+    if (tz) {
+      setUserTimezone(tz);
+      setTimezoneDetected(false);
+      setForm((current) => ({ ...current, timezone: current.timezone || tz }));
+      return;
+    }
+    // No stored preference: adopt the device-detected IANA zone as default.
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+    if (detected) {
+      setUserTimezone(detected);
+      setTimezoneDetected(true);
+      setForm((current) => ({ ...current, timezone: current.timezone || detected }));
+    }
+  }, [currentUser.data, currentUser.isSuccess]);
 
   const createReminder = useMutation({
     mutationFn: (payload: ReminderCreate) => apiClient.createReminder(payload),
@@ -354,7 +377,7 @@ export function RemindersManager() {
     try {
       const outcome = await apiClient.suggestReminder({
         garden_plant_id: gardenPlantId,
-        request: "",
+        request: suggestionRequest.trim(),
       });
       setSuggestionResult(outcome);
     } catch (caught) {
@@ -387,6 +410,31 @@ export function RemindersManager() {
     recordSuggestionMetric("rejected");
     setSuggestionsVisible(false);
     setSuggestionResult(null);
+  }
+
+  function editSuggestionBeforeSave(suggestion: ReminderSuggestionResult) {
+    recordSuggestionMetric("edited");
+    const zone = suggestion.timezone || userTimezone || null;
+    setForm({
+      garden_plant_id: suggestion.garden_plant_id,
+      taskType: matchTaskType(suggestion.action),
+      date: suggestion.date,
+      time: suggestion.time.slice(0, 5),
+      recurrence: suggestion.recurrence,
+      timezone: zone ?? "",
+    });
+    setEditing(null);
+    setErrors({});
+    setSuggestionsVisible(false);
+    setSuggestionResult(null);
+  }
+
+  function matchTaskType(action: string): string {
+    const normalized = action.trim().toLowerCase();
+    return (
+      TASK_TYPES.find((task) => task.toLowerCase() === normalized) ??
+      normalizeReminderAction(action)
+    );
   }
 
   async function saveTimezonePreference(event: FormEvent<HTMLFormElement>) {
@@ -460,10 +508,62 @@ export function RemindersManager() {
             variant="tonal"
             padding="md"
             className={styles.formCard}
+            aria-labelledby="ai-suggestion-heading"
+          >
+            <h2 id="ai-suggestion-heading" className={styles.formHeading}>
+              Sugerir con IA
+            </h2>
+            <p className={styles.recurrenceLabel}>
+              Elegi la planta y dejamos que la IA proponga fecha, hora y frecuencia. Siempre podes editarlas antes de guardar.
+            </p>
+            <form
+              className={styles.form}
+              onSubmit={(event) => {
+                event.preventDefault();
+                generateSuggestions();
+              }}
+              noValidate
+            >
+              <Field
+                label="Contexto (opcional)"
+                placeholder="p. ej., riego semanal en el balcon"
+                value={suggestionRequest}
+                onChange={(event) => setSuggestionRequest(event.target.value)}
+              />
+              <div className={styles.formActions}>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  fullWidth
+                  disabled={!plants.length || suggestionPending}
+                >
+                  {suggestionPending ? "Generando sugerencia..." : "Sugerir recordatorio"}
+                </Button>
+              </div>
+            </form>
+            {suggestionsVisible ? suggestionResult ? (
+              <SuggestionOutcomeCard
+                outcome={suggestionResult}
+                onAccept={acceptSuggestion}
+                onEdit={editSuggestionBeforeSave}
+                onDismiss={dismissSuggestion}
+                pending={createReminder.isPending}
+              />
+            ) : null : null}
+            {suggestionError ? (
+              <Notice tone="error" role="alert">{suggestionError}</Notice>
+            ) : null}
+          </Card>
+
+          <Card
+            variant="tonal"
+            padding="md"
+            className={styles.formCard}
             aria-labelledby="reminders-form-heading"
           >
             <h2 id="reminders-form-heading" className={styles.formHeading}>
-              Nuevo Recordatorio
+              Crear manualmente
             </h2>
             <form className={styles.form} onSubmit={submit} noValidate>
               <SelectField
@@ -554,22 +654,25 @@ export function RemindersManager() {
                 ) : null}
               </div>
 
-              <SelectField
-                kind="select"
-                label="Zona horaria"
-                hint="Hora local de esta recordatorio."
-                value={form.timezone}
-                onChange={(event) => setField("timezone", event.target.value)}
-                error={errors.timezone}
-                optionalLabel="opcional"
-              >
-                <option value="">Usar mi zona horaria</option>
-                {TIMEZONE_OPTIONS.map((tz) => (
-                  <option key={tz.value} value={tz.value}>
-                    {tz.label}
-                  </option>
-                ))}
-              </SelectField>
+              <details className={styles.advancedGroup}>
+                <summary>Opciones avanzadas</summary>
+                <SelectField
+                  kind="select"
+                  label="Zona horaria"
+                  hint="Hora local de este recordatorio."
+                  value={form.timezone}
+                  onChange={(event) => setField("timezone", event.target.value)}
+                  error={errors.timezone}
+                  optionalLabel="opcional"
+                >
+                  <option value="">Usar mi zona horaria</option>
+                  {timezoneChoices.map((tz) => (
+                    <option key={tz.value} value={tz.value}>
+                      {tz.label}
+                    </option>
+                  ))}
+                </SelectField>
+              </details>
 
               <div className={styles.formActions}>
                 <Button
@@ -597,6 +700,7 @@ export function RemindersManager() {
             </h2>
             <p className={styles.recurrenceLabel}>
               Se usa como zona por defecto para tus recordatorios.
+              {timezoneDetected ? " Detectada de tu dispositivo." : ""}
             </p>
             <form className={styles.form} onSubmit={saveTimezonePreference} noValidate>
               <SelectField
@@ -607,7 +711,7 @@ export function RemindersManager() {
                 optionalLabel="opcional"
               >
                 <option value="">Sin definir</option>
-                {TIMEZONE_OPTIONS.map((tz) => (
+                {timezoneChoices.map((tz) => (
                   <option key={tz.value} value={tz.value}>
                     {tz.label}
                   </option>
@@ -632,66 +736,7 @@ export function RemindersManager() {
             </form>
           </Card>
 
-          <Card
-            variant="callout"
-            padding="md"
-            className={styles.suggestionCard}
-            heading="Sugerencias con IA"
-            description="Optimiza el cuidado de tu jardín con inteligencia artificial."
-          >
-            {suggestionsVisible ? (
-              suggestionPending ? (
-                <p className={styles.suggestionBody}>
-                  Generando sugerencia...
-                </p>
-              ) : suggestionError ? (
-                <>
-                  <p className={styles.suggestionBody}>{suggestionError}</p>
-                  <div className={styles.suggestionActions}>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="md"
-                      onClick={() => {
-                        setSuggestionsVisible(false);
-                        setSuggestionResult(null);
-                        setSuggestionError(null);
-                      }}
-                    >
-                      Cerrar
-                    </Button>
                   </div>
-                </>
-              ) : suggestionResult ? (
-                <SuggestionOutcomeCard
-                  outcome={suggestionResult}
-                  onAccept={acceptSuggestion}
-                  onDismiss={dismissSuggestion}
-                  pending={createReminder.isPending}
-                />
-              ) : (
-                <p className={styles.suggestionBody}>
-                  Añade plantas a tu jardín para empezar a generar sugerencias.
-                </p>
-              )
-            ) : (
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  fullWidth
-                  className={styles.suggestionTrigger}
-                  onClick={generateSuggestions}
-                  disabled={!plants.length || suggestionPending}
-                >
-                  Generar con IA &nbsp;
-                  <SparkleIcon aria-hidden="true" size="1rem" />
-                </Button>
-              </>
-            )}
-          </Card>
-        </div>
 
         <div className={styles.listColumn}>
           {notice ? (
@@ -1013,6 +1058,7 @@ function recordSuggestionMetric(outcome: "accepted" | "edited" | "rejected") {
 type SuggestionOutcomeCardProps = {
   outcome: ReminderSuggestionOutcome;
   onAccept: (suggestion: ReminderSuggestionResult) => void;
+  onEdit: (suggestion: ReminderSuggestionResult) => void;
   onDismiss: () => void;
   pending: boolean;
 };
@@ -1058,6 +1104,7 @@ function suggestionEvidenceSummary(
 function SuggestionOutcomeCard({
   outcome,
   onAccept,
+  onEdit,
   onDismiss,
   pending,
 }: SuggestionOutcomeCardProps) {
@@ -1131,13 +1178,24 @@ function SuggestionOutcomeCard({
         <div className={styles.suggestionActions}>
           <Button
             type="button"
-            variant="secondary"
+            variant="primary"
             size="md"
             onClick={() => onAccept(outcome)}
             disabled={pending}
           >
             Aceptar sugerencia
           </Button>
+          {outcome.kind === "suggestion" ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              onClick={() => onEdit(outcome)}
+              disabled={pending}
+            >
+              Editar antes de guardar
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"

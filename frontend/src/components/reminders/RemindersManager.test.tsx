@@ -260,7 +260,7 @@ describe("RemindersManager", () => {
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
-    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
 
     expect(
       await screen.findByText(defaultSuggestion.justification),
@@ -299,7 +299,7 @@ describe("RemindersManager", () => {
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
-    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
 
     expect(
       await screen.findByText(/necesitamos que completes:/),
@@ -320,7 +320,7 @@ describe("RemindersManager", () => {
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
-    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
 
     expect(await screen.findByText(/Confianza: 55%/)).toBeInTheDocument();
     expect(screen.getByText(/Limitaciones: Sin medicion de luz reciente/)).toBeInTheDocument();
@@ -335,7 +335,7 @@ describe("RemindersManager", () => {
     renderWithQueryClient(<RemindersManager />);
 
     await screen.findByRole("option", { name: "Helecho" });
-    fireEvent.click(screen.getByRole("button", { name: "Generar con IA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
 
     expect(
       await screen.findByText(/Ya existe un recordatorio equivalente/),
@@ -381,3 +381,70 @@ function labelForRecurrence(value: string) {
       return "Personalizado";
   }
 }
+
+describe("RemindersManager suggestion autopropose UX", () => {
+  it("prefills the manual form when editing a suggestion before saving", async () => {
+    renderWithQueryClient(<RemindersManager />);
+
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
+    const accept = await screen.findByRole("button", { name: "Aceptar sugerencia" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Editar antes de guardar" }),
+    );
+    expect(accept).not.toBeInTheDocument();
+
+    expect(screen.getByLabelText("Planta")).toHaveValue("garden-1");
+    expect(screen.getByLabelText("Tipo de Tarea")).toHaveValue("Riego");
+    expect(screen.getByLabelText("Fecha")).toHaveValue("2999-01-10");
+    expect(screen.getByLabelText("Hora")).toHaveValue("09:00");
+  });
+
+  it("hides the create-form timezone selector behind advanced options", () => {
+    renderWithQueryClient(<RemindersManager />);
+
+    const details = document.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("select")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("Opciones avanzadas"));
+    expect(details).toHaveAttribute("open");
+  });
+
+  it("passes the optional context text to the suggestion request", async () => {
+    renderWithQueryClient(<RemindersManager />);
+
+    await screen.findByRole("option", { name: "Helecho" });
+    fireEvent.change(screen.getByLabelText("Contexto (opcional)"), {
+      target: { value: "riego cada semana" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Sugerir recordatorio" }));
+
+    await waitFor(() => {
+      expect(mocks.suggestReminder).toHaveBeenCalledWith({
+        garden_plant_id: "garden-1",
+        request: "riego cada semana",
+      });
+    });
+  });
+
+  it("prefills the timezone preference from the device when the account has none", async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce({
+      id: "user-1",
+      name: "Ada",
+      email: "ada@example.com",
+      timezone: null,
+    });
+    renderWithQueryClient(<RemindersManager />);
+    await screen.findByText(/Detectada de tu dispositivo/);
+
+    const heading = document.getElementById("timezone-preference-heading");
+    const preferenceSelect = heading
+      ?.closest("[class*='formCard']")
+      ?.querySelector("form select");
+    expect(preferenceSelect).toHaveValue(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+  });
+});

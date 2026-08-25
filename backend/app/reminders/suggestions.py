@@ -28,7 +28,7 @@ from app.auth.tables import (
 )
 from app.knowledge.repository import KnowledgeRepository
 from app.observability.logging import get_logger
-from app.reminders.repository import ReminderRepository
+from app.reminders.repository import MissingTimezoneError, ReminderRepository
 from app.schemas.reminders import (
     ReminderClarificationResult,
     ReminderDuplicateResult,
@@ -82,10 +82,6 @@ _SUGGESTION_SCHEMA = {
             "type": ["string", "null"],
             "description": "Scheduled time in HH:MM (24h), or null when not specified.",
         },
-        "timezone": {
-            "type": ["string", "null"],
-            "description": "IANA timezone for the scheduled date/time, or null when not specified.",
-        },
         "recurrence": {
             "type": ["string", "null"],
             "enum": [item.value for item in ReminderRecurrence],
@@ -96,7 +92,7 @@ _SUGGESTION_SCHEMA = {
             "description": "A concise justification for the suggested reminder grounded in the evidence.",
         },
     },
-    "required": ["date", "time", "timezone", "recurrence", "justification"],
+    "required": ["date", "time", "recurrence", "justification"],
     "additionalProperties": False,
 }
 
@@ -134,6 +130,18 @@ class ReminderSuggestionService:
         if context is None:
             raise PlantNotFoundError("Plant not found in My Garden.")
 
+        # The timezone never comes from the model: the stored account timezone
+        # is authoritative and is stamped on the outcome server-side.
+        try:
+            zone = await self.reminders._resolve_effective_timezone(user_id=user_id, override=None)
+            if zone is None:
+                raise MissingTimezoneError(
+                    "Provide a timezone on your account to schedule reminders."
+                )
+        except MissingTimezoneError:
+            _record_outcome("clarified")
+            return ReminderClarificationResult(kind="clarification", missing_fields=["timezone"])
+
         classification = await self._classify(context, request=payload.request)
         light_facts: list[str] = []
         if classification["light_context_relevant"]:
@@ -141,9 +149,15 @@ class ReminderSuggestionService:
                 user_id=user_id, garden_plant_id=payload.garden_plant_id, now=now
             )
 
+        current_local = (now or datetime.now(dt_timezone.utc)).astimezone(zone)
         suggestion = await self._generate_suggestion(
-            context, classification=classification, light_facts=light_facts
+            context,
+            classification=classification,
+            light_facts=light_facts,
+            zone_key=str(zone),
+            now_local=current_local,
         )
+        suggestion["timezone"] = zone.key
 
         missing = self._missing_schedule_fields(suggestion)
         if missing:
@@ -298,9 +312,21 @@ class ReminderSuggestionService:
         )
 
     async def _generate_suggestion(
-        self, context: dict, *, classification: dict, light_facts: list[str]
+        self,
+        context: dict,
+        *,
+        classification: dict,
+        light_facts: list[str],
+        zone_key: str,
+        now_local: datetime,
     ) -> dict:
-        prompt = _suggestion_prompt(context, classification=classification, light_facts=light_facts)
+        prompt = _suggestion_prompt(
+            context,
+            classification=classification,
+            light_facts=light_facts,
+            zone_key=zone_key,
+            now_local=now_local,
+        )
         data = await self._generate_json(prompt, _SUGGESTION_SCHEMA)
         recurrence = data.get("recurrence")
         return {
@@ -335,8 +361,6 @@ class ReminderSuggestionService:
             missing.append("date")
         if not suggestion["time"]:
             missing.append("time")
-        if not suggestion["timezone"]:
-            missing.append("timezone")
         if suggestion["recurrence"] not in {item.value for item in ReminderRecurrence}:
             missing.append("recurrence")
         return missing
@@ -392,19 +416,28 @@ def _action_prompt(context: dict, *, request: str | None) -> str:
 
 
 def _suggestion_prompt(
-    context: dict, *, classification: dict, light_facts: list[str]
+    context: dict,
+    *,
+    classification: dict,
+    light_facts: list[str],
+    zone_key: str,
+    now_local: datetime,
 ) -> str:
     light_clause = (
         f"Eligible light measurement: {'; '.join(light_facts)}." if light_facts else ""
     )
     return (
         "Complete a reminder suggestion for a garden plant. Return only JSON matching the "
-        "schema; every required field MUST be present, using null for fields that are not "
-        "specified. Never invent tomorrow as the date, 09:00 as the time, or weekly as the "
-        "default recurrence. If the user has not provided an explicit date, time, timezone, "
-        "or recurrence, leave that field null so the caller can ask for clarification. "
-        "Always set recurrence to an explicit value when known, including 'none' for a "
-        "one-off reminder.\n"
+        "schema; every required field MUST be present.\n"
+        "You MUST propose a concrete schedule: derive date, time and recurrence from the task "
+        "type together with the plant profile cadence, eligible light data, location and general "
+        "care conventions for this species. Ground the derivation on the current local date and "
+        "time delivered below. Output null only for a field that is genuinely undeterminable "
+        "from this context. The justification MUST state in one concise sentence why that "
+        "date/time/recurrence fits the plant and task. Hardcoded conventions such as always "
+        "'tomorrow at 09:00' without a derivation tied to the delivered evidence are forbidden; "
+        "a derived morning slot justified by the profile cadence is correct.\n"
+        f"Current local date and time: {now_local.strftime('%Y-%m-%d %H:%M')} ({zone_key})\n"
         f"Confirmed taxonomy: {context.get('taxonomy') or 'missing'}\n"
         f"Display name: {context.get('nickname') or context.get('plant_name') or 'missing'}\n"
         f"Location: {context.get('location') or 'not set'}\n"

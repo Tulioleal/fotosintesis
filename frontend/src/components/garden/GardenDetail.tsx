@@ -133,7 +133,6 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
   const nickname = plant.nickname ? `"${plant.nickname}"` : null;
   const imageSrc = resolveImageUrl(plant.image_path);
   const location = plant.location ?? "Sin ubicacion";
-  const notes = plant.notes ?? "Todavia no agregaste notas personalizadas.";
   const nextReminderLabel = plant.next_reminder
     ? `${plant.next_reminder.action} · ${formatDueDate(
         plant.next_reminder.due_at,

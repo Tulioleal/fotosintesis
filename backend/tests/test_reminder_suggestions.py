@@ -204,7 +204,9 @@ async def test_missing_schedule_fields_return_clarification_without_defaults(
 
     assert isinstance(outcome, ReminderClarificationResult)
     assert outcome.kind == "clarification"
-    assert set(outcome.missing_fields) == {"date", "time", "timezone", "recurrence"}
+    # Timezone is resolved server-side from the account; only genuinely
+    # undeterminable schedule fields are clarified.
+    assert set(outcome.missing_fields) == {"date", "time", "recurrence"}
 
 
 @pytest.mark.asyncio
@@ -321,7 +323,7 @@ async def test_regression_no_fixed_calendar_defaults(
     assert outcome.date == date(2999, 3, 15)
     assert outcome.time == time(18, 30)
     assert outcome.recurrence == ReminderRecurrence.monthly
-    assert outcome.timezone == "America/Montevideo"
+    assert outcome.timezone == USER_TIMEZONE
 
 
 @pytest.mark.asyncio
@@ -494,3 +496,38 @@ async def test_light_context_not_loaded_when_irrelevant(
 
     assert isinstance(outcome, ReminderSuggestionResult)
     assert outcome.evidence.light_context is None
+
+
+def test_suggestion_prompt_requires_derived_concrete_schedule() -> None:
+    from datetime import timezone as dt_tz
+
+    from app.reminders.suggestions import _suggestion_prompt
+
+    prompt = _suggestion_prompt(
+        {"taxonomy": "Nephrolepis exaltata", "nickname": "Helecho"},
+        classification={"action": "Riego"},
+        light_facts=[],
+        zone_key="America/Argentina/Buenos_Aires",
+        now_local=datetime(2099, 1, 10, 12, 0, tzinfo=dt_tz.utc),
+    )
+    assert "You MUST propose a concrete schedule" in prompt
+    assert "Current local date and time: 2099-01-10 12:00" in prompt
+    assert "leave that field null" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_unset_account_timezone_clarifies_timezone_field(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    user_id, garden_plant_id = await _create_user_garden(
+        session_factory, email="notz@example.com", timezone=None
+    )
+    async with session_factory() as session:
+        service = _make_service(session, _classify_data("Riego"), _suggestion_data())
+        outcome = await service.suggest(
+            user_id=user_id,
+            payload=ReminderSuggestionRequest(garden_plant_id=garden_plant_id, request=""),
+        )
+
+    assert isinstance(outcome, ReminderClarificationResult)
+    assert outcome.missing_fields == ["timezone"]
