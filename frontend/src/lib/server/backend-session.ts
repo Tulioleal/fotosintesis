@@ -1,5 +1,6 @@
-import { getToken } from "@auth/core/jwt";
+import { getToken } from "next-auth/jwt";
 import { API_BASE_URL } from "@/lib/api/config";
+import { authTokenSchema } from "./auth-token";
 
 
 type BackendAuthHeaders = {
@@ -23,33 +24,48 @@ function usesSecureCookies(): boolean {
 }
 
 export async function resolveBackendAuthHeaders(request: Request): Promise<BackendAuthHeaders | null> {
+  const secret = authSecret();
+  if (!secret) return null;
+
+  let secureCookie: boolean;
+  try {
+    secureCookie = usesSecureCookies();
+  } catch {
+    return null;
+  }
+
   const cookie = request.headers.get("cookie") ?? "";
   if (cookie.includes(BACKEND_SESSION_COOKIE)) {
     return { Accept: "application/json", Cookie: cookie };
   }
 
-  const secret = authSecret();
-  if (!secret) return null;
+  try {
+    const token = await getToken({
+      req: request,
+      secret,
+      secureCookie,
+    });
+    const validated = authTokenSchema.safeParse(token);
+    if (!validated.success) return null;
 
-  const token = await getToken({
-    req: request,
-    secret,
-    secureCookie: usesSecureCookies(),
-  });
-  const credential = typeof token?.backendCredential === "string" ? token.backendCredential : "";
-  if (!credential) return null;
-
-  return { Accept: "application/json", Authorization: `Bearer ${credential}` };
+    return { Accept: "application/json", Authorization: `Bearer ${validated.data.backendCredential}` };
+  } catch {
+    return null;
+  }
 }
 
 export async function validateBackendSession(request: Request): Promise<boolean> {
   const headers = await resolveBackendAuthHeaders(request);
   if (!headers) return false;
 
-  const response = await fetch(`${API_BASE_URL}/auth/session`, {
-    headers,
-    cache: "no-store",
-  });
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/session`, {
+      headers,
+      cache: "no-store",
+    });
 
-  return response.ok;
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

@@ -1,9 +1,7 @@
 ## Purpose
 
 TBD - synced from change `add-authentication-home`.
-
 ## Requirements
-
 ### Requirement: Auth.js authentication boundary
 
 The system SHALL use Auth.js / NextAuth as the frontend authentication boundary for login, logout and session handling.
@@ -20,18 +18,24 @@ The system SHALL use Auth.js / NextAuth as the frontend authentication boundary 
 
 ### Requirement: User registration
 
-The system SHALL allow users to create an account with valid name, email and password.
+The system SHALL allow users to create an account with valid name, email and password subject to distributed source-aware registration limits.
 
 #### Scenario: Valid registration
 
-- **WHEN** a user submits valid name, email and password
+- **WHEN** a user submits valid name, email and password within the active registration limits
 - **THEN** the system creates the user with an Argon2id password hash
 - **AND** the user has an `email_verified` logical field that does not block login
 
 #### Scenario: Invalid registration
 
-- **WHEN** a user submits empty required fields, invalid email, short password or an already registered email
+- **WHEN** a user submits empty required fields, invalid email, short password or an already registered email within the active limits
 - **THEN** the system prevents registration and shows a recoverable form error
+
+#### Scenario: Registration is limited
+
+- **WHEN** registration attempts from one trusted source identity exhaust the configured registration limit
+- **THEN** the system rejects further attempts before performing password hashing or account creation
+- **AND** returns the bounded retry contract
 
 #### Scenario: Frontend registration validation
 
@@ -45,19 +49,25 @@ The system SHALL allow users to create an account with valid name, email and pas
 
 ### Requirement: Login and protected access
 
-The system SHALL allow valid users to log in and SHALL require an authenticated session for private flows.
+The system SHALL allow valid users to log in, SHALL require an authenticated session for private flows, and SHALL constrain credential verification with distributed source-aware and account-aware limits.
 
 #### Scenario: Valid login
 
-- **WHEN** a registered user submits valid credentials
+- **WHEN** a registered user submits valid credentials within the active limits
 - **THEN** Auth.js creates an authenticated session
 - **AND** the system redirects the user to `/home`
 
 #### Scenario: Failed login
 
-- **WHEN** a user submits an incorrect password or an email that does not exist
+- **WHEN** a user submits an incorrect password or an email that does not exist within the active limits
 - **THEN** the system shows a neutral user-facing error
-- **AND** the system logs the technical reason without exposing whether the email exists
+- **AND** the system logs only a bounded technical reason without exposing whether the email exists
+
+#### Scenario: Login is limited
+
+- **WHEN** a source-aware or normalized account-aware credential limit is exhausted
+- **THEN** the system rejects credential verification without performing another password check
+- **AND** the login form communicates the bounded retry timing without exposing which limit was reached
 
 #### Scenario: Unauthenticated private frontend access
 
@@ -92,11 +102,11 @@ The system SHALL persist authenticated sessions using opaque HttpOnly cookies ba
 
 ### Requirement: Password recovery initiation
 
-The system SHALL allow users to initiate password recovery from the authentication screen. The recovery response message SHALL be in English.
+The system SHALL allow users to initiate password recovery from the authentication screen subject to distributed source-aware and normalized account-aware limits. The recovery response message SHALL be in English and SHALL remain neutral for known and unknown accounts at and below the limit.
 
 #### Scenario: Recovery requested
 
-- **WHEN** a user requests recovery with a valid email format
+- **WHEN** a user requests recovery with a valid email format within the active limits
 - **THEN** the system generates and persists a recovery token with expiration when applicable
 - **AND** shows a neutral English confirmation
 
@@ -106,6 +116,22 @@ The system SHALL allow users to initiate password recovery from the authenticati
 - **THEN** the system does not send an email
 - **AND** the recovery token and confirmation contract remain prepared for a later email provider integration
 - **AND** the neutral English confirmation is the same as in the recovery-requested scenario
+
+#### Scenario: Recovery initiation is limited
+
+- **WHEN** a source-aware or normalized account-aware recovery-initiation limit is exhausted
+- **THEN** the system performs no recovery-token write or delivery action
+- **AND** known and unknown accounts receive the same neutral response body and equivalent bounded retry contract
+
+### Requirement: Authentication forms handle bounded retry responses
+
+Authentication forms SHALL recognize the authentication rate-limit response contract, preserve neutral user-facing behavior, and prevent resubmission until the bounded retry period has elapsed.
+
+#### Scenario: Authentication form receives a retry contract
+
+- **WHEN** login, registration, or recovery initiation receives a rate-limit response with `Retry-After`
+- **THEN** the form presents recoverable retry timing without sensitive details
+- **AND** disables or otherwise prevents submission until retry is permitted
 
 ### Requirement: Auth screens
 
@@ -201,24 +227,27 @@ The public and authentication redesign SHALL NOT redesign private feature pages 
 
 ### Requirement: Home mobile-first
 
-The system SHALL show an authenticated Home dashboard with access to identification, search, light meter, reminders, My Garden and assistant. The Home presentation SHALL follow the Fotosíntesis dashboard mosaic reference while preserving the `GET /home/summary` API flow and the English `HomeAccessItem.label` backend contract.
+The system SHALL show an authenticated Home dashboard with access to identification, search, light meter, reminders, My Garden and assistant. The Home presentation SHALL follow the Fotosíntesis dashboard mosaic reference while preserving the `GET /home/summary` API flow and the English `HomeAccessItem.label` backend contract. When the authenticated user has active or recently terminal enrichment activity, Home SHALL also expose a bounded background-work indicator without blocking primary dashboard actions.
 
 #### Scenario: Home opens for authenticated user
-
-- **WHEN** an authenticated user opens `/home`
+- **WHEN** a user opens Home with a valid session
 - **THEN** the system fetches `GET /home/summary`
 - **AND** shows a Fotosíntesis dashboard with a welcome section, primary identification CTA, quick-access mosaic, secondary feature access, and bottom navigation with the active Home section
 
+#### Scenario: Home shows active enrichment
+- **WHEN** the authenticated user has pending or processing enrichment activity
+- **THEN** Home displays a concise background-work status with the plant context and an authorized profile link
+- **AND** the dashboard remains usable while the activity status refreshes
+
+#### Scenario: Home shows terminal enrichment
+- **WHEN** the authenticated user has a recently terminal complete, partial, or failed enrichment activity
+- **THEN** Home may display its sanitized outcome and profile link within the configured retention window
+- **AND** does not expose raw evidence or provider details
+
 #### Scenario: Home summary contract
-
 - **WHEN** Home data loads successfully
-- **THEN** the response includes the authenticated user, empty-state information and access metadata for identification, search, light meter, reminders, My Garden and assistant
+- **THEN** the response continues to provide the existing garden summary and access entries
 - **AND** the `HomeAccessItem.label` values for these access entries are in English: `My Garden`, `Identify plant`, `Search plants`, `Light meter`, `Reminders`, `Assistant`
-
-#### Scenario: Home server state
-
-- **WHEN** the frontend fetches Home data
-- **THEN** it uses TanStack Query for loading, cache, retry and error state
 
 ### Requirement: Home dashboard mosaic presentation
 
@@ -265,9 +294,14 @@ The system SHALL expose navigable authenticated placeholders for private feature
 
 #### Scenario: Pending feature opened
 
-- **WHEN** an authenticated user opens identification, search, light meter, reminders, My Garden or assistant before that feature is implemented
+- **WHEN** an authenticated user opens identification, light meter, reminders, My Garden or assistant before that feature is implemented
 - **THEN** the system shows a protected placeholder screen with a "Coming soon" copy in English
 - **AND** the system does not implement real feature logic in this slice
+
+#### Scenario: Search is a real protected flow
+
+- **WHEN** an authenticated user opens the search route
+- **THEN** the system renders the functional search experience rather than a "Coming soon" placeholder
 
 ### Requirement: Bottom navigation
 
@@ -302,3 +336,104 @@ The implementation SHALL include automated tests for the behavior introduced by 
 - **WHEN** frontend tests run
 - **THEN** React Testing Library covers auth forms and Home states
 - **AND** Playwright covers registration/login, unauthenticated private-route redirection, Home rendering and placeholder navigation
+
+### Requirement: Patched and reproducible Auth.js dependency
+
+The frontend SHALL pin `next-auth` to exact version `5.0.0-beta.32`, SHALL NOT declare `@auth/core` directly, and SHALL resolve one compatible transitive Auth.js core version from the committed lockfile.
+
+#### Scenario: Reproducible authentication dependencies are installed
+
+- **WHEN** the frontend production dependencies are installed from the committed lockfile
+- **THEN** the installed `next-auth` version is exactly `5.0.0-beta.32`
+- **AND** no direct `@auth/core` dependency is present
+- **AND** exactly one transitive `@auth/core` version is reachable
+
+#### Scenario: A vulnerable Auth.js resolution is proposed
+
+- **WHEN** dependency verification finds `next-auth` in the GHSA-8fpg-xm3f-6cx3 affected range through `5.0.0-beta.31`
+- **THEN** verification fails before merge or deployment
+
+### Requirement: Validated credentials authentication result
+
+The Auth.js credentials provider SHALL create authenticated state only from a schema-valid successful backend response containing a concrete user identity and non-empty server-only backend session credential.
+
+#### Scenario: Backend credentials response is valid
+
+- **WHEN** backend credential verification succeeds with all required user, session token, and session expiration fields in their valid shapes
+- **THEN** Auth.js creates the existing authenticated JWT session state
+- **AND** the browser-visible session continues to exclude the backend session credential
+
+#### Scenario: Successful backend response is malformed
+
+- **WHEN** backend credential verification returns a successful HTTP response with invalid JSON, a missing identity field, a missing or empty session token, or an invalid session expiration
+- **THEN** Auth.js denies authentication
+- **AND** no partially authenticated user or browser-visible backend credential is created
+
+#### Scenario: Existing credentials journey is preserved
+
+- **WHEN** a valid user logs in, follows a safe callback URL, reads the active session, and logs out
+- **THEN** login, callback routing, session persistence, backend-session invalidation, and frontend state clearing preserve their existing behavior
+
+### Requirement: Password recovery confirmation
+
+The system SHALL allow a user to complete password recovery with a valid delivered token and a new password that satisfies the existing registration password policy. Confirmation SHALL remain neutral for unknown, expired, invalidated, or already-used tokens and SHALL NOT reveal token or account state.
+
+#### Scenario: Valid token changes password once
+
+- **WHEN** a user submits a valid unexpired token and a new password satisfying the password policy
+- **THEN** the system hashes the new password with Argon2id
+- **AND** persists the replacement password and consumes the token atomically
+
+#### Scenario: Reused token fails
+
+- **WHEN** a user submits an already-consumed token
+- **THEN** the system rejects the attempt without changing the password again
+- **AND** returns the same neutral response as any other invalid token
+
+#### Scenario: Unknown, expired, or invalidated token fails
+
+- **WHEN** a user submits a token that is unknown, expired, or invalidated
+- **THEN** the system rejects the attempt with neutral behavior that does not distinguish the failure reason
+
+#### Scenario: New password is rejected
+
+- **WHEN** the submitted new password does not satisfy the existing registration password policy
+- **THEN** the system rejects the request with a deterministic validation error
+- **AND** does not consume the token
+
+#### Scenario: Successful reset revokes sessions
+
+- **WHEN** a recovery confirmation succeeds
+- **THEN** the system revokes all active sessions for the account
+- **AND** subsequent requests using pre-reset session tokens are rejected
+
+#### Scenario: Confirmation is limited
+
+- **WHEN** recovery confirmation is rejected for either a known or unknown token by the shared abuse policy
+- **THEN** the response preserves the endpoint's neutral body contract and equivalent retry metadata
+
+### Requirement: Recovery completion frontend
+
+The system SHALL provide a frontend reset route that reads the token from the URL, collects a new password and confirmation, and returns the user to login with a neutral completion notice without revealing token-state details.
+
+#### Scenario: Reset route reads the token
+
+- **WHEN** a user opens the reset route with a token
+- **THEN** the frontend reads the token without displaying it in page copy
+
+#### Scenario: Reset form validates input
+
+- **WHEN** a user edits the reset form
+- **THEN** the frontend validates the new password and confirmation controls with accessible labels and errors
+
+#### Scenario: Successful reset returns to login
+
+- **WHEN** a valid reset completes successfully
+- **THEN** the frontend returns the user to login with a neutral completion notice
+
+#### Scenario: Invalid token stays neutral
+
+- **WHEN** the reset request fails for an unknown, used, or expired token
+- **THEN** the UI presents a neutral failure that does not distinguish the token detail
+- **AND** offers a safe path to request a new recovery link
+

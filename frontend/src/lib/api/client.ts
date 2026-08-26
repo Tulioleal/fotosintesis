@@ -1,11 +1,18 @@
 import type { components } from "@/lib/generated/openapi";
 import type { operations } from "@/lib/generated/openapi";
-import { API_BASE_URL } from "./config";
+import {
+  AUTH_RETRY_AFTER_MAX_SECONDS,
+  clampRetryAfter,
+  parseRetryAfter,
+} from "@/lib/server/auth-rate-limit";
 
 export type RegisterRequest = components["schemas"]["RegisterRequest"];
 export type RegisterResponse = components["schemas"]["RegisterResponse"];
 export type RecoveryRequest = components["schemas"]["RecoveryRequest"];
 export type RecoveryResponse = components["schemas"]["RecoveryResponse"];
+export type RecoveryConfirmRequest = components["schemas"]["RecoveryConfirmRequest"];
+export type RecoveryConfirmResponse = { status: string };
+export type PublicAuthUser = components["schemas"]["PublicAuthUser"];
 export type HomeSummaryResponse = components["schemas"]["HomeSummaryResponse"];
 export type GardenPlantCard = components["schemas"]["GardenPlantCard"];
 export type GardenPlant = operations["get_garden_plant_garden__garden_id__get"]["responses"][200]["content"]["application/json"];
@@ -16,6 +23,15 @@ export type Reminder = components["schemas"]["ReminderDto"];
 export type ReminderCreate = components["schemas"]["ReminderCreate"];
 export type ReminderUpdate = components["schemas"]["ReminderUpdate"];
 export type ReminderDeleteResponse = components["schemas"]["ReminderDeleteResponse"];
+export type ReminderSuggestionRequest = components["schemas"]["ReminderSuggestionRequest"];
+export type ReminderSuggestionMetricRequest = components["schemas"]["ReminderSuggestionMetricRequest"];
+export type ReminderSuggestionResult = components["schemas"]["ReminderSuggestionResult"];
+export type ReminderClarificationResult = components["schemas"]["ReminderClarificationResult"];
+export type ReminderDuplicateResult = components["schemas"]["ReminderDuplicateResult"];
+export type ReminderSuggestionOutcome =
+  | ReminderSuggestionResult
+  | ReminderClarificationResult
+  | ReminderDuplicateResult;
 export type LightClassification = components["schemas"]["LightClassification"];
 export type MeasurementReliability = components["schemas"]["MeasurementReliability"];
 export type MeasurementSource = components["schemas"]["MeasurementSource"];
@@ -27,6 +43,16 @@ export type AssistantReminderSuggestion = components["schemas"]["AssistantRemind
 export type AssistantChatRequest = components["schemas"]["AssistantChatRequest"];
 export type AssistantChatResponse = components["schemas"]["AssistantChatResponse"];
 export type AssistantRetryableError = components["schemas"]["AssistantRetryableError"];
+export type ConfirmationResponse = operations["confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post"]["responses"][200]["content"]["application/json"];
+export type CandidateEnrichmentStatus = operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"]["responses"][200]["content"]["application/json"];
+export type PlantProfileResponse = operations["get_plant_profile_plant_profiles__scientific_name__get"]["responses"][200]["content"]["application/json"];
+export type SearchLocalResponse = components["schemas"]["SearchLocalResponse"];
+export type GbifSearchResponse = components["schemas"]["GbifSearchResponse"];
+export type GbifCandidate = components["schemas"]["GbifCandidate"];
+export type ManualCandidateCreate = components["schemas"]["ManualCandidateCreate"];
+export type TaxonomyCandidate = components["schemas"]["TaxonomyCandidate"];
+export type EnrichmentActivityResponse = components["schemas"]["EnrichmentActivityResponse"];
+export type EnrichmentActivityItem = components["schemas"]["EnrichmentActivityItem"];
 
 type ErrorPayload = {
   detail?: string;
@@ -36,27 +62,11 @@ export class ApiClientError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = "ApiClientError";
   }
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Backend request failed with status ${response.status}`);
-  }
-
-  return response.json() as Promise<T>;
 }
 
 async function frontendRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -71,7 +81,14 @@ async function frontendRequest<T>(path: string, init: RequestInit = {}): Promise
 
   if (!response.ok) {
     const detail = typeof (payload as ErrorPayload | null)?.detail === "string" ? (payload as ErrorPayload).detail : null;
-    throw new ApiClientError(detail ?? `Request failed with status ${response.status}`, response.status);
+    const retryAfterRaw = parseRetryAfter(response.headers.get("retry-after"));
+    const retryAfterSeconds =
+      retryAfterRaw === null ? null : clampRetryAfter(retryAfterRaw, AUTH_RETRY_AFTER_MAX_SECONDS);
+    throw new ApiClientError(
+      detail ?? `Request failed with status ${response.status}`,
+      response.status,
+      retryAfterSeconds,
+    );
   }
 
   return payload as T;
@@ -85,8 +102,15 @@ export const apiClient = {
       body: JSON.stringify(body),
     }),
   requestRecovery: (body: RecoveryRequest) =>
-    request<RecoveryResponse>("/auth/recovery/request", {
+    frontendRequest<RecoveryResponse>("/api/auth/recovery/request", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  confirmRecovery: (body: RecoveryConfirmRequest) =>
+    frontendRequest<RecoveryConfirmResponse>("/api/auth/recovery/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   async getHomeSummary() {
@@ -97,6 +121,16 @@ export const apiClient = {
       throw new Error(`Home summary request failed with status ${response.status}`);
     }
     return response.json() as Promise<HomeSummaryResponse>;
+  },
+  getCurrentUser() {
+    return frontendRequest<PublicAuthUser>("/api/auth/me");
+  },
+  updateTimezone(timezone: string | null) {
+    return frontendRequest<PublicAuthUser>("/api/auth/me/timezone", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timezone }),
+    });
   },
   listGardenPlants(search = "") {
     const params = new URLSearchParams();
@@ -127,6 +161,77 @@ export const apiClient = {
       body: JSON.stringify(body),
     });
   },
+  async sendAssistantMessageStream(
+    body: AssistantChatRequest,
+    onStage?: (label: string) => void,
+  ): Promise<AssistantChatResponse | AssistantRetryableError> {
+    const response = await fetch("/api/assistant/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok || !response.body) {
+      const detail = await response
+        .json()
+        .catch(() => ({ detail: `Request failed with status ${response.status}` }));
+      throw new ApiClientError(detail.detail ?? "Request failed", response.status);
+    }
+    return consumeAssistantStream(response, onStage);
+  },
+  confirmCandidate(identificationId: string, candidateId: string) {
+    return frontendRequest<ConfirmationResponse>(
+      `/api/identifications/${encodeURIComponent(identificationId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
+      { method: "POST" },
+    );
+  },
+  getCandidateEnrichment(candidateId: string) {
+    return frontendRequest<CandidateEnrichmentStatus>(
+      `/api/identifications/candidates/${encodeURIComponent(candidateId)}/enrichment`,
+    );
+  },
+  getEnrichmentActivity(options?: {
+    limit?: number;
+    cursor?: string;
+  }): Promise<EnrichmentActivityResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit !== undefined) {
+      params.set("limit", String(options.limit));
+    }
+    if (options?.cursor) {
+      params.set("cursor", options.cursor);
+    }
+    const query = params.toString();
+    return frontendRequest<EnrichmentActivityResponse>(
+      `/api/jobs/enrichment-activity${query ? `?${query}` : ""}`,
+    );
+  },
+  getPlantProfile(scientificName: string, candidateId: string, language: string) {
+    const params = new URLSearchParams({ candidateId, language });
+    return frontendRequest<PlantProfileResponse>(
+      `/api/plant-profiles/${encodeURIComponent(scientificName)}?${params}`,
+    );
+  },
+  searchPlants(query: string) {
+    const params = new URLSearchParams({ q: query });
+    return frontendRequest<SearchLocalResponse>(`/api/search?${params.toString()}`);
+  },
+  searchGbif(query: string) {
+    const params = new URLSearchParams({ q: query });
+    return frontendRequest<GbifSearchResponse>(`/api/search/gbif?${params.toString()}`);
+  },
+  createManualCandidate(body: ManualCandidateCreate) {
+    return frontendRequest<TaxonomyCandidate>("/api/search/candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  confirmManualCandidate(candidateId: string) {
+    return frontendRequest<ConfirmationResponse>(
+      `/api/search/candidates/${encodeURIComponent(candidateId)}/confirm`,
+      { method: "POST" },
+    );
+  },
   listReminders(gardenPlantId?: string) {
     const params = new URLSearchParams();
     if (gardenPlantId) params.set("garden_plant_id", gardenPlantId);
@@ -135,6 +240,20 @@ export const apiClient = {
   },
   createReminder(body: ReminderCreate) {
     return frontendRequest<Reminder>("/api/reminders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  suggestReminder(body: ReminderSuggestionRequest) {
+    return frontendRequest<ReminderSuggestionOutcome>("/api/reminders/suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+  recordSuggestionMetric(body: ReminderSuggestionMetricRequest) {
+    return frontendRequest<{ status: string }>("/api/reminders/suggestions/metrics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -171,3 +290,52 @@ export const apiClient = {
     return frontendRequest<LightMeasurement[]>(`/api/light-measurements?${params.toString()}`);
   },
 };
+
+type StreamTerminal = AssistantChatResponse | AssistantRetryableError;
+
+/**
+ * Parse the assistant SSE stream. Stage events are forwarded via `onStage`;
+ * exactly one terminal frame (result | error) resolves the returned payload.
+ * Throws when the transport breaks before a terminal event so callers can
+ * fall back to the blocking chat contract.
+ */
+export async function consumeAssistantStream(
+  response: Pick<Response, "body">,
+  onStage?: (label: string) => void,
+): Promise<StreamTerminal> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Streaming is not supported in this environment.");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let terminal: StreamTerminal | null = null;
+
+  const handleFrame = (raw: string) => {
+    if (!raw.startsWith("data: ")) return; // heartbeat comment frames are ignored
+    const event = JSON.parse(raw.slice("data: ".length)) as {
+      type: string;
+      label_es?: string;
+    } & Record<string, unknown>;
+    if (event.type === "stage" && typeof event.label_es === "string") {
+      onStage?.(event.label_es);
+      return;
+    }
+    if (event.type === "result" || event.type === "error") {
+      const { type: _type, ...payload } = event;
+      terminal = payload as unknown as StreamTerminal;
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let separator = buffer.indexOf("\n\n");
+    while (separator !== -1) {
+      handleFrame(buffer.slice(0, separator).trim());
+      buffer = buffer.slice(separator + 2);
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+  if (!terminal) throw new Error("Assistant stream ended without a terminal event.");
+  return terminal;
+}

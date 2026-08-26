@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   apiClient,
@@ -10,7 +10,6 @@ import {
   type AssistantSource,
   type ReminderCreate,
 } from "@/lib/api/client";
-import { normalizeReminderAction } from "@/components/reminders/RemindersManager";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Notice } from "@/components/ui/Notice";
@@ -35,6 +34,7 @@ type ChatMessage = {
   content: string;
   contentFormat?: AssistantMessageContentFormat | null;
   reminderSuggestion?: AssistantReminderSuggestion | null;
+  requiresConfirmation?: boolean;
   suggestionStatus?: "accepted" | "error";
 };
 
@@ -45,11 +45,21 @@ const recurrenceLabels: Record<ReminderCreate["recurrence"], string> = {
   monthly: "Mensual",
 };
 
+const PENDING_STAGES = [
+  "Clasificando tu consulta...",
+  "Buscando en fuentes confiables...",
+  "Contrastando la informacion...",
+  "Redactando respuesta...",
+];
+
+const PENDING_STAGE_INTERVAL_MS = 3500;
+
 export function AssistantChat() {
   const searchParams = useSearchParams();
   const plant = searchParams.get("plant");
   const binomial = searchParams.get("binomial");
   const scientific = searchParams.get("scientific");
+  const candidate = searchParams.get("candidate");
   const hasPlantContext = Boolean(plant);
   const scientificLabel = binomial ?? scientific ?? null;
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -63,6 +73,35 @@ export function AssistantChat() {
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<number | null>(
     null,
   );
+  const [pendingStage, setPendingStage] = useState(0);
+  const [serverStage, setServerStage] = useState<string | null>(null);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!pending) {
+      setPendingStage(0);
+      setServerStage(null);
+      return;
+    }
+    setPendingStage(0);
+    const timer = window.setInterval(
+      () => setPendingStage((current) => (current + 1) % PENDING_STAGES.length),
+      PENDING_STAGE_INTERVAL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [pending]);
+
+  useEffect(() => {
+    const node = threadEndRef.current;
+    if (!node || !messages.length) return;
+    const reduceMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    node.scrollIntoView?.({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [messages.length, pending]);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,13 +113,25 @@ export function AssistantChat() {
     setMessages((current) => [...current, { role: "user", content: trimmed }]);
     setMessage("");
     try {
-      const response = await apiClient.sendAssistantMessage({
+      const streamBody = {
         message: trimmed,
         conversation_id: conversationId,
         plant,
         plant_binomial_name: binomial,
         plant_scientific_name: scientific,
-      });
+        confirmed_candidate_id: candidate ?? undefined,
+      };
+      let response;
+      try {
+        response = await apiClient.sendAssistantMessageStream(
+          streamBody,
+          (label) => setServerStage(label),
+        );
+      } catch {
+        // Graceful degradation: the blocking JSON chat contract remains
+        // canonical whenever the stream is unavailable or breaks mid-turn.
+        response = await apiClient.sendAssistantMessage(streamBody);
+      }
       if (
         "retryable" in response &&
         (response as AssistantRetryableError).retryable
@@ -105,6 +156,7 @@ export function AssistantChat() {
           content: chatResponse.message.content,
           contentFormat: chatResponse.message.content_format,
           reminderSuggestion: chatResponse.reminder_suggestion,
+          requiresConfirmation: chatResponse.requires_confirmation !== false,
         },
       ]);
       setSources(chatResponse.sources);
@@ -127,13 +179,18 @@ export function AssistantChat() {
     setAcceptingSuggestion(messageIndex);
     setError(null);
     try {
+      const fallbackSchedule =
+        suggestion.date && suggestion.time
+          ? null
+          : localScheduleParts(suggestion.due_at, suggestion.timezone);
       await apiClient.createReminder({
         garden_plant_id: suggestion.garden_plant_id,
-        action: normalizeReminderAction(suggestion.action),
-        date: suggestion.due_at.slice(0, 10),
-        time: suggestion.due_at.slice(11, 16),
+        action: suggestion.action,
+        date: suggestion.date ?? fallbackSchedule?.date ?? "",
+        time: suggestion.time ?? fallbackSchedule?.time ?? "",
         recurrence: suggestion.recurrence,
         suggestion_justification: suggestion.suggestion_justification,
+        timezone: suggestion.timezone ?? null,
       });
       setMessages((current) =>
         current.map((item, index) =>
@@ -307,44 +364,63 @@ export function AssistantChat() {
                     variant="callout"
                     className={styles.suggestionCard}
                     eyebrow="Recordatorio sugerido"
-                    heading={normalizeReminderAction(
-                      item.reminderSuggestion.action,
-                    )}
+                    heading={item.reminderSuggestion.action}
                     description={
                       <>
                         {item.reminderSuggestion.plant_name} &middot;{" "}
-                        {formatDateTime(item.reminderSuggestion.due_at)}{" "}
+                        {formatDateTime(
+                          item.reminderSuggestion.due_at,
+                          item.reminderSuggestion.timezone,
+                        )}{" "}
                         &middot;{" "}
                         {recurrenceLabels[item.reminderSuggestion.recurrence]}
                       </>
                     }
                     actions={
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="primary"
-                        onClick={() =>
-                          acceptReminderSuggestion(
-                            item.reminderSuggestion!,
-                            index,
-                          )
-                        }
-                        disabled={
-                          acceptingSuggestion !== null ||
-                          item.suggestionStatus === "accepted"
-                        }
-                      >
-                        {item.suggestionStatus === "accepted"
-                          ? "Recordatorio creado"
-                          : acceptingSuggestion === index
-                            ? "Creando..."
-                            : "Aceptar sugerencia"}
-                      </Button>
+                      item.requiresConfirmation === false ? undefined : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          onClick={() =>
+                            acceptReminderSuggestion(
+                              item.reminderSuggestion!,
+                              index,
+                            )
+                          }
+                          disabled={
+                            acceptingSuggestion !== null ||
+                            item.suggestionStatus === "accepted"
+                          }
+                        >
+                          {item.suggestionStatus === "accepted"
+                            ? "Recordatorio creado"
+                            : acceptingSuggestion === index
+                              ? "Creando..."
+                              : "Aceptar sugerencia"}
+                        </Button>
+                      )
                     }
                   >
                     <p className={styles.suggestionJustification}>
                       {item.reminderSuggestion.suggestion_justification}
                     </p>
+                    {typeof item.reminderSuggestion.confidence ===
+                    "number" ? (
+                      <p className={styles.suggestionEvidence}>
+                        Confianza:{" "}
+                        {Math.round(item.reminderSuggestion.confidence * 100)}%
+                        {item.reminderSuggestion.evidence?.taxonomy
+                          ? ` · ${String(item.reminderSuggestion.evidence.taxonomy)}`
+                          : ""}
+                      </p>
+                    ) : null}
+                    {item.reminderSuggestion.limitations?.length ? (
+                      <p className={styles.suggestionEvidence}>
+                        Limitaciones:{" "}
+                        {item.reminderSuggestion.limitations.join(" · ")}
+                      </p>
+                    ) : null}
                     {item.suggestionStatus === "error" ? (
                       <p className={styles.suggestionError}>
                         No pudimos crear este recordatorio.
@@ -355,10 +431,11 @@ export function AssistantChat() {
               </div>
             ))}
             {pending ? (
-              <p className={styles.meta}>
-                Consultando fuentes y herramientas...
+              <p className={styles.meta} role="status">
+                {serverStage ?? PENDING_STAGES[pendingStage]}
               </p>
             ) : null}
+            <div ref={threadEndRef} aria-hidden="true" />
           </div>
 
           {error ? (
@@ -455,9 +532,31 @@ export function AssistantMessageContent({
   return <span className={styles.messageContent}>{content}</span>;
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, timezone?: string | null) {
   return new Intl.DateTimeFormat("es-AR", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: timezone || undefined,
   }).format(new Date(value));
+}
+
+function localScheduleParts(
+  value: string,
+  timezone?: string | null,
+): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone || undefined,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${get("hour")}:${get("minute")}`,
+  };
 }

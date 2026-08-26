@@ -5,4 +5,8 @@ resource "google_artifact_registry_repository" "app" {
   description   = "Fotosintesis AI container images"
   format        = "DOCKER"
   labels        = var.labels
+
+  docker_config {
+    immutable_tags = true
+  }
 }

@@ -5,6 +5,7 @@ from uuid import UUID
 from app.assistant.graph import answerability, answers, classifier, topology, web_evidence
 from app.assistant.graph.plant_resolution import _normalize_plant_name, display_plant_name, operational_plant_name
 from app.assistant.graph.types import AssistantState, FallbackResponseDraft
+from app.assistant.streaming import StageSequence
 from app.assistant.tools import AssistantTools
 from app.core.settings import Settings, get_settings
 from app.knowledge.plant_data import StructuredPlantEvidence
@@ -15,6 +16,7 @@ class AssistantGraph:
     def __init__(self, tools: AssistantTools, settings: Settings | None = None) -> None:
         self.tools = tools
         self.settings = settings or get_settings()
+        self._stages = StageSequence(None)
         self.graph = topology._compile_graph(self)
 
     async def run(
@@ -23,15 +25,24 @@ class AssistantGraph:
         user_id: UUID,
         message: str,
         plant_hint: str | None,
+        user_timezone: str | None = None,
         plant_binomial_name: str | None = None,
         plant_scientific_name: str | None = None,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
+        stage_listener=None,
     ) -> AssistantState:
+        # One chat turn per run: the emitter is scoped to this invocation.
+        self._stages = StageSequence(stage_listener)
         state: AssistantState = {
             "user_id": user_id,
+            "user_timezone": user_timezone,
             "message": message.strip(),
             "plant_hint": _normalize_plant_name(plant_hint),
             "plant_binomial_name": _normalize_plant_name(plant_binomial_name),
             "plant_scientific_name": _normalize_plant_name(plant_scientific_name),
+            "canonical_species_key": canonical_species_key,
+            "accepted_gbif_key": accepted_gbif_key,
             "operational_plant_name": operational_plant_name(
                 plant=plant_hint,
                 plant_binomial_name=plant_binomial_name,
@@ -54,7 +65,11 @@ class AssistantGraph:
         if provider_fallbacks:
             result["provider_fallbacks"] = list(result.get("provider_fallbacks", [])) + provider_fallbacks
             result["fallback_reasons"] = list(result.get("fallback_reasons", []))
+        result["tool_calls"] = list(getattr(self.tools, "tool_calls", []))
         return result
+
+    async def _emit_stage(self, stage_id: str) -> None:
+        await self._stages.emit(stage_id)
 
     async def classify_intent(self, state: AssistantState) -> dict:
         return await classifier.classify_intent(self, state)

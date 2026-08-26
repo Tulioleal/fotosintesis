@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+import hashlib
+import re
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.settings import Settings, get_settings
 from app.knowledge.chunking import build_chunk_metadata
@@ -16,6 +23,8 @@ from app.knowledge.rag.types import (
     MetadataFilterSpec,
     OrchestratedKnowledgeIngestion,
     RetrievedNode,
+    VectorIndexError,
+    VectorIndexIncomplete,
 )
 from app.knowledge.schemas import (
     KnowledgeChunk,
@@ -76,13 +85,23 @@ def _llamaindex_chunk_metadata(
     *,
     provider: str,
     model: str | None,
+    embedding_dimension: int,
 ) -> dict[str, Any]:
-    metadata = build_chunk_metadata(chunk)
+    metadata = build_chunk_metadata(
+        species_id=chunk.species_id,
+        scientific_name=chunk.scientific_name,
+        topic=chunk.topic,
+        source_domain=chunk.source_domain,
+        source_url=chunk.source_url,
+        confidence=chunk.confidence,
+        review_status=chunk.review_status.value,
+        retrieved_at=chunk.retrieved_at,
+        created_at=chunk.created_at,
+        extra_metadata=chunk.metadata,
+    )
     metadata["embedding_provider"] = provider
     metadata["embedding_model"] = model
-    metadata["embedding_dimension"] = (
-        len(chunk.metadata.get("embedding")) if isinstance(chunk.metadata.get("embedding"), list) else None
-    )
+    metadata["embedding_dimension"] = embedding_dimension
     return metadata
 
 
@@ -121,11 +140,27 @@ def build_metadata_filter_specs(filters: KnowledgeRetrievalFilters) -> list[Meta
         )
     if filters.covered_aspect:
         specs.append(
-            MetadataFilterSpec("covered_aspects", filters.covered_aspect)
+            MetadataFilterSpec("covered_aspects", filters.covered_aspect, operator="contains")
         )
     if filters.evidence_type:
         specs.append(
             MetadataFilterSpec("evidence_type", filters.evidence_type)
+        )
+    if filters.source_provenance:
+        specs.append(
+            MetadataFilterSpec("source_provenance", filters.source_provenance)
+        )
+    if filters.answerability_status:
+        specs.append(
+            MetadataFilterSpec("answerability_status", filters.answerability_status)
+        )
+    if filters.canonical_species_key:
+        specs.append(
+            MetadataFilterSpec("canonical_species_key", filters.canonical_species_key)
+        )
+    if filters.accepted_gbif_key is not None:
+        specs.append(
+            MetadataFilterSpec("accepted_gbif_key", filters.accepted_gbif_key)
         )
     if filters.retrieved_after:
         specs.append(
@@ -155,7 +190,7 @@ def build_llamaindex_metadata_filters(
     *,
     metadata_filter_cls: type | None = None,
     metadata_filters_cls: type | None = None,
-) -> "Any | None":
+) -> Any | None:
     if metadata_filter_cls is None or metadata_filters_cls is None:
         try:
             from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
@@ -174,8 +209,50 @@ def build_llamaindex_metadata_filters(
         llama_filters.append(metadata_filter_cls(**kwargs))
     return metadata_filters_cls(filters=llama_filters, condition="and")
 class LlamaIndexRuntime:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        vector_store_factory: Callable[[], Any] | None = None,
+    ) -> None:
         self.settings = settings or get_settings()
+        self._vector_store_factory = vector_store_factory
+        self._vector_store: Any | None = None
+
+    def _get_vector_store(self) -> Any:
+        if self._vector_store is None:
+            factory = self._vector_store_factory or (
+                lambda: create_llamaindex_pgvector_store(self.settings)
+            )
+            self._vector_store = factory()
+        return self._vector_store
+
+    async def _initialize_vector_store(self, store: Any) -> None:
+        # PGVectorStore creates its table lazily. Serialize that DDL across
+        # workers so two first-time claims cannot race its CREATE TABLE call.
+        initialization_engine = store._async_engine
+        owns_initialization_engine = initialization_engine is None
+        if initialization_engine is None:
+            initialization_url = make_url(str(store.connection_string)).set(
+                drivername="postgresql+asyncpg"
+            )
+            initialization_engine = create_async_engine(initialization_url)
+        try:
+            async with initialization_engine.connect() as connection:
+                await connection.execute(
+                    text("SELECT pg_advisory_lock(hashtext(:key))"),
+                    {"key": "fotosintesis-pgvector-store-initialization"},
+                )
+                try:
+                    await asyncio.to_thread(store._initialize)
+                finally:
+                    await connection.execute(
+                        text("SELECT pg_advisory_unlock(hashtext(:key))"),
+                        {"key": "fotosintesis-pgvector-store-initialization"},
+                    )
+        finally:
+            if owns_initialization_engine:
+                await initialization_engine.dispose()
 
     def _build_chunk_from_node(
         self,
@@ -186,7 +263,7 @@ class LlamaIndexRuntime:
         metadata = getattr(node, "metadata", {}) or {}
         created_at = metadata.get("created_at")
         if not isinstance(created_at, datetime):
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
         return KnowledgeChunk(
             id=UUID(str(node.id_)),
             document_id=None,
@@ -225,7 +302,7 @@ class LlamaIndexRuntime:
             raise ValueError("Knowledge documents require at least one trusted source")
 
         source = document.sources[0]
-        created_at = datetime.now(timezone.utc)
+        created_at = datetime.now(UTC)
         base_metadata = build_chunk_metadata(
             species_id=document.species_id,
             scientific_name=document.scientific_name,
@@ -236,6 +313,7 @@ class LlamaIndexRuntime:
             review_status=document.review_status.value,
             retrieved_at=source.retrieved_at,
             created_at=created_at,
+            extra_metadata=document.metadata,
         )
         embedding_transform = AppEmbeddingTransform(embedding_provider)
         pipeline = IngestionPipeline(
@@ -284,7 +362,22 @@ class LlamaIndexRuntime:
             model=embedding_transform.result.model,
         )
 
-    def index_chunks(
+    async def index_chunks(
+        self,
+        *,
+        chunks: list[KnowledgeChunk],
+        embeddings: list[list[float]],
+        provider: str,
+        model: str | None,
+    ) -> None:
+        await self.ensure_nodes(
+            chunks=chunks,
+            embeddings=embeddings,
+            provider=provider,
+            model=model,
+        )
+
+    async def ensure_nodes(
         self,
         *,
         chunks: list[KnowledgeChunk],
@@ -293,7 +386,6 @@ class LlamaIndexRuntime:
         model: str | None,
     ) -> None:
         try:
-            from llama_index.core import VectorStoreIndex
             from llama_index.core.schema import TextNode
         except ImportError as exc:
             raise RuntimeError("Install llama-index-core to index knowledge chunks") from exc
@@ -305,18 +397,90 @@ class LlamaIndexRuntime:
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             if chunk.id is None:
                 raise ValueError("Cannot index an unsaved chunk")
-            metadata = _llamaindex_chunk_metadata(chunk, provider=provider, model=model)
+            metadata = _llamaindex_chunk_metadata(
+                chunk,
+                provider=provider,
+                model=model,
+                embedding_dimension=len(embedding),
+            )
             node = TextNode(text=chunk.content, id_=str(chunk.id), metadata=metadata)
             node.embedding = embedding
             nodes.append(node)
 
-        index = VectorStoreIndex.from_vector_store(
-            vector_store=create_llamaindex_pgvector_store(self.settings),
-            embed_model=create_llamaindex_embed_model(self.settings),
-        )
-        index.insert_nodes(nodes)
+        store = self._get_vector_store()
+        try:
+            await self._initialize_vector_store(store)
+            table = store._table_class
+            schema_name = store.schema_name
+            table_name = table.__tablename__
+            if not all(
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+                for value in (schema_name, table_name)
+            ):
+                raise VectorIndexError("PGVector schema or table identifier is invalid")
+            index_hash = hashlib.sha256(
+                f"{schema_name}.{table_name}.node_id".encode()
+            ).hexdigest()[:16]
+            index_name = f"uq_pgvector_node_id_{index_hash}"
 
-    def retrieve_nodes(
+            async with store._async_engine.begin() as connection:
+                # CREATE INDEX IF NOT EXISTS can still deadlock when two
+                # first-time workers issue it concurrently. Keep only this
+                # vector DDL/upsert transaction under a database-wide lock.
+                await connection.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": "fotosintesis-pgvector-node-upsert"},
+                )
+                await connection.execute(
+                    text(
+                        f'CREATE UNIQUE INDEX IF NOT EXISTS "{index_name}" '
+                        f'ON "{schema_name}"."{table_name}" (node_id)'
+                    )
+                )
+                for node in nodes:
+                    row = store._node_to_table_row(node)
+                    values = {
+                        "node_id": row.node_id,
+                        "embedding": row.embedding,
+                        "text": row.text,
+                        "metadata_": row.metadata_,
+                    }
+                    statement = pg_insert(table).values(**values)
+                    statement = statement.on_conflict_do_update(
+                        index_elements=[table.node_id],
+                        set_={
+                            "embedding": statement.excluded.embedding,
+                            "text": statement.excluded.text,
+                            "metadata_": statement.excluded.metadata_,
+                        },
+                    )
+                    await connection.execute(statement)
+
+            expected_ids = {str(chunk.id) for chunk in chunks}
+            actual_nodes = await store.aget_nodes(node_ids=sorted(expected_ids))
+            actual_ids = {node.node_id for node in actual_nodes}
+            if actual_ids != expected_ids or len(actual_nodes) != len(expected_ids):
+                raise VectorIndexIncomplete("PGVector did not contain every expected node")
+        except VectorIndexError:
+            raise
+        except Exception as exc:
+            raise VectorIndexError("PGVector node upsert failed") from exc
+
+    async def has_all_nodes(self, node_ids: list[UUID]) -> bool:
+        if not node_ids:
+            return False
+        store = self._get_vector_store()
+        expected_ids = {str(node_id) for node_id in node_ids}
+        try:
+            await self._initialize_vector_store(store)
+            nodes = await store.aget_nodes(node_ids=sorted(expected_ids))
+        except Exception as exc:
+            raise VectorIndexError("PGVector node verification failed") from exc
+        return len(nodes) == len(expected_ids) and {
+            node.node_id for node in nodes
+        } == expected_ids
+
+    async def retrieve_nodes(
         self,
         *,
         filters: KnowledgeRetrievalFilters,
@@ -330,16 +494,23 @@ class LlamaIndexRuntime:
         except ImportError as exc:
             raise RuntimeError("Install llama-index-core to retrieve knowledge chunks") from exc
 
-        index = VectorStoreIndex.from_vector_store(
-            vector_store=create_llamaindex_pgvector_store(self.settings),
-            embed_model=create_llamaindex_embed_model(self.settings),
-        )
-        retriever = index.as_retriever(
-            similarity_top_k=limit,
-            filters=build_llamaindex_metadata_filters(filters),
-        )
-        bundle = QueryBundle(query_str=query_text, embedding=query_embedding)
-        return [_retrieved_node_from_score_node(node) for node in retriever.retrieve(bundle)]
+        try:
+            store = self._get_vector_store()
+            await self._initialize_vector_store(store)
+            index = VectorStoreIndex.from_vector_store(
+                vector_store=store,
+                embed_model=create_llamaindex_embed_model(self.settings),
+            )
+            retriever = index.as_retriever(
+                similarity_top_k=limit,
+                filters=build_llamaindex_metadata_filters(filters),
+            )
+            bundle = QueryBundle(query_str=query_text, embedding=query_embedding)
+            return [_retrieved_node_from_score_node(node) for node in retriever.retrieve(bundle)]
+        except VectorIndexError:
+            raise
+        except Exception as exc:
+            raise VectorIndexError("Knowledge retrieval failed") from exc
 
 
 __all__ = [
@@ -349,6 +520,8 @@ __all__ = [
     "MetadataFilterSpec",
     "OrchestratedKnowledgeIngestion",
     "RetrievedNode",
+    "VectorIndexError",
+    "VectorIndexIncomplete",
     "build_llamaindex_metadata_filters",
     "build_metadata_filter_specs",
     "build_pgvector_config",

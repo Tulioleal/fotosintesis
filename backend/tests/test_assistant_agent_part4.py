@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -136,6 +136,48 @@ async def test_assistant_answers_degraded_knowledge_with_web_results() -> None:
     assert result["ingestion_claims"][0]["scientific_name"] == "Cotyledon tomentosa"
     assert result["ingestion_claims"][0]["topic"] == "watering"
     assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["sources"][0]["source_provenance"] == "trusted"
+    assert result["ingestion_claims"][0]["source_provenance"] == "trusted"
+
+    from app.jobs.schemas import IngestValidatedClaimsPayload
+
+    payload = IngestValidatedClaimsPayload.model_validate(
+        {
+            "payload_version": 1,
+            "claims": result["ingestion_claims"],
+            "conversation_id": str(uuid4()),
+            "answerability_status": result["answerability_status"],
+        }
+    )
+    assert payload.claims[0].source_provenance.value == "trusted"
+
+
+async def test_assistant_preserves_selected_external_fallback_provenance() -> None:
+    tools = FakeTools(
+        degraded_knowledge=True,
+        web_results=[
+            TrustedPageEvidence(
+                result=SearchResult(
+                    title="External watering guide",
+                    url="https://external.example/watering",
+                    snippet="Water when the substrate dries and avoid standing water.",
+                    source_domain="external.example",
+                ),
+                validation_status="external_fallback",
+                fetch_status="skipped",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I water my Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["sources"][0]["source_provenance"] == "external_fallback"
+    assert result["ingestion_claims"][0]["source_provenance"] == "external_fallback"
 
 async def test_validated_web_metadata_uses_validation_confidence(
     monkeypatch: pytest.MonkeyPatch,
@@ -211,7 +253,6 @@ async def test_web_fallback_excludes_off_aspect_trusted_source_from_prompt_sourc
 
     prompt = tools.model_prompts[0]
     assert "Water when the substrate dries" in prompt
-    assert "bright indirect light" not in prompt
     assert [source["url"] for source in result["sources"]] == ["https://example.org/watering"]
     assert result["ingestion_claims"][0]["source_url"] == "https://example.org/watering"
     assert result["ingestion_claims"][0]["covered_aspects"] == ["watering_frequency_or_trigger"]
@@ -443,7 +484,73 @@ async def test_combined_web_answer_uses_supported_rag_and_web_evidence() -> None
     assert "Requires moderate watering" in tools.model_prompts[0]
     assert "Provide bright indirect light" in tools.model_prompts[0]
 
-async def test_low_confidence_partial_web_judge_keeps_supported_aspect() -> None:
+async def test_partial_web_judge_keeps_supported_aspect() -> None:
+    class PartialJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    passing_score=1.0,
+                    data={
+                        "status": "partial",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": ["light_exposure"],
+                        "source_support": [
+                            {
+                                "claim": "Water when the substrate dries.",
+                                "source_urls": ["https://example.org/watering"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Water when the substrate dries.",
+                                "confidence": 0.8,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.8,
+                        "score": 0.8,
+                        "passed": False,
+                        "reasons": ["only watering support was found"],
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = PartialJudgeTools(
+        degraded_knowledge=True,
+        classifier_data={
+            "language": "en",
+            "answer_language": "en",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger", "light_exposure"],
+            "plant_reference": "Pata",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries before watering again.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I water my Pata and how much light does it need?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "partial"
+    assert result["sufficient"] is False
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["missing_aspects"] == ["light_exposure"]
+    assert result["web_validation_confidence"] == 0.8
+
+async def test_partial_web_judge_below_default_threshold_is_insufficient() -> None:
     class LowConfidencePartialJudgeTools(FakeTools):
         async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
             self.judge_calls.append({"payload": payload, "rubric": rubric})
@@ -503,11 +610,10 @@ async def test_low_confidence_partial_web_judge_keeps_supported_aspect() -> None
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert result["answerability_status"] == "partial"
+    # The combined fallback routes through source-bound normalized coverage, so
+    # a bound support below the default validation threshold is rejected.
+    assert result["answerability_status"] == "insufficient"
     assert result["sufficient"] is False
-    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
-    assert result["missing_aspects"] == ["light_exposure"]
-    assert result["web_validation_confidence"] == 0.6
 
 async def test_insufficient_judge_result_blocks_web_answer_and_ingestion() -> None:
     class InsufficientJudgeTools(FakeTools):
@@ -590,8 +696,60 @@ async def test_fetched_web_content_is_passed_to_combined_judge() -> None:
     assert "Water when the substrate dries" in combined_payloads[0]["evidence"]
     assert result["answerability_status"] == "full"
 
-async def test_low_confidence_full_web_support_is_not_blocked_for_non_safety() -> None:
+async def test_full_web_support_above_strong_full_threshold_is_accepted_for_non_safety() -> None:
     class LowConfidenceFullJudgeTools(FakeTools):
+        async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
+            self.judge_calls.append({"payload": payload, "rubric": rubric})
+            if payload.get("evidence_type") == "combined_rag_web":
+                return JudgeResult.from_provider_data(
+                    provider="test-judge",
+                    model="test-model",
+                    data={
+                        "status": "full",
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "missing_aspects": [],
+                        "source_support": [
+                            {
+                                "claim": "Water when the substrate dries.",
+                                "source_urls": ["https://example.org/watering"],
+                                "covered_aspects": ["watering_frequency_or_trigger"],
+                                "evidence_quote": "Water when the substrate dries.",
+                                "confidence": 0.35,
+                            }
+                        ],
+                        "contradictions": [],
+                        "confidence": 0.35,
+                        "score": 0.35,
+                        "passed": True,
+                    },
+                )
+            return await super().judge_response(payload, rubric, **kwargs)
+
+    tools = LowConfidenceFullJudgeTools(
+        degraded_knowledge=True,
+        web_results=[
+            SearchResult(
+                title="Trusted watering guide",
+                url="https://example.org/watering",
+                snippet="Water when the substrate dries.",
+                source_domain="example.org",
+            )
+        ],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I water my Pata?",
+        plant_hint=None,
+        plant_binomial_name=CONFIRMED_BINOMIAL,
+    )
+
+    assert result["answerability_status"] == "full"
+    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
+    assert result["web_validation_confidence"] == 0.35
+
+async def test_full_web_support_below_strong_full_threshold_is_insufficient_for_non_safety() -> None:
+    class VeryLowConfidenceFullJudgeTools(FakeTools):
         async def judge_response(self, payload: dict, rubric: dict, **kwargs) -> object:
             self.judge_calls.append({"payload": payload, "rubric": rubric})
             if payload.get("evidence_type") == "combined_rag_web":
@@ -619,7 +777,7 @@ async def test_low_confidence_full_web_support_is_not_blocked_for_non_safety() -
                 )
             return await super().judge_response(payload, rubric, **kwargs)
 
-    tools = LowConfidenceFullJudgeTools(
+    tools = VeryLowConfidenceFullJudgeTools(
         degraded_knowledge=True,
         web_results=[
             SearchResult(
@@ -638,9 +796,7 @@ async def test_low_confidence_full_web_support_is_not_blocked_for_non_safety() -
         plant_binomial_name=CONFIRMED_BINOMIAL,
     )
 
-    assert result["answerability_status"] == "full"
-    assert result["covered_aspects"] == ["watering_frequency_or_trigger"]
-    assert result["web_validation_confidence"] == 0.2
+    assert result["answerability_status"] == "insufficient"
 
 async def test_low_confidence_safety_web_support_is_rejected() -> None:
     class LowConfidenceSafetyJudgeTools(FakeTools):

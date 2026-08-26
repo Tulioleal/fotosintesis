@@ -187,3 +187,165 @@ The system SHALL run backend and migration workloads with Cloud SQL Auth Proxy c
 #### Scenario: Migration job includes Cloud SQL proxy
 - **WHEN** migration Job manifests are rendered for GCP deployment
 - **THEN** the migration pod can connect to the same Cloud SQL instance through Cloud SQL Auth Proxy before running Alembic migrations
+
+### Requirement: Authentication dependency security gate
+
+Frontend CI SHALL verify the installed frozen-lockfile Auth.js dependency shape and SHALL scan production dependencies for high-severity advisories before build or deployment.
+
+#### Scenario: Patched aligned dependency graph is verified
+
+- **WHEN** frontend CI installs dependencies with the frozen lockfile
+- **THEN** a deterministic policy check verifies exact `next-auth@5.0.0-beta.32`, no direct `@auth/core`, one reachable transitive core version, and no direct core imports
+- **AND** the production dependency advisory scan reports no GHSA-8fpg-xm3f-6cx3 finding
+
+#### Scenario: Authentication dependency policy is violated
+
+- **WHEN** the manifest, installed graph, source imports, or advisory scan contains an affected or unaligned Auth.js dependency
+- **THEN** frontend CI fails before image build or deployment
+
+#### Scenario: Root dependency files change
+
+- **WHEN** a pull request or main-branch push changes the root package manifest, pnpm lockfile, or pnpm workspace definition
+- **THEN** the frontend validation workflow runs the authentication dependency security gate
+
+### Requirement: Authentication upgrade regression gate
+
+The Auth.js security upgrade SHALL pass focused fail-closed tests and the existing complete frontend validation and authentication journey before deployment.
+
+#### Scenario: Authentication release candidate is verified
+
+- **WHEN** the upgraded frontend is prepared for merge
+- **THEN** focused tests cover missing configuration, decode failure, malformed credentials responses, stale backend sessions, credential non-exposure, callback routing, and logout
+- **AND** lint, typecheck, full component tests, generated contract verification, production build, and authentication end-to-end tests pass
+
+#### Scenario: Production server starts without Auth.js secrets
+
+- **WHEN** CI starts the built frontend on an isolated local port with both supported Auth.js secret variables removed
+- **THEN** a representative private-route request redirects to `/login`
+- **AND** the smoke fails if private content or a successful authorization result is returned
+- **AND** the production server is terminated after the bounded check
+
+### Requirement: Authentication limiter verification
+
+The system SHALL include automated tests that verify authentication limit response contracts, privacy properties, storage-failure policies, atomic concurrency bounds, and distributed enforcement.
+
+#### Scenario: Backend limiter tests run
+
+- **WHEN** backend unit and PostgreSQL integration tests run
+- **THEN** they verify endpoint thresholds, atomic concurrent updates, expiry cleanup, successful-login relaxation, safe storage-failure behavior, and equivalent known-versus-unknown recovery outcomes
+
+#### Scenario: Frontend limiter tests run
+
+- **WHEN** frontend component and authentication journey tests run
+- **THEN** they verify `429` and `Retry-After` propagation, bounded retry presentation, disabled resubmission, and neutral recovery copy
+
+#### Scenario: Multi-replica verification runs
+
+- **WHEN** the deployment verification sends matching invalid credential attempts through at least two application instances
+- **THEN** their combined allowed attempts do not exceed the configured shared limit
+
+### Requirement: Authentication limiter deployment contract
+
+The Kubernetes deployment SHALL configure documented authentication limit profiles, keyed-digest secrets, trusted proxy behavior, retention, and endpoint-specific storage-failure policies consistently across replicas without committing secret values.
+
+#### Scenario: Deployment artifacts are rendered
+
+- **WHEN** authentication limiter deployment configuration is rendered for an environment
+- **THEN** every relevant frontend and backend replica receives compatible non-secret policy settings
+- **AND** keyed-digest material is projected from the runtime secret mechanism
+
+#### Scenario: Limiter metrics are scraped
+
+- **WHEN** authentication abuse metrics are emitted by application replicas
+- **THEN** existing monitoring discovers the metrics with only closed endpoint-category and outcome labels
+
+### Requirement: Trusted proxy deployment verification
+
+The deployment SHALL document and test the exact GKE ingress-to-frontend trust chain used for source identity and SHALL apply a conservative identity when that chain cannot be established.
+
+#### Scenario: Forwarding header spoofing is tested
+
+- **WHEN** deployment verification sends requests with spoofed forwarding-header entries
+- **THEN** the application ignores untrusted entries and does not create attacker-selected limiter identities
+
+### Requirement: Edge protection remains complementary
+
+Any Cloud Armor or equivalent volumetric rate limit SHALL be configured and documented as a separate optional edge control and MUST NOT replace application account-aware authentication limits.
+
+#### Scenario: Edge protection is absent or changed
+
+- **WHEN** no edge rate-limit policy is enabled or its threshold changes
+- **THEN** distributed application source-aware and account-aware authentication limits remain enforced
+
+### Requirement: Container runtime identity verification
+
+Backend CI SHALL verify the final image's default runtime identity and SHALL execute bounded smoke tests for the production API, worker, and migration commands under that identity.
+
+#### Scenario: Hardened backend image passes CI
+
+- **WHEN** backend CI builds the final runtime image
+- **THEN** a deterministic check confirms that its default UID and GID match the documented non-zero runtime identity
+- **AND** bounded API, worker, and migration smoke commands complete without a root user override
+
+#### Scenario: Runtime identity or ownership regresses
+
+- **WHEN** the built image defaults to UID 0 or a production command fails because a required path is inaccessible to the runtime user
+- **THEN** backend CI fails before image deployment
+
+### Requirement: Rendered workload policy verification
+
+Deployment validation SHALL inspect every rendered environment manifest and SHALL fail when any regular container, init container, or native sidecar lacks required CPU and memory requests or limits. It SHALL also verify the security-context and writable-storage invariants applicable to each application container and SHALL accept an exception only when the exception is explicit, workload-specific, and documents its concrete runtime reason.
+
+#### Scenario: Rendered manifests satisfy the baseline
+
+- **WHEN** deployment manifests are rendered for an environment
+- **THEN** policy checks enumerate every regular container, init container, and native sidecar
+- **AND** every enumerated container declares CPU and memory requests and limits
+- **AND** application containers enforce non-root execution, disabled privilege escalation, dropped Linux capabilities, and `RuntimeDefault` seccomp
+- **AND** read-only roots and writable volumes agree with the documented writable-path inventory
+
+#### Scenario: Rendered manifest omits a required field
+
+- **WHEN** a rendered container lacks a required resource or security declaration and has no approved documented exception
+- **THEN** deployment validation fails before the manifest is applied
+
+#### Scenario: Standard manifest scanner evaluates the workloads
+
+- **WHEN** Checkov or an equivalent pinned manifest policy scanner runs in CI
+- **THEN** findings for root application execution, privilege escalation, required capability drops, seccomp, and missing resource declarations are either resolved or linked to an explicit workload-specific exception
+
+### Requirement: Hardened runtime deployment smoke tests
+
+Development deployment verification SHALL exercise health checks, migrations, background job processing, uploads, and configured provider calls under the hardened workload identity and filesystem policy before the same image and manifest policy structure is promoted.
+
+#### Scenario: Development workload behavior remains functional
+
+- **WHEN** hardened images and rendered manifests are deployed to the development cluster
+- **THEN** migrations complete, API and frontend health checks pass, the worker processes a representative job, and representative upload and provider operations succeed
+
+#### Scenario: Resource exhaustion remains bounded
+
+- **WHEN** a development workload reaches its configured CPU or memory limit during a controlled verification
+- **THEN** throttling or container termination is confined to the bounded workload
+- **AND** Kubernetes can report and recover or restart the workload without unbounded node-wide consumption
+
+### Requirement: Network policy verification
+
+Deployment validation SHALL verify that cluster enforcement is effective and that workload NetworkPolicies allow required traffic while denying unexpected traffic.
+
+#### Scenario: Enforcement is proven by probes
+
+- **WHEN** enforcement is enabled in development
+- **THEN** an intentionally denied pod-to-pod connection fails
+- **AND** an allowed connection succeeds
+
+#### Scenario: Required traffic remains functional
+
+- **WHEN** default-deny policies and allow rules are applied
+- **THEN** frontend, backend, worker, migrations, Cloud SQL, DNS, Workload Identity, External Secrets, Managed Prometheus, ingress health checks, and deployment smoke checks pass
+
+#### Scenario: Rendered policies are validated
+
+- **WHEN** NetworkPolicy manifests are rendered for an environment
+- **THEN** rendered-manifest validation confirms selectors match deployed workloads and required allow rules are present
+- **AND** validation does not treat policy YAML presence alone as proof of enforcement

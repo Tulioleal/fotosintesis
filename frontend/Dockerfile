@@ -23,10 +23,11 @@ WORKDIR /app
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    HOSTNAME=0.0.0.0
+    HOSTNAME=0.0.0.0 \
+    HOME=/tmp
 
 RUN addgroup --system --gid 1001 nodejs \
-    && adduser --system --uid 1001 nextjs
+    && adduser --system --uid 1001 --ingroup nodejs --home /tmp nextjs
 
 COPY --from=builder --chown=nextjs:nodejs /app/frontend/.next/standalone ./
 
@@ -38,7 +39,10 @@ COPY --from=builder --chown=nextjs:nodejs \
 
 RUN test -f /app/frontend/server.js
 
-USER nextjs
+# Fixed unprivileged runtime identity (UID/GID 1001:1001), matching the
+# Kubernetes security context. HOME is /tmp; the image root, including /app,
+# stays read-only and runtime writes land under the writable /tmp mount.
+USER 1001:1001
 
 EXPOSE 3000
 

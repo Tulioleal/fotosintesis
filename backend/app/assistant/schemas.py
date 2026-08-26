@@ -2,11 +2,14 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from pydantic import Field
+
 from app.schemas.common import ApiSchema
 from app.schemas.reminders import ReminderRecurrence
 
 
 AssistantMessageContentFormat = Literal["plain_text", "markdown"]
+SourceProvenance = Literal["trusted", "external_fallback"]
 DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT: AssistantMessageContentFormat = "plain_text"
 
 
@@ -15,6 +18,7 @@ class AssistantSource(ApiSchema):
     url: str
     domain: str | None = None
     confidence: float | None = None
+    source_provenance: SourceProvenance | None = None
 
 
 class AssistantMessage(ApiSchema):
@@ -45,6 +49,15 @@ class AssistantReminderSuggestion(ApiSchema):
     due_at: datetime
     recurrence: ReminderRecurrence
     suggestion_justification: str
+    timezone: str | None = None
+    # Explicit local schedule fields so clients never reconstruct date/time by
+    # slicing the due_at instant.
+    date: str | None = None
+    time: str | None = None
+    # Evidence-grounding parity with page-flow suggestions.
+    confidence: float | None = None
+    limitations: list[str] = Field(default_factory=list)
+    evidence: dict[str, object] | None = None
 
 
 class AssistantChatRequest(ApiSchema):
@@ -53,6 +66,7 @@ class AssistantChatRequest(ApiSchema):
     plant: str | None = None
     plant_binomial_name: str | None = None
     plant_scientific_name: str | None = None
+    confirmed_candidate_id: UUID | None = None
 
 
 class AssistantChatResponse(ApiSchema):

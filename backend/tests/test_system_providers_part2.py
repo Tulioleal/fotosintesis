@@ -569,6 +569,9 @@ async def test_gemini_search_maps_grounded_citations(fake_gemini_module: None) -
     assert models.kwargs["model"] == "gemini-2.5-flash"
     assert "www.rhs.org.uk" in models.kwargs["contents"]
     assert models.kwargs["config"].kwargs["tools"][0].kwargs
+    assert models.kwargs["config"].kwargs[
+        "automatic_function_calling"
+    ].kwargs == {"disable": True}
     assert results == [
         SearchResult(
             title="RHS Cotyledon guide",
@@ -578,4 +581,3 @@ async def test_gemini_search_maps_grounded_citations(fake_gemini_module: None) -
             metadata={"snippet_source": "grounding_support"},
         )
     ]
-

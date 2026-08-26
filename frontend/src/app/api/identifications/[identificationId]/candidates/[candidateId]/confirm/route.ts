@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { API_BASE_URL } from "@/lib/api/config";
+import { confirmationResponseSchema } from "@/lib/api/generated-contracts";
 import { resolveBackendAuthHeaders } from "@/lib/server/backend-session";
 
 
@@ -18,7 +19,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const { identificationId, candidateId } = await context.params;
   const response = await fetch(
-    `${API_BASE_URL}/identifications/${identificationId}/candidates/${candidateId}/confirm`,
+    `${API_BASE_URL}/identifications/${encodeURIComponent(identificationId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
     {
       method: "POST",
       headers: authHeaders,
@@ -26,6 +27,25 @@ export async function POST(request: Request, context: RouteContext) {
     },
   );
 
-  const payload = await response.json().catch(() => ({ detail: "Unable to confirm candidate" }));
-  return NextResponse.json(payload, { status: response.status });
+  const payload: unknown = await response.json().catch(() => null);
+
+  if (response.ok) {
+    const parsed = confirmationResponseSchema.safeParse(payload);
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        { detail: "Invalid backend response" },
+        { status: 502 },
+      );
+    }
+
+    return NextResponse.json(parsed.data, {
+      status: response.status,
+    });
+  }
+
+  return NextResponse.json(
+    typeof payload === "object" && payload !== null ? payload : { detail: "Unable to confirm candidate" },
+    { status: response.status },
+  );
 }

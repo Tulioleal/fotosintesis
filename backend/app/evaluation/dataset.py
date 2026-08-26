@@ -16,18 +16,12 @@ EvaluationFlow = Literal[
 ]
 
 
-class RetrievedDocument(BaseModel):
-    id: str
-    text: str
-    score: float = 1.0
+class ToolAssertion(BaseModel):
+    """Expected tool behavior expressed as an assertion, not an observed trace."""
 
-
-class ToolTrace(BaseModel):
     name: str
     expected: bool = True
-    called: bool = True
-    success: bool = True
-    claimed_success: bool = True
+    expected_success: bool = True
 
 
 class VisualCandidate(BaseModel):
@@ -38,16 +32,29 @@ class VisualCandidate(BaseModel):
 
 
 class EvaluationCase(BaseModel):
+    """A dataset case.
+
+    Expected/reference fields (``reference_output``, expected relevant
+    document ids, tool assertions, visual candidates) are kept separate from
+    observed execution records. The runner never copies these into the
+    observed result; observed data always comes from the executed graph.
+    """
+
     id: str
     flow: EvaluationFlow
     input: dict[str, Any]
+    setup: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-case fixture state used to isolate and seed the run (user, garden, knowledge).",
+    )
     reference_output: str | None = None
     expected_relevant_document_ids: list[str] = Field(default_factory=list)
-    retrieved_documents: list[RetrievedDocument] = Field(default_factory=list)
-    tool_trace: list[ToolTrace] = Field(default_factory=list)
+    tool_assertions: list[ToolAssertion] = Field(default_factory=list)
     expected_scientific_name: str | None = None
     expected_low_confidence: bool = False
     visual_candidates: list[VisualCandidate] = Field(default_factory=list)
+    unsupported: bool = False
+    skip_reason: str | None = None
     tags: list[str] = Field(default_factory=list)
 
 

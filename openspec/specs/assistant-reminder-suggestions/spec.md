@@ -1,9 +1,7 @@
 ## Purpose
 
 Defines the user confirmation and creation flow for reminder suggestions originating from assistant conversations.
-
 ## Requirements
-
 ### Requirement: Assistant reminder suggestion confirmation
 
 The system SHALL let users review and accept reminder suggestions that originate from assistant conversations before those reminders are created.
@@ -44,3 +42,54 @@ Assistant-origin reminder suggestions SHALL keep their confirmation behavior whi
 - **WHEN** a reminder suggestion is being accepted, accepted, or fails to create
 - **THEN** the redesigned card communicates the in-progress, success, or failure state with accessible text and Fotosíntesis pending, success, or error styling
 - **AND** existing button names are preserved unless explicitly updated by this spec
+
+### Requirement: Reminder suggestions reuse bounded light context
+
+Reminder suggestions originating from assistant conversations SHALL include light context only when the same owner- and plant-scoped eligibility policy for recommendation use allows it. Suggestion justification SHALL disclose the measurement source, age, and reliability in the same bounded way as care answers, and SHALL NOT include stale, unreliable, or foreign-plant readings.
+
+#### Scenario: Eligible light context appears in suggestion justification
+
+- **WHEN** a reminder suggestion includes light context that passes the shared eligibility policy
+- **THEN** the suggestion justification discloses the measurement source, age, and reliability in the same bounded way as care answers
+
+#### Scenario: Ineligible or foreign reading is omitted
+
+- **WHEN** the only available readings are stale, unreliable, or associated with a different plant
+- **THEN** the reminder suggestion does not include those readings as light context
+
+### Requirement: Timezone-aware reminder suggestions
+
+Assistant-origin reminder suggestions SHALL carry an effective IANA timezone and explicit local date and time fields through display and acceptance so the created reminder schedules at the intended local time. The frontend SHALL NOT derive local schedule values by slicing formatted timestamps.
+
+#### Scenario: Suggestion carries effective timezone
+
+- WHEN an assistant chat response includes a reminder suggestion requiring confirmation
+- THEN the suggestion includes the effective IANA timezone used to interpret its due date and time
+
+#### Scenario: Accepted suggestion schedules in effective timezone
+
+- WHEN the user accepts an assistant-origin reminder suggestion
+- THEN the system creates the reminder through the reminders API using the suggestion's effective timezone and local date and time
+- AND the acceptance payload does not reconstruct date or time by string-splitting an instant
+
+### Requirement: Evidence-grounded reminder suggestion contract
+
+AI-labeled reminder suggestions SHALL originate from a backend operation that accepts a selected garden plant and an optional user request, resolves the plant's confirmed taxonomy through existing ownership checks, and loads profile evidence, garden location, notes, active reminders, and timezone before proposing a suggestion. Generation SHALL propose a concrete local date, time and recurrence derived from the task type, plant profile cadence, eligible light data, location and current local time, and SHALL justify that derivation in one concise sentence. A schedule field MAY be null only when it is genuinely undeterminable from the delivered context. The timezone SHALL be resolved server-side from the stored user timezone and MUST NOT be requested from the model. The frontend SHALL NOT generate AI-labeled suggestions with local semantic regular expressions or fixed calendar defaults.
+
+#### Scenario: Suggestion originates in the backend
+
+- **WHEN** the reminders page requests a suggestion for a selected garden plant
+- **THEN** the backend generates and returns the suggestion
+
+#### Scenario: Proposal includes a justified concrete schedule
+
+- **WHEN** generation completes for an ordinary care task with profile context
+- **THEN** the outcome is a suggestion carrying a future local date, time, recurrence and a derivation justification
+- **AND** no clarification for date, time or recurrence is emitted
+
+#### Scenario: Clarification is reserved for undeterminable schedules
+
+- **WHEN** the delivered context makes a schedule genuinely undeterminable
+- **THEN** the backend returns a clarification naming only the fields it could not determine
+- **AND** an unset account timezone is clarified by naming the timezone field
+

@@ -220,6 +220,19 @@
   }
 }
 
+.profileList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  line-height: $line-height-relaxed;
+}
+
 .dangerColumn {
   display: flex;
   flex-direction: column;

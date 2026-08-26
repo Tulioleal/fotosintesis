@@ -12,6 +12,7 @@ class AuthUser:
     email_verified: bool
     created_at: datetime
     updated_at: datetime
+    timezone: str | None = None
 
 
 @dataclass
@@ -30,6 +31,9 @@ class AuthSession:
 class RecoveryToken:
     id: UUID
     user_id: UUID | None
-    token: str
+    token_hash: str
     expires_at: datetime
     created_at: datetime
+    used_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    token: str | None = None

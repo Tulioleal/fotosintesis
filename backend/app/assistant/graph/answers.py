@@ -12,6 +12,7 @@ from app.assistant.graph.routes import _is_disclaimed_guidance_eligible
 from app.assistant.graph.safety import _has_missing_safety_aspect
 from app.assistant.graph.types import AssistantState
 from app.assistant.graph_shared import _shorten, _strip_source_attribution_from_answer
+from app.assistant.light_context import light_context_observation_text
 from app.assistant.tools import AssistantFailureMetadata
 from app.knowledge.page_evidence import TrustedPageEvidence
 from app.knowledge.plant_data import StructuredPlantEvidence
@@ -39,6 +40,11 @@ from app.assistant.graph.nodes import (
     load_user_context,
     retrieve,
 )
+
+
+def _combined_extra_context(state: AssistantState | dict, extra_context: str = "") -> str:
+    parts = [part for part in (_taxonomy_context(state, extra_context), light_context_observation_text(state)) if part]
+    return "\n".join(parts)
 
 
 def _diagnostics(state: AssistantState | dict) -> dict[str, object]:
@@ -91,14 +97,12 @@ def _log_fallback_route(reason: str, *, evidence_type: str) -> None:
     )
 
 
-def _conservative_safety_answer(state: AssistantState) -> str | None:
-    plant_name = _display_name_for_answer(state) or "your plant"
+def _has_missing_edibility_or_pet_aspect(state: AssistantState) -> bool:
     missing_aspects = [LEGACY_ASPECT_TRANSLATION.get(value, value) for value in state.get("missing_aspects", [])]
-    if RequiredAspect.toxicity_human_edibility.value in missing_aspects:
-        return f"I did not find direct and reliable evidence on whether {plant_name} is edible. For safety, do not consume it or use it in preparations until verified with a reliable toxicological or botanical source."
-    if RequiredAspect.toxicity_pet_safety.value in missing_aspects:
-        return f"I did not find direct and reliable evidence on the safety of {plant_name} for pets, children, or skin contact. As a precaution, keep it out of reach of pets and children until confirmed with a reliable veterinary or toxicological source. If ingestion or skin contact occurs and symptoms appear, consult a veterinarian or poison control center."
-    return None
+    return (
+        RequiredAspect.toxicity_human_edibility.value in missing_aspects
+        or RequiredAspect.toxicity_pet_safety.value in missing_aspects
+    )
 
 
 def is_recoverable_generation_failure(failure_metadata: AssistantFailureMetadata) -> bool:
@@ -116,7 +120,7 @@ async def generate_answer(owner, state: AssistantState) -> dict:
     if not state.get("sufficient"):
         web_results = state.get("web_results", [])
         if web_results:
-            if _has_missing_safety_aspect(state) and _conservative_safety_answer(state):
+            if _has_missing_edibility_or_pet_aspect(state):
                 rendered = await owner._generate_fallback_response(state, _conservative_safety_draft(state))
                 return {**rendered, "fallback_reasons": _append_reason(state, "conservative_safety_fallback")}
             return await owner._generate_web_answer(state, web_results)
@@ -196,7 +200,7 @@ async def _generate_disclaimed_guidance(owner, state: AssistantState) -> dict:
         missing_aspects=state.get("missing_aspects", []),
         source_support=state.get("source_support", []),
         source_metadata=state.get("sources", []),
-        extra_context=_taxonomy_context(state),
+        extra_context=_combined_extra_context(state),
     )
     marked_state = {**state, "llm_general_guidance_used": True}
     result = await owner.tools.generate_text(prompt)
@@ -208,7 +212,7 @@ async def _generate_disclaimed_guidance(owner, state: AssistantState) -> dict:
         rendered = await owner._generate_fallback_response({**marked_state, "tool_failures": state.get("tool_failures", []) + [failure]}, _recovery_draft_for_answer_generation(state, intent="model_generation_failed", evidence_type="disclaimed_guidance", evidence="", limitations=[], source_metadata=[]))
         rendered["llm_general_guidance_used"] = True
         return rendered
-    answer = str(result.data or "").strip()
+    answer = _strip_source_attribution_from_answer(str(result.data or "").strip())
     if not answer:
         rendered = await owner._generate_fallback_response({**marked_state, "tool_failures": state.get("tool_failures", []) + ["model_generate_text failed: empty response"]}, _recovery_draft_for_answer_generation(state, intent="model_generation_failed", evidence_type="disclaimed_guidance", evidence="", limitations=[], source_metadata=[]))
         rendered["llm_general_guidance_used"] = True
@@ -235,7 +239,7 @@ async def _generate_grounded_answer(
         evidence=evidence,
         limitations=limitations,
         source_metadata=source_metadata,
-        extra_context=_taxonomy_context(state, extra_context),
+        extra_context=_combined_extra_context(state, extra_context),
         answer_language=state.get("answer_language") or "es",
         required_aspects=state.get("required_aspects", []),
         covered_aspects=state.get("covered_aspects", []),
@@ -271,13 +275,14 @@ async def _generate_fallback_response(owner, state: AssistantState | dict, draft
 
 __all__ = [
     "_append_reason",
-    "_conservative_safety_answer",
+    "_combined_extra_context",
     "_conservative_safety_draft",
     "_default_fallback_constraints",
     "_diagnostics",
     "_fallback_response_prompt",
     "_generate_disclaimed_guidance",
     "_generate_fallback_response",
+    "_has_missing_edibility_or_pet_aspect",
     "_generate_grounded_answer",
     "_generate_structured_answer",
     "_generate_web_answer",

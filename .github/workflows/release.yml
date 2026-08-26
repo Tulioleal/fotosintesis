@@ -191,8 +191,9 @@ jobs:
       - name: Enforce deploy result
         env:
           DEPLOY: ${{ needs.deploy-prod.result }}
+          WORKER_READINESS: ${{ needs.deploy-prod.outputs.worker_readiness_result }}
         run: |
-          if [ "$DEPLOY" != "success" ]; then
+          if [ "$DEPLOY" != "success" ] || [ "$WORKER_READINESS" != "pass" ]; then
             echo "::error::Deploy step did not succeed (result=$DEPLOY). Inspect the deploy-prod job log for details." >&2
             exit 1
           fi
@@ -207,6 +208,7 @@ jobs:
           # Per-step results surfaced by deploy.yml.
           DEPLOY_MIGRATION: ${{ needs.deploy-prod.outputs.migration_result }}
           DEPLOY_ROLLOUT: ${{ needs.deploy-prod.outputs.rollout_result }}
+          DEPLOY_WORKER_READINESS: ${{ needs.deploy-prod.outputs.worker_readiness_result }}
           DEPLOY_REQUIRED_KEYS: ${{ needs.deploy-prod.outputs.required_keys_result }}
           DEPLOY_BACKEND_SMOKE: ${{ needs.deploy-prod.outputs.backend_smoke_result }}
           DEPLOY_FRONTEND_SMOKE: ${{ needs.deploy-prod.outputs.frontend_smoke_result }}
@@ -227,6 +229,7 @@ jobs:
             echo "| Deploy prod | ${DEPLOY} |"
             echo "| - deploy migration | ${DEPLOY_MIGRATION} |"
             echo "| - deploy rollouts | ${DEPLOY_ROLLOUT} |"
+            echo "| - deploy worker readiness | ${DEPLOY_WORKER_READINESS} |"
             echo "| - deploy required provider API keys | ${DEPLOY_REQUIRED_KEYS} |"
             echo "| - deploy backend in-cluster smoke | ${DEPLOY_BACKEND_SMOKE} |"
             echo "| - deploy frontend public smoke | ${DEPLOY_FRONTEND_SMOKE} |"

@@ -10,6 +10,12 @@
   color: $color-foreground;
 }
 
+.shellFixed {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .topBar {
   position: sticky;
   top: 0;
@@ -139,6 +145,11 @@
   padding: 0;
   gap: 0;
   max-width: none;
+}
+
+.canvasBounded {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .bottomNav {

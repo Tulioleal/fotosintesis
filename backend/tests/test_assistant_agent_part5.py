@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import insert, select
 
 from app.assistant.graph import (
     ASPECT_VALIDATION_GUIDANCE,
@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -507,8 +507,12 @@ async def test_assistant_service_saves_chat_after_fallback_persistence_failure(
             user_id: UUID,
             message: str,
             plant_hint: str | None,
+            user_timezone: str | None = None,
             plant_binomial_name: str | None = None,
             plant_scientific_name: str | None = None,
+            canonical_species_key: str | None = None,
+            accepted_gbif_key: int | None = None,
+            stage_listener=None,
         ):
             return {
                 "answer": "Synthesized model response.",
@@ -582,6 +586,7 @@ async def test_assistant_service_does_not_mark_display_name_as_operational(
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+
     class FakeGraph:
         async def run(self, **kwargs):
             return {"answer": "Synthesized model response.", "sources": [], "tool_failures": []}
@@ -604,107 +609,140 @@ async def test_assistant_service_does_not_mark_display_name_as_operational(
 
     assert messages[0].metadata["display_plant_name"] == "Tomato"
     assert "operational_plant_name" not in messages[0].metadata
-
-async def test_background_ingestion_failure_logs_plant_and_source_context(
+async def test_assistant_chat_enqueues_job_when_claims_present(
+    session_factory,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeSession:
-        async def __aenter__(self):
-            return self
+    from app.jobs.repository import JobRepository
+    from app.auth.tables import application_jobs
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    class FakeGraphWithClaims:
+        async def run(self, **kwargs):
+            return {
+                "answer": "Some answer.",
+                "sources": [],
+                "tool_failures": [],
+                "ingestion_claims": [
+                    {
+                        "scientific_name": "Cotyledon tomentosa",
+                        "source_url": "https://example.org/watering",
+                        "source_domain": "example.org",
+                        "topic": "care",
+                        "claim": "Water weekly",
+                        "evidence_quote": "Water once a week in summer",
+                        "source_provenance": "trusted",
+                        "confidence": 0.8,
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "answerability_status": "partial",
+                    }
+                ],
+                "answerability_status": "partial",
+            }
 
-        async def rollback(self) -> None:
-            pass
-
-        async def commit(self) -> None:
-            pass
-
-    class FailingTools:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def ingest_validated_claims(self, claims):
-            return ToolResult(ok=False, error="embedding unavailable")
-
-    claims = [
-        {
-            "scientific_name": "Cotyledon tomentosa",
-            "source_url": "https://example.org/watering",
-            "source_domain": "example.org",
-        }
-    ]
-    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(assistant_service, "AssistantTools", FailingTools)
-    caplog.set_level("WARNING", logger="app.assistant.service")
-
-    await _ingest_validated_claims_background(
-        claims=claims,
-        conversation_id=uuid4(),
-        answerability_status="partial",
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    # Clear the settings cache so the env var is picked up
+    from app.core.settings import get_settings
+    get_settings.cache_clear()
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraphWithClaims()
+        _ = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+        )
 
-    record = next(
-        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_failed"
-    )
-    assert record.answerability_status == "partial"
-    assert record.claim_count == 1
-    assert record.scientific_names == ["Cotyledon tomentosa"]
-    assert record.source_urls == ["https://example.org/watering"]
-    assert record.source_domains == ["example.org"]
-    assert record.error == "embedding unavailable"
+        rows = (await session.execute(select(application_jobs))).all()
+        await session.commit()
 
-async def test_background_ingestion_exception_logs_plant_and_source_context(
+    assert len(rows) >= 1
+    assert rows[0]._mapping["job_type"] == "ingest_validated_claims"
+    assert rows[0]._mapping["payload"]["claims"][0]["source_provenance"] == "trusted"
+    get_settings.cache_clear()
+
+
+async def test_assistant_chat_rejects_claim_without_provenance_before_enqueue(
+    session_factory,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class FakeSession:
-        async def __aenter__(self):
-            return self
+    from pydantic import ValidationError
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    from app.auth.tables import application_jobs, conversation_messages
+    from app.core.settings import get_settings
 
-        async def rollback(self) -> None:
-            pass
+    class FakeGraphWithInvalidClaim:
+        async def run(self, **kwargs):
+            return {
+                "answer": "Some answer.",
+                "sources": [],
+                "tool_failures": [],
+                "ingestion_claims": [
+                    {
+                        "scientific_name": "Cotyledon tomentosa",
+                        "source_url": "https://example.org/watering",
+                        "source_domain": "example.org",
+                        "topic": "care",
+                        "claim": "Water weekly",
+                        "evidence_quote": "Water once a week in summer",
+                        "confidence": 0.8,
+                        "covered_aspects": ["watering_frequency_or_trigger"],
+                        "answerability_status": "partial",
+                    }
+                ],
+                "answerability_status": "partial",
+            }
 
-        async def commit(self) -> None:
-            pass
-
-    class RaisingTools:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def ingest_validated_claims(self, claims):
-            raise RuntimeError("index unavailable")
-
-    claims = [
-        {
-            "scientific_name": "Cotyledon tomentosa",
-            "source_url": "https://example.org/watering",
-            "source_domain": "example.org",
-        }
-    ]
-    monkeypatch.setattr(assistant_service, "AsyncSessionLocal", lambda: FakeSession())
-    monkeypatch.setattr(assistant_service, "AssistantTools", RaisingTools)
-    caplog.set_level("ERROR", logger="app.assistant.service")
-
-    await _ingest_validated_claims_background(
-        claims=claims,
-        conversation_id=uuid4(),
-        answerability_status="partial",
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    get_settings.cache_clear()
 
-    record = next(
-        item for item in caplog.records if item.message == "assistant_validated_claim_ingestion_exception"
+    with pytest.raises(ValidationError):
+        async with session_factory() as session:
+            service = AssistantService(session)
+            service.graph = FakeGraphWithInvalidClaim()
+            await service.chat(
+                user_id=uuid4(),
+                payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+            )
+
+    async with session_factory() as verification:
+        assert not (await verification.execute(select(application_jobs))).all()
+        assert not (await verification.execute(select(conversation_messages))).all()
+    get_settings.cache_clear()
+
+
+async def test_assistant_chat_empty_claims_skips_enqueue(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.auth.tables import application_jobs
+
+    class FakeGraphNoClaims:
+        async def run(self, **kwargs):
+            return {"answer": "No claims.", "sources": [], "tool_failures": [], "ingestion_claims": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
     )
-    assert record.answerability_status == "partial"
-    assert record.claim_count == 1
-    assert record.scientific_names == ["Cotyledon tomentosa"]
-    assert record.source_urls == ["https://example.org/watering"]
-    assert record.source_domains == ["example.org"]
+    async with session_factory() as session:
+        service = AssistantService(session)
+        service.graph = FakeGraphNoClaims()
+        _ = await service.chat(
+            user_id=uuid4(),
+            payload=AssistantChatRequest(message="How do I water?", plant="Pata"),
+        )
+
+        rows = (await session.execute(select(application_jobs))).all()
+        await session.commit()
+
+    assert len(rows) == 0
 
 async def test_assistant_service_total_generation_failure_returns_retryable_error(
     session_factory,
@@ -760,3 +798,347 @@ async def test_assistant_service_total_generation_failure_returns_retryable_erro
     assert response.conversation_id is not None
     assert [message.role for message in messages] == ["user"]
 
+
+async def test_assistant_service_resolves_owned_confirmed_candidate_identity(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A confirmed candidate context overrides client taxonomy with the
+    server-resolved canonical identity, and unauthorized candidates are
+    ignored."""
+    from datetime import datetime, timezone
+
+    from app.auth.tables import identification_candidates, identification_images, users
+
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"answer": "Synthesized model response.", "sources": [], "tool_failures": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+
+    async with session_factory() as session:
+        from app.auth.repository import DatabaseAuthRepository
+
+        repo = DatabaseAuthRepository(session)
+        user = await repo.create_user("Owner", "owner-candidate@example.com", "password123")
+        image_id = uuid4()
+        candidate_id = uuid4()
+        await session.execute(
+            insert(identification_images).values(
+                id=image_id,
+                user_id=user.id,
+                storage_path=f"identifications/{image_id}.jpg",
+                mime_type="image/jpeg",
+                size_bytes=16,
+                metadata={},
+                status="needs_confirmation",
+            )
+        )
+        await session.execute(
+            insert(identification_candidates).values(
+                id=candidate_id,
+                identification_id=image_id,
+                common_name="Truco",
+                suggested_scientific_name="Monstera deliciosa",
+                confidence_label="high",
+                visible_traits=["fronds"],
+                possible_match_copy="Match",
+                accepted_scientific_name="Monstera deliciosa Liebm.",
+                gbif_accepted_key=2878688,
+                binomial_name="Monstera deliciosa",
+                validation_status="validated",
+                confirmed_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        await service.chat(
+            user_id=user.id,
+            payload=AssistantChatRequest(
+                message="How do I care for it?",
+                plant="Wrong display",
+                plant_binomial_name="Wrongus binomius",
+                plant_scientific_name="Wrongus binomius var. x",
+                confirmed_candidate_id=candidate_id,
+            ),
+        )
+
+    assert captured["plant_binomial_name"] == "Monstera deliciosa"
+    assert captured["plant_scientific_name"] == "Monstera deliciosa Liebm."
+    assert captured["canonical_species_key"] == "gbif:2878688|binomial:Monstera deliciosa"
+    assert captured["accepted_gbif_key"] == 2878688
+
+
+async def test_assistant_service_ignores_unowned_candidate_context(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"answer": "Synthesized model response.", "sources": [], "tool_failures": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+
+    async with session_factory() as session:
+        from app.auth.repository import DatabaseAuthRepository
+        from app.auth.tables import identification_candidates, identification_images
+
+        repo = DatabaseAuthRepository(session)
+        owner = await repo.create_user("Owner", "owner-ignored@example.com", "password123")
+        other = await repo.create_user("Other", "other-ignored@example.com", "password123")
+        image_id = uuid4()
+        candidate_id = uuid4()
+        await session.execute(
+            insert(identification_images).values(
+                id=image_id,
+                user_id=owner.id,
+                storage_path=f"identifications/{image_id}.jpg",
+                mime_type="image/jpeg",
+                size_bytes=16,
+                metadata={},
+                status="needs_confirmation",
+            )
+        )
+        await session.execute(
+            insert(identification_candidates).values(
+                id=candidate_id,
+                identification_id=image_id,
+                common_name="Truco",
+                suggested_scientific_name="Monstera deliciosa",
+                confidence_label="high",
+                visible_traits=["fronds"],
+                possible_match_copy="Match",
+                gbif_accepted_key=2878688,
+                binomial_name="Monstera deliciosa",
+                validation_status="validated",
+                confirmed_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        await service.chat(
+            user_id=other.id,
+            payload=AssistantChatRequest(
+                message="How do I care for it?",
+                plant="Truco",
+                plant_binomial_name="Monstera deliciosa",
+                plant_scientific_name="Monstera deliciosa",
+                confirmed_candidate_id=candidate_id,
+            ),
+        )
+
+    assert captured.get("canonical_species_key") is None
+    assert captured.get("accepted_gbif_key") is None
+
+
+@pytest.mark.parametrize(
+    ("confirmed_at", "validation_status"),
+    [
+        (None, "validated"),
+        (datetime.now(timezone.utc), "pending"),
+        (datetime.now(timezone.utc), "retry_needed"),
+    ],
+    ids=["unconfirmed", "not-validated", "retry-needed"],
+)
+async def test_assistant_service_ignores_unconfirmed_or_unvalidated_candidate(
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    confirmed_at,
+    validation_status,
+) -> None:
+    """An unconfirmed or non-validated candidate never supplies canonical
+    retrieval identity: ownership alone is not sufficient."""
+    captured: dict[str, object] = {}
+
+    class FakeGraph:
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return {"answer": "Synthesized model response.", "sources": [], "tool_failures": []}
+
+    monkeypatch.setattr(
+        "app.assistant.tools.facade.get_provider_registry",
+        lambda: SimpleNamespace(search=object(), embeddings=object()),
+    )
+
+    async with session_factory() as session:
+        from app.auth.repository import DatabaseAuthRepository
+        from app.auth.tables import identification_candidates, identification_images
+
+        repo = DatabaseAuthRepository(session)
+        owner = await repo.create_user("Owner", "owner-partial@example.com", "password123")
+        image_id = uuid4()
+        candidate_id = uuid4()
+        await session.execute(
+            insert(identification_images).values(
+                id=image_id,
+                user_id=owner.id,
+                storage_path=f"identifications/{image_id}.jpg",
+                mime_type="image/jpeg",
+                size_bytes=16,
+                metadata={},
+                status="needs_confirmation",
+            )
+        )
+        await session.execute(
+            insert(identification_candidates).values(
+                id=candidate_id,
+                identification_id=image_id,
+                common_name="Truco",
+                suggested_scientific_name="Monstera deliciosa",
+                confidence_label="high",
+                visible_traits=["fronds"],
+                possible_match_copy="Match",
+                accepted_scientific_name="Monstera deliciosa Liebm.",
+                gbif_accepted_key=2878688,
+                binomial_name="Monstera deliciosa",
+                validation_status=validation_status,
+                confirmed_at=confirmed_at,
+            )
+        )
+        await session.commit()
+        service = AssistantService(session)
+        service.graph = FakeGraph()
+        await service.chat(
+            user_id=owner.id,
+            payload=AssistantChatRequest(
+                message="How do I care for it?",
+                plant="Truco",
+                plant_binomial_name="Monstera deliciosa",
+                plant_scientific_name="Monstera deliciosa",
+                confirmed_candidate_id=candidate_id,
+            ),
+        )
+
+    assert captured.get("canonical_species_key") is None
+    assert captured.get("accepted_gbif_key") is None
+
+
+async def test_graph_candidate_identity_precedes_garden_display_match() -> None:
+    """Server-resolved confirmed candidate identity (species A) stays
+    authoritative when garden context loading selects a different
+    display-matched plant (species B): retrieval never combines taxonomy."""
+    species_a_key = "gbif:2878688|binomial:Monstera deliciosa"
+    species_b_key = "gbif:1234|binomial:Cotyledon tomentosa"
+
+    class ConflictingGardenTools(FakeTools):
+        async def garden_lookup(self, *, user_id: UUID) -> ToolResult:
+            # The garden contains species B whose display name matches the
+            # plant hint, and it exposes a conflicting canonical identity.
+            return ToolResult(
+                ok=True,
+                data=[
+                    {
+                        "id": uuid4(),
+                        "nickname": "Monstera",
+                        "scientific_name": "Cotyledon tomentosa",
+                        "common_name": "Monstera",
+                        "accepted_gbif_key": 1234,
+                        "canonical_species_key": species_b_key,
+                    }
+                ],
+            )
+
+        async def knowledge_search(self, **kwargs) -> ToolResult:
+            self.retrieval_kwargs = dict(kwargs)
+            return await super().knowledge_search(**kwargs)
+
+    tools = ConflictingGardenTools(
+        classifier_data={
+            "language": "en",
+            "answer_language": "en",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger"],
+            "plant_reference": "Monstera",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I care for my Monstera?",
+        plant_hint="Monstera",
+        plant_binomial_name="Monstera deliciosa",
+        plant_scientific_name="Monstera deliciosa",
+        canonical_species_key=species_a_key,
+        accepted_gbif_key=2878688,
+    )
+
+    # The candidate-resolved species A identity is preserved even though the
+    # garden display match resolved species B.
+    assert tools.retrieval_kwargs["canonical_species_key"] == species_a_key
+    assert tools.retrieval_kwargs["accepted_gbif_key"] == 2878688
+    assert result["answer"] == "Synthesized model response."
+
+
+async def test_binomial_candidate_does_not_borrow_garden_gbif_key() -> None:
+    """Candidate A is binomial-only (no GBIF key); a display-matched garden
+    species B with a GBIF key must not supply one. A null GBIF key is valid
+    and never permits garden fallback."""
+    species_a_key = "binomial:Monstera deliciosa"
+    species_b_key = "gbif:1234|binomial:Cotyledon tomentosa"
+
+    class BinomialOnlyGardenTools(FakeTools):
+        async def garden_lookup(self, *, user_id: UUID) -> ToolResult:
+            return ToolResult(
+                ok=True,
+                data=[
+                    {
+                        "id": uuid4(),
+                        "nickname": "Monstera",
+                        "scientific_name": "Cotyledon tomentosa",
+                        "common_name": "Monstera",
+                        "accepted_gbif_key": 1234,
+                        "canonical_species_key": species_b_key,
+                    }
+                ],
+            )
+
+        async def knowledge_search(self, **kwargs) -> ToolResult:
+            self.retrieval_kwargs = dict(kwargs)
+            return await super().knowledge_search(**kwargs)
+
+    tools = BinomialOnlyGardenTools(
+        classifier_data={
+            "language": "en",
+            "answer_language": "en",
+            "intent": "plant_care_question",
+            "topic": "watering",
+            "required_aspects": ["watering_frequency_or_trigger"],
+            "plant_reference": "Monstera",
+            "confidence": 0.95,
+            "needs_retrieval": True,
+        },
+        web_results=[],
+    )
+
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="How do I care for my Monstera?",
+        plant_hint="Monstera",
+        plant_binomial_name="Monstera deliciosa",
+        plant_scientific_name="Monstera deliciosa",
+        canonical_species_key=species_a_key,
+        accepted_gbif_key=None,
+    )
+
+    assert tools.retrieval_kwargs["scientific_name"] == "Monstera deliciosa"
+    assert tools.retrieval_kwargs["canonical_species_key"] == species_a_key
+    assert tools.retrieval_kwargs["accepted_gbif_key"] is None
+    assert result["answer"] == "Synthesized model response."

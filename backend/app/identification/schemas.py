@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.jobs.schemas import CandidateEnrichmentStatus
+
 
 class IdentificationStatus(str, Enum):
     needs_confirmation = "needs_confirmation"
@@ -34,6 +36,7 @@ class TaxonomyCandidate(BaseModel):
     species: str | None = None
     validation_status: ValidationStatus
     confirmed_at: datetime | None = None
+    image_path: str | None = None
 
 
 class IdentificationResponse(BaseModel):
@@ -48,3 +51,26 @@ class IdentificationResponse(BaseModel):
 class ConfirmationResponse(BaseModel):
     status: str
     candidate: TaxonomyCandidate
+    enrichment: CandidateEnrichmentStatus
+
+
+class GbifCandidate(BaseModel):
+    key: int | None = None
+    accepted_key: int | None = None
+    accepted_scientific_name: str | None = None
+    binomial_name: str | None = None
+    rank: str | None = None
+    taxonomic_status: str | None = None
+    synonyms: list[str] = Field(default_factory=list)
+    genus: str | None = None
+    family: str | None = None
+    species: str | None = None
+
+
+class GbifSearchResponse(BaseModel):
+    candidates: list[GbifCandidate] = Field(default_factory=list)
+
+
+class ManualCandidateCreate(BaseModel):
+    query: str = Field(min_length=1, max_length=240)
+    gbif: GbifCandidate

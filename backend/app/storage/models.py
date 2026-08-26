@@ -13,6 +13,13 @@ class StoredObject:
 
 
 @dataclass(frozen=True)
+class ObjectContent:
+    content: bytes
+    mime_type: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class ObjectUpload:
     path: str
     content: bytes

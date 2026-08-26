@@ -1,9 +1,11 @@
 "use client";
 
 import { ChangeEvent, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CameraIcon,
   CheckCircleIcon,
+  MagnifyingGlassIcon,
   PlantIcon,
   QuestionIcon,
   UploadSimpleIcon,
@@ -22,6 +24,11 @@ import iconStyles from "@/components/ui/Icons.module.scss";
 import { buildAssistantHref } from "@/lib/assistant";
 import styles from "./IdentifyFlow.module.scss";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
+import { apiClient } from "@/lib/api/client";
+import { candidateEnrichmentQueryKey } from "@/lib/enrichment";
+import { ACTIVITY_QUERY_KEY } from "@/lib/enrichment-activity";
 
 type Candidate = {
   id: string;
@@ -72,9 +79,41 @@ const validationChipCopy: Record<"validated" | "no_gbif_match", string> = {
   no_gbif_match: "Sin coincidencia GBIF",
 };
 
+const recoveryCopy: Record<string, { heading: string; message: string }> = {
+  maas_unavailable: {
+    heading: "No pudimos analizar la foto",
+    message: "El análisis visual no está disponible. Intentá de nuevo en unos minutos o buscá la planta manualmente.",
+  },
+  blurry_image: {
+    heading: "Necesitamos otra foto",
+    message: "La imagen parece borrosa. Intentá nuevamente con mejor enfoque y luz natural.",
+  },
+  no_plant: {
+    heading: "No encontramos una planta clara",
+    message: "Probá con una foto más cercana, bien iluminada y con la planta en el centro.",
+  },
+  low_confidence: {
+    heading: "Necesitamos otra foto",
+    message: "No obtuvimos coincidencias confiables. Intentá nuevamente con mejor luz y enfoque.",
+  },
+  no_gbif_match: {
+    heading: "No pudimos validar la especie",
+    message: "Vimos plantas posibles, pero GBIF no validó los nombres sugeridos. Podés usar la búsqueda manual.",
+  },
+  taxonomy_unavailable: {
+    heading: "No pudimos validar la especie",
+    message: "El análisis visual funcionó, pero GBIF no está disponible temporalmente. Intentá de nuevo en unos minutos.",
+  },
+};
+
 export function IdentifyFlow() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const userId = session?.user?.id ?? "anonymous";
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const confirmingCandidateRef = useRef<string | null>(null);
   const [identification, setIdentification] = useState<Identification | null>(
     null,
   );
@@ -83,6 +122,7 @@ export function IdentifyFlow() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cameraNotice, setCameraNotice] = useState<string | null>(null);
+  const [confirmingCandidateId, setConfirmingCandidateId] = useState<string | null>(null);
 
   function resetFlow() {
     setIdentification(null);
@@ -91,6 +131,8 @@ export function IdentifyFlow() {
     setIsSubmitting(false);
     setError(null);
     setCameraNotice(null);
+    confirmingCandidateRef.current = null;
+    setConfirmingCandidateId(null);
     if (cameraInputRef.current) cameraInputRef.current.value = "";
     if (uploadInputRef.current) uploadInputRef.current.value = "";
   }
@@ -147,27 +189,40 @@ export function IdentifyFlow() {
   }
 
   async function confirmCandidate(candidate: Candidate) {
-    if (!identification || candidate.validation_status !== "validated") return;
-    const response = await fetch(
-      `/api/identifications/${identification.id}/candidates/${candidate.id}/confirm`,
-      { method: "POST" },
-    );
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(
-        payload.detail ?? "Solo podes confirmar candidatas validadas por GBIF.",
+    if (
+      !identification ||
+      candidate.validation_status !== "validated" ||
+      confirmingCandidateRef.current
+    ) return;
+    confirmingCandidateRef.current = candidate.id;
+    setConfirmingCandidateId(candidate.id);
+    setError(null);
+    try {
+      const confirmation = await apiClient.confirmCandidate(identification.id, candidate.id);
+      const scientificName = candidateScientificName(candidate);
+      const language = typeof navigator === "undefined" ? "es" : navigator.language?.split("-")[0] ?? "es";
+      queryClient.setQueryData(
+        candidateEnrichmentQueryKey(userId, candidate.id, scientificName, language),
+        confirmation.enrichment,
       );
-      return;
-    }
 
-    setIdentification({
-      ...identification,
-      candidates: identification.candidates.map((item) =>
-        item.id === candidate.id
-          ? { ...item, confirmed_at: payload.candidate.confirmed_at }
-          : { ...item, confirmed_at: null },
-      ),
-    });
+      await queryClient.invalidateQueries({
+        queryKey: ACTIVITY_QUERY_KEY,
+      });
+
+      router.push(
+        `/profiles/${encodeURIComponent(scientificName)}?candidateId=${encodeURIComponent(candidate.id)}`,
+      );
+    } catch (confirmationError) {
+      setError(
+        confirmationError instanceof Error
+          ? confirmationError.message
+          : "Solo podes confirmar candidatas validadas por GBIF.",
+      );
+    } finally {
+      confirmingCandidateRef.current = null;
+      setConfirmingCandidateId(null);
+    }
   }
 
   const showResults = Boolean(identification);
@@ -358,10 +413,33 @@ export function IdentifyFlow() {
           {identification.sad_path ? (
             <Notice
               tone="warning"
-              heading="Necesitamos otra foto"
+              heading={
+                recoveryCopy[identification.sad_path]?.heading ??
+                "Necesitamos otra foto"
+              }
               role="status"
             >
-              {identification.message}
+              {recoveryCopy[identification.sad_path]?.message ??
+                identification.message}
+              <div className={styles.recoverableActions}>
+                <AppLink
+                  href="/search"
+                  variant="button"
+                  buttonVariant="outline"
+                  buttonSize="sm"
+                  leadingIcon={
+                    <MagnifyingGlassIcon
+                      aria-hidden="true"
+                      size="1.25rem"
+                    />
+                  }
+                >
+                  Buscar manualmente
+                </AppLink>
+                <Button variant="ghost" size="sm" onClick={resetFlow}>
+                  Reintentar
+                </Button>
+              </div>
             </Notice>
           ) : null}
 
@@ -381,11 +459,23 @@ export function IdentifyFlow() {
                 </Chip>
               </header>
 
+              {confirmingCandidateId ? (
+                <p className={styles.statusCopy} role="status" aria-live="polite">
+                  Planta confirmada. Iniciando la búsqueda de información en segundo plano...
+                </p>
+              ) : null}
+              {!confirmingCandidateId ? (
+                <p className={styles.statusCopy}>
+                  Al confirmar, buscaremos información de cuidado en fuentes confiables. La búsqueda continuará en segundo plano.
+                </p>
+              ) : null}
+
               <ul className={styles.resultGrid} role="list">
                 {identification.candidates.map((candidate) => {
                   const isValidated =
                     candidate.validation_status === "validated";
                   const isConfirmed = Boolean(candidate.confirmed_at);
+                  const isConfirming = confirmingCandidateId === candidate.id;
                   return (
                     <li key={candidate.id}>
                       <ImageCard
@@ -414,10 +504,12 @@ export function IdentifyFlow() {
                               type="button"
                               variant={isValidated ? "primary" : "outline"}
                               fullWidth
-                              disabled={!isValidated || isConfirmed}
+                              disabled={!isValidated || isConfirmed || confirmingCandidateId !== null}
                               onClick={() => confirmCandidate(candidate)}
                             >
-                              {isConfirmed
+                              {isConfirming
+                                ? "Confirmando planta..."
+                                : isConfirmed
                                 ? "Planta seleccionada"
                                 : "Seleccionar esta planta"}
                             </Button>
@@ -515,6 +607,7 @@ function assistantHrefForCandidate(candidate: Candidate) {
     plant: candidateDisplayName(candidate),
     binomial: candidate.binomial_name,
     scientific,
+    candidate: candidate.id,
   });
 }
 

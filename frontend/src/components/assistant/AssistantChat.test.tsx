@@ -1,10 +1,12 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantChat, AssistantMessageContent } from "./AssistantChat";
 
 const mocks = vi.hoisted(() => ({
   createReminder: vi.fn(),
   sendAssistantMessage: vi.fn(),
+  sendAssistantMessageStream: vi.fn(),
+  consumeAssistantStreamImpl: vi.fn(),
   searchParams: new URLSearchParams(),
 }));
 
@@ -16,6 +18,9 @@ vi.mock("@/lib/api/client", () => ({
   apiClient: {
     createReminder: mocks.createReminder,
     sendAssistantMessage: mocks.sendAssistantMessage,
+    sendAssistantMessageStream: mocks.sendAssistantMessageStream,
+    consumeAssistantStream: (...args: unknown[]) =>
+      mocks.consumeAssistantStreamImpl(...(args as [Response, ((l: string) => void)?])),
   },
 }));
 
@@ -23,6 +28,10 @@ describe("AssistantChat", () => {
   beforeEach(() => {
     mocks.createReminder.mockReset();
     mocks.sendAssistantMessage.mockReset();
+    mocks.sendAssistantMessageStream.mockReset();
+    // Streams fail by default so tests exercise the blocking fallback unless
+    // a test explicitly provides a streaming implementation.
+    mocks.sendAssistantMessageStream.mockRejectedValue(new Error("stream unavailable"));
     mocks.searchParams = new URLSearchParams();
     mocks.createReminder.mockResolvedValue({ id: "reminder-1" });
     mocks.sendAssistantMessage.mockResolvedValue({
@@ -37,10 +46,16 @@ describe("AssistantChat", () => {
       reminder_suggestion: {
         garden_plant_id: "garden-1",
         plant_name: "Pata",
-        action: "regar",
+        action: "Riego",
         due_at: "2026-06-01T10:30:00Z",
         recurrence: "weekly",
         suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+        timezone: "America/Argentina/Buenos_Aires",
+        date: "2026-06-01",
+        time: "07:30",
+        confidence: 0.92,
+        limitations: [],
+        evidence: { taxonomy: "Nephrolepis exaltata", location: null, notes: null, profile_sections: [], active_reminders: 0, light_context: null },
       },
       tool_failures: [],
     });
@@ -56,6 +71,7 @@ describe("AssistantChat", () => {
 
     expect(await screen.findByText("Recordatorio sugerido")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Riego" })).toBeInTheDocument();
+    expect(screen.getByText(/Confianza: 92%/)).toBeInTheDocument();
     expect(screen.getByText(/Pata .* Semanal/)).toBeInTheDocument();
     expect(screen.getByText("Sugerido por el asistente desde la conversacion.")).toBeInTheDocument();
   });
@@ -78,14 +94,18 @@ describe("AssistantChat", () => {
       garden_plant_id: "garden-1",
       action: "Riego",
       date: "2026-06-01",
-      time: "10:30",
+      time: "07:30",
       recurrence: "weekly",
       suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+      timezone: "America/Argentina/Buenos_Aires",
     });
+    // Explicit backend schedule fields are used verbatim (no ISO slicing).
+    expect(mocks.createReminder.mock.calls[0][0].time).toBe("07:30");
     expect(await screen.findByRole("button", { name: "Recordatorio creado" })).toBeDisabled();
   });
 
-  it("normalizes a non-water assistant suggestion to its TASK_TYPES value before posting", async () => {
+  it("posts the backend-supplied action verbatim without local semantic rewriting", async () => {
+    const rawAction = "limpiar polvo del follaje";
     mocks.sendAssistantMessage.mockResolvedValueOnce({
       message: {
         role: "assistant",
@@ -97,10 +117,12 @@ describe("AssistantChat", () => {
       reminder_suggestion: {
         garden_plant_id: "garden-1",
         plant_name: "Pata",
-        action: "limpiar polvo del follaje",
+        action: rawAction,
         due_at: "2026-06-01T10:30:00Z",
         recurrence: "weekly",
         suggestion_justification: "Sugerido por el asistente desde la conversacion.",
+        date: "2026-06-01",
+        time: "10:30",
       },
       tool_failures: [],
     });
@@ -111,14 +133,38 @@ describe("AssistantChat", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
 
-    expect(await screen.findByRole("heading", { name: "Limpieza" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: rawAction })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Aceptar sugerencia" }));
 
     await waitFor(() => {
       expect(mocks.createReminder).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "Limpieza" }),
+        expect.objectContaining({ action: rawAction, time: "10:30", date: "2026-06-01" }),
       );
     });
+  });
+
+  it("renders a suggestion without an accept action when requires_confirmation is false", async () => {
+    mocks.sendAssistantMessage.mockResolvedValueOnce({
+      conversation_id: "conversation-9",
+      message: {
+        role: "assistant",
+        content: "Listo, cree el recordatorio.",
+        content_format: "plain_text",
+      },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Crea un recordatorio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("Listo, cree el recordatorio.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aceptar sugerencia" })).not.toBeInTheDocument();
   });
 
   it("maps assistant taxonomy query parameters to the chat payload", async () => {
@@ -143,6 +189,30 @@ describe("AssistantChat", () => {
         plant: "Tomato",
         plant_binomial_name: "Solanum lycopersicum",
         plant_scientific_name: "Solanum lycopersicum var. cerasiforme",
+      });
+    });
+  });
+
+  it("maps assistant candidate query parameter to confirmed_candidate_id", async () => {
+    mocks.searchParams = new URLSearchParams({
+      plant: "Monstera",
+      binomial: "Monstera deliciosa",
+      scientific: "Monstera deliciosa Liebm.",
+      candidate: "candidate-1234",
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(mocks.sendAssistantMessage).toHaveBeenCalledWith({
+        message: "Tengo una consulta sobre Monstera:",
+        conversation_id: null,
+        plant: "Monstera",
+        plant_binomial_name: "Monstera deliciosa",
+        plant_scientific_name: "Monstera deliciosa Liebm.",
+        confirmed_candidate_id: "candidate-1234",
       });
     });
   });
@@ -354,5 +424,118 @@ describe("AssistantChat", () => {
     expect(workspace).not.toBeNull();
     expect(workspace?.children.length).toBe(1);
     expect(workspace?.firstElementChild).toBe(chatArea);
+  });
+
+  it("shows an informative stage message while waiting and rotates through stages", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveResponse: (value: unknown) => void = () => undefined;
+      mocks.sendAssistantMessage.mockReturnValue(
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        }),
+      );
+
+      render(<AssistantChat />);
+
+      fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+        target: { value: "Como riego?" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+      expect(screen.getByText("Clasificando tu consulta...")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText("Buscando en fuentes confiables...")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(7000);
+      });
+      expect(screen.getByText("Redactando respuesta...")).toBeInTheDocument();
+
+      await act(async () => {
+        resolveResponse({
+          conversation_id: "conversation-1",
+          message: { role: "assistant", content: "Listo.", content_format: "plain_text" },
+          sources: [],
+          requires_confirmation: false,
+          reminder_suggestion: null,
+          tool_failures: [],
+        });
+      });
+
+      expect(screen.queryByText("Redactando respuesta...")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Clasificando tu consulta..."),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows live server-authored stages while streaming and suppresses the rotating copy", async () => {
+    mocks.sendAssistantMessageStream.mockImplementationOnce(async (_body, onStage) => {
+      onStage?.("Buscando evidencia en fuentes confiables");
+      return {
+        conversation_id: "conversation-stream",
+        message: { role: "assistant", content: "Respuesta final.", content_format: "plain_text" },
+        sources: [],
+        requires_confirmation: false,
+        reminder_suggestion: null,
+        tool_failures: [],
+      };
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Como riego?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(screen.getByText("Buscando evidencia en fuentes confiables")).toBeInTheDocument();
+    expect(await screen.findByText("Respuesta final.")).toBeInTheDocument();
+    expect(mocks.sendAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the blocking chat contract when the stream fails", async () => {
+    mocks.sendAssistantMessageStream.mockRejectedValueOnce(new Error("stream broke"));
+    mocks.sendAssistantMessage.mockResolvedValueOnce({
+      conversation_id: "conversation-fb",
+      message: { role: "assistant", content: "Respuesta por bloqueo.", content_format: "plain_text" },
+      sources: [],
+      requires_confirmation: false,
+      reminder_suggestion: null,
+      tool_failures: [],
+    });
+
+    render(<AssistantChat />);
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Hola" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("Respuesta por bloqueo.")).toBeInTheDocument();
+    expect(mocks.sendAssistantMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls to the newest message when the thread updates", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    render(<AssistantChat />);
+
+    fireEvent.change(screen.getByPlaceholderText("Ej: Como ajusto el riego de mi Monstera?"), {
+      target: { value: "Hola" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
   });
 });

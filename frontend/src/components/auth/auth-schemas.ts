@@ -15,6 +15,21 @@ export const recoverySchema = z.object({
   email: z.string().trim().email("Ingresá un correo válido.").transform((email) => email.toLowerCase()),
 });
 
+export const resetPasswordSchema = z
+  .object({
+    password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres."),
+    confirmPassword: z.string().min(1, "Confirmá tu nueva contraseña."),
+  })
+  .refine((values) => values.password === values.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "Las contraseñas no coinciden.",
+  });
+
 export type RegisterFormValues = z.infer<typeof registerSchema>;
 export type LoginFormValues = z.infer<typeof loginSchema>;
 export type RecoveryFormValues = z.infer<typeof recoverySchema>;
+export type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
+
+export function nowMs(): number {
+  return Date.now();
+}

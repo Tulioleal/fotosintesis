@@ -1,19 +1,30 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
 from app.db.session import get_async_session
-from app.profile_garden.repository import PlantProfileGardenRepository
+from app.enrichment import get_current_enrichment_policy
+from app.jobs.repository import JobRepository
+from app.observability.logging import get_logger
+from app.profile_garden.repository import (
+    GardenImageValidationError,
+    PlantProfileGardenRepository,
+    canonical_identity_fields,
+)
 from app.profile_garden.schemas import (
     GardenDeleteResponse,
     GardenPlantCreate,
     GardenPlantResponse,
     PlantProfileResponse,
 )
+from app.storage.base import ObjectNotFoundError
+from app.storage.factory import get_object_storage
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["plant-profile-garden"])
 
@@ -43,12 +54,24 @@ async def get_plant_profile(
             detail="The confirmed candidate does not match the requested profile.",
         )
 
-    return await repository.get_or_create_profile(
+    profile = await repository.get_or_create_profile(
         scientific_name=candidate_name,
         common_name=candidate.common_name,
         region=region,
         country=country,
         language=language,
+        **canonical_identity_fields(candidate),
+    )
+    enrichment = await JobRepository(session).get_candidate_enrichment_status(
+        candidate_id=candidate_id,
+        user_id=user.id,
+        policy_version=get_current_enrichment_policy().version,
+    )
+    return profile.model_copy(
+        update={
+            "enrichment": enrichment,
+            "confirmed_candidate_image_path": candidate.image_path,
+        }
     )
 
 
@@ -58,9 +81,12 @@ async def save_garden_plant(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> GardenPlantResponse:
-    plant = await PlantProfileGardenRepository(session).save_garden_plant(
-        user_id=user.id, payload=payload
-    )
+    try:
+        plant = await PlantProfileGardenRepository(session).save_garden_plant(
+            user_id=user.id, payload=payload
+        )
+    except GardenImageValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
     if plant is None:
         raise HTTPException(
             status_code=409,
@@ -88,6 +114,31 @@ async def get_garden_plant(
     if plant is None:
         raise HTTPException(status_code=404, detail="Plant not found in My Garden.")
     return plant
+
+
+@router.get("/garden/{garden_id}/image", response_class=Response)
+async def get_garden_plant_image(
+    garden_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> Response:
+    repository = PlantProfileGardenRepository(session)
+    storage_path = await repository.garden_plant_image_path(user_id=user.id, plant_id=garden_id)
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    try:
+        content = await get_object_storage().get_object(storage_path)
+    except ObjectNotFoundError:
+        logger.warning(
+            "garden_plant_image_missing",
+            extra={"ctx_user_id": str(user.id), "ctx_object_path": storage_path},
+        )
+        raise HTTPException(status_code=404, detail="Image not found.") from None
+    return Response(
+        content=content.content,
+        media_type=content.mime_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.delete("/garden/{garden_id}", response_model=GardenDeleteResponse)

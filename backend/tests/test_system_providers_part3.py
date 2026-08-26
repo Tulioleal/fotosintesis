@@ -1,4 +1,5 @@
 import types
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,6 +18,17 @@ from app.providers.openai import (
     OpenAIVisionProvider,
 )
 from app.providers.types import SearchResult
+
+
+def test_openai_judge_prompt_serializes_timestamp_metadata() -> None:
+    from app.providers.openai.judge import _judge_prompt
+
+    prompt = _judge_prompt(
+        {"evidence": {"retrieved_at": datetime(2026, 8, 20, tzinfo=UTC)}},
+        {"passing_score": 1},
+    )
+
+    assert "2026-08-20 00:00:00+00:00" in prompt
 
 
 @pytest.mark.asyncio
@@ -788,4 +800,3 @@ async def test_openai_judge_falls_back_to_json_object_mode_for_unsupported_rubri
     assert extras.get("ctx_event") == "provider_json_schema_fallback"
     assert extras.get("ctx_operation") == "judge_response"
     assert "test-key" not in str(diagnostic)
-

@@ -1,0 +1,122 @@
+services:
+  postgres:
+    ports: !override []
+
+  mock-gbif:
+    image: python:3.12-slim
+    working_dir: /workspace
+    command: python backend/scripts/mock_gbif_server.py
+    volumes:
+      - .:/workspace
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    build:
+      context: ./backend
+    image: photosynthesis-backend-e2e
+    working_dir: /app
+    volumes: !override []
+    ports: !override []
+    # Dependencies are baked into the image at build time; startup only runs
+    # migrations and the server. No --reload in E2E containers.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      GBIF_BASE_URL: http://mock-gbif:8080/v1/species/match
+      MODEL_PROVIDER: mock
+      VISION_PROVIDER: mock
+      JUDGE_PROVIDER: mock
+      SEARCH_PROVIDER: mock
+      EMBEDDING_PROVIDER: mock
+      MODEL_PROVIDERS: '["mock"]'
+      VISION_PROVIDERS: '["mock"]'
+      JUDGE_PROVIDERS: '["mock"]'
+      SEARCH_PROVIDERS: '["mock"]'
+      JOBS_PRODUCER_ENABLED: "true"
+      EMBEDDING_DIMENSION: "8"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-gbif:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  worker:
+    image: photosynthesis-backend-e2e
+    working_dir: /app
+    volumes: !override []
+    command: python -m app.jobs.worker
+    environment:
+      GBIF_BASE_URL: http://mock-gbif:8080/v1/species/match
+      MODEL_PROVIDER: mock
+      VISION_PROVIDER: mock
+      JUDGE_PROVIDER: mock
+      SEARCH_PROVIDER: mock
+      EMBEDDING_PROVIDER: mock
+      MODEL_PROVIDERS: '["mock"]'
+      VISION_PROVIDERS: '["mock"]'
+      JUDGE_PROVIDERS: '["mock"]'
+      SEARCH_PROVIDERS: '["mock"]'
+      JOBS_PRODUCER_ENABLED: "true"
+      JOBS_WORKER_ENABLED: "true"
+      JOBS_POLL_INTERVAL_SECONDS: "1"
+      JOBS_BATCH_SIZE: "1"
+      JOBS_WORKER_CONCURRENCY: "1"
+      EMBEDDING_DIMENSION: "8"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9100/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  frontend:
+    command: sh -c "corepack enable && pnpm --filter frontend start"
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=1024"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/register').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 10s

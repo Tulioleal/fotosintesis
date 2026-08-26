@@ -14,6 +14,7 @@ from app.knowledge.schemas import (
     KnowledgeSourceInput,
     ReviewStatus,
 )
+from app.jobs.schemas import SourceProvenance
 
 
 def web_evidence_content(
@@ -101,7 +102,14 @@ def build_validated_claim_document(
     source_url = str(claim.get("source_url") or "")
     if not source_url:
         return None
-    confidence = float(claim.get("confidence") or TRUSTED_WEB_EVIDENCE_CONFIDENCE)
+    raw = claim.get("confidence")
+    if raw is not None:
+        confidence = float(raw)
+    else:
+        confidence = TRUSTED_WEB_EVIDENCE_CONFIDENCE
+    source_provenance = SourceProvenance(str(claim["source_provenance"]))
+    if source_provenance is SourceProvenance.external_fallback:
+        confidence = min(confidence, EXTERNAL_FALLBACK_EVIDENCE_CONFIDENCE)
     metadata = {
         "topic": claim.get("topic"),
         "required_aspects": list(claim.get("required_aspects") or []),
@@ -110,6 +118,7 @@ def build_validated_claim_document(
         "language": claim.get("language") or "es",
         "evidence_type": "validated_web_claim",
         "answerability_status": claim.get("answerability_status"),
+        "source_provenance": source_provenance.value,
         "validation_confidence": confidence,
         "source_support_claim": claim.get("claim"),
         "source_support_quote": claim.get("evidence_quote"),
@@ -130,7 +139,7 @@ def build_validated_claim_document(
                 url=source_url,
                 source_domain=str(claim.get("source_domain") or ""),
                 retrieved_at=moment,
-                validation_status=str(claim.get("answerability_status") or "validated"),
+                validation_status=source_provenance.value,
             )
         ],
     )

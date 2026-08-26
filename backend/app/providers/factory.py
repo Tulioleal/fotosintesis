@@ -79,6 +79,11 @@ def get_provider_registry() -> ProviderRegistry:
     )
 
 
+def get_embedding_provider() -> EmbeddingProvider:
+    settings = get_settings()
+    return _build_embedding_provider(settings.embedding_provider, settings)
+
+
 def _resolve_provider_chain(
     chain: list[str] | None, single: str, role: str
 ) -> list[str]:
@@ -144,7 +149,7 @@ def _build_model_chain(providers: list[str], settings: Settings) -> ModelProvide
             from app.observability.logging import get_logger
             get_logger(__name__).warning(
                 "provider_configuration_failure",
-                extra={"ctx_role": "model", "ctx_provider": provider, "ctx_error": str(exc)},
+                extra={"ctx_role": "model", "ctx_provider": provider, "ctx_error_type": type(exc).__name__},
             )
     if not instances:
         instances.append(_build_single_model_provider(providers[0] if providers else "mock", settings))
@@ -187,7 +192,7 @@ def _build_vision_chain(providers: list[str], settings: Settings) -> ImageAnalys
             from app.observability.logging import get_logger
             get_logger(__name__).warning(
                 "provider_configuration_failure",
-                extra={"ctx_role": "vision", "ctx_provider": provider, "ctx_error": str(exc)},
+                extra={"ctx_role": "vision", "ctx_provider": provider, "ctx_error_type": type(exc).__name__},
             )
     if not instances:
         instances.append(_build_single_vision_provider(providers[0] if providers else "mock", settings))
@@ -230,7 +235,7 @@ def _build_judge_chain(providers: list[str], settings: Settings) -> JudgeEvaluat
             from app.observability.logging import get_logger
             get_logger(__name__).warning(
                 "provider_configuration_failure",
-                extra={"ctx_role": "judge", "ctx_provider": provider, "ctx_error": str(exc)},
+                extra={"ctx_role": "judge", "ctx_provider": provider, "ctx_error_type": type(exc).__name__},
             )
     if not instances:
         instances.append(_build_single_judge_provider(providers[0] if providers else "mock", settings))
@@ -273,7 +278,7 @@ def _build_search_chain(providers: list[str], settings: Settings) -> SearchProvi
             from app.observability.logging import get_logger
             get_logger(__name__).warning(
                 "provider_configuration_failure",
-                extra={"ctx_role": "search", "ctx_provider": provider, "ctx_error": str(exc)},
+                extra={"ctx_role": "search", "ctx_provider": provider, "ctx_error_type": type(exc).__name__},
             )
     if not instances:
         instances.append(_build_single_search_provider(providers[0] if providers else "mock", settings))

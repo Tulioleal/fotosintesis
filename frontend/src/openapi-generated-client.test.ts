@@ -22,4 +22,19 @@ describe("OpenAPI-generated frontend contracts", () => {
     expect(packageJson).toContain("openapi:generate");
     expect(packageJson).toContain("openapi:check");
   });
+
+  it("keeps candidate enrichment metadata bounded and privacy-shaped", async () => {
+    const schema = JSON.parse(
+      await readFile(resolve(root, "src/lib/generated/openapi.json"), "utf8"),
+    );
+    const statusProperties = schema.components.schemas.CandidateEnrichmentStatus.properties;
+    const jobProperties = schema.components.schemas.JobStatusResponse.properties;
+
+    expect(Object.keys(statusProperties).sort()).toEqual(["candidate_id", "job", "policy_version"]);
+    expect(jobProperties).not.toHaveProperty("payload");
+    expect(jobProperties).not.toHaveProperty("evidence");
+    expect(jobProperties).not.toHaveProperty("claims");
+    expect(jobProperties).not.toHaveProperty("quotes");
+    expect(jobProperties).not.toHaveProperty("prompts");
+  });
 });

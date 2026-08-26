@@ -1,0 +1,176 @@
+@use "@/styles/tokens" as *;
+
+.search {
+  display: flex;
+  flex-direction: column;
+  gap: $space-md;
+  width: 100%;
+  padding: 0 0 5rem;
+}
+
+.searchForm {
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.liveRegion {
+  min-height: 1.25rem;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+}
+
+.spinner {
+  animation: searchSpin 1s linear infinite;
+}
+
+@keyframes searchSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-xs;
+  margin-top: $space-sm;
+}
+
+.sectionHeading {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-light;
+  color: $color-on-surface;
+  margin: 0;
+}
+
+.resultGrid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $gutter-desktop;
+  margin: 0;
+  padding: 0;
+}
+
+.localCard,
+.gbifCard {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+}
+
+.localCardBody {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+  align-items: flex-start;
+}
+
+.resultTitle {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  color: $color-on-surface;
+  margin: 0;
+}
+
+.resultCommon {
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  color: $color-muted;
+  margin: 0;
+}
+
+.resultMeta {
+  font-family: $font-body-stack;
+  font-size: $font-size-label-md;
+  color: $color-outline;
+  margin: 0;
+}
+
+.sectionHint {
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  color: $color-muted;
+  margin: 0;
+}
+
+.externalSection {
+  display: flex;
+  flex-direction: column;
+  gap: $space-sm;
+}
+
+.externalHint {
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  color: $color-muted;
+  margin: 0;
+}
+
+.cardActions {
+  display: inline-flex;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+}
+
+.emptyIcon {
+  display: inline-flex;
+}
+
+.emptyTitle {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-md;
+  font-weight: $font-weight-light;
+  color: $color-on-surface;
+  margin: 0;
+}
+
+.emptyBody {
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  color: $color-muted;
+  margin: 0;
+}
+
+.confirmPanel {
+  display: flex;
+  flex-direction: column;
+  gap: $space-xs;
+}
+
+.confirmTitle {
+  font-family: $font-headline-stack;
+  font-size: $font-size-headline-sm;
+  font-weight: $font-weight-medium;
+  color: $color-on-surface;
+  margin: 0;
+}
+
+.confirmBody {
+  font-family: $font-body-stack;
+  font-size: $font-size-body-md;
+  color: $color-muted;
+  margin: 0;
+}
+
+@media (min-width: 720px) {
+  .searchForm {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+
+  .resultGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

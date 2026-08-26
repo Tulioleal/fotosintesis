@@ -39,6 +39,14 @@ def normalize_gemini_schema(value: Any) -> Any:
 def search_generation_config(**kwargs: Any) -> Any:
     kwargs = dict(kwargs)
     kwargs.setdefault("tools", [google_search_tool()])
+    automatic_config_type = getattr(
+        gemini_types(), "AutomaticFunctionCallingConfig", None
+    )
+    if automatic_config_type is not None:
+        kwargs.setdefault(
+            "automatic_function_calling",
+            automatic_config_type(disable=True),
+        )
     return config_from_kwargs(**kwargs) or kwargs
 
 

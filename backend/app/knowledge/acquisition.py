@@ -58,6 +58,8 @@ class KnowledgeAcquisitionService:
         *,
         scientific_name: str,
         topic: str,
+        canonical_species_key: str | None = None,
+        accepted_gbif_key: int | None = None,
         required_aspects: list[str] | None = None,
         question: str | None = None,
         filters: KnowledgeRetrievalFilters | None = None,
@@ -76,7 +78,7 @@ class KnowledgeAcquisitionService:
         )
         query_embedding = await self._query_embedding(query_text)
         try:
-            existing = await self.vector_index.retrieve_chunks(
+            ordinary = await self.vector_index.retrieve_chunks(
                 filters,
                 query_text=query_text,
                 query_embedding=query_embedding,
@@ -89,6 +91,20 @@ class KnowledgeAcquisitionService:
                 [],
                 "LlamaIndex pgvector retrieval failed; returning a limited result.",
             )
+
+        enrichment: list = []
+        if canonical_species_key and required_aspects:
+            enrichment = await self._retrieve_enrichment_chunks(
+                scientific_name=scientific_name,
+                topic=topic,
+                canonical_species_key=canonical_species_key,
+                accepted_gbif_key=accepted_gbif_key,
+                required_aspects=required_aspects,
+                question=question,
+            )
+
+        existing = _deduplicate_chunks([*enrichment, *ordinary])[:5]
+
         if len(existing) >= min_existing_chunks:
             return KnowledgeAcquisitionResult(status=AcquisitionStatus.retrieved, chunks=existing)
 
@@ -135,6 +151,40 @@ class KnowledgeAcquisitionService:
     async def _query_embedding(self, query_text: str) -> list[float]:
         result = await self.providers.embeddings.create_embeddings([query_text])
         return result.embeddings[0] if result.embeddings else []
+
+    async def _retrieve_enrichment_chunks(
+        self,
+        *,
+        scientific_name: str,
+        topic: str,
+        canonical_species_key: str,
+        accepted_gbif_key: int | None,
+        required_aspects: list[str],
+        question: str | None,
+    ) -> list:
+        """Retrieve enrichment evidence with coverage-balanced per-aspect
+        filtering so unrelated higher-scoring chunks can never displace
+        requested-aspect coverage before the top-k limit."""
+        distinct_aspects = list(dict.fromkeys(aspect for aspect in required_aspects if aspect))
+        if not distinct_aspects:
+            return []
+        query_text = _retrieval_query_text(
+            scientific_name=scientific_name,
+            topic=topic,
+            required_aspects=required_aspects,
+            question=question,
+        )
+        query_embedding = await self._query_embedding(query_text)
+        return await retrieve_balanced_enrichment(
+            vector_index=self.vector_index,
+            canonical_species_key=canonical_species_key,
+            accepted_gbif_key=accepted_gbif_key,
+            required_aspects=distinct_aspects,
+            query_text=query_text,
+            query_embedding=query_embedding,
+            per_aspect_limit=5,
+            budget=20,
+        )
 
     async def _generate_document(
         self, scientific_name: str, topic: str, sources: list[SearchResult]
@@ -186,6 +236,108 @@ def _retrieval_query_text(
     return " ".join(part for part in parts if part).strip()
 
 
+def balance_enrichment_chunks(
+    hits_by_aspect: dict[str, list],
+    *,
+    budget: int,
+) -> list:
+    """Round-robin ordering across requested aspects.
+
+    Each requested aspect contributes its first candidate before any aspect
+    contributes a second, so one aspect's high-scoring unrelated hits cannot
+    displace requested-aspect coverage before the bounded budget is reached.
+    Candidates are deduplicated by stable chunk identity. The returned list
+    is capped at ``budget``.
+    """
+    if budget <= 0:
+        return []
+    ordered: list = []
+    ordered_ids: set[str] = set()
+    if not hits_by_aspect:
+        return ordered
+    aspects = list(hits_by_aspect)
+    longest = max(len(hits_by_aspect[aspect]) for aspect in aspects)
+    for round_index in range(longest):
+        for aspect in aspects:
+            if len(ordered) >= budget:
+                return ordered
+            candidates = hits_by_aspect[aspect]
+            if round_index >= len(candidates):
+                continue
+            chunk = candidates[round_index]
+            key = str(getattr(chunk, "id", None) or hash(chunk.content))
+            if key in ordered_ids:
+                continue
+            ordered_ids.add(key)
+            ordered.append(chunk)
+    return ordered[:budget]
+
+
+async def retrieve_balanced_enrichment(
+    *,
+    vector_index,
+    canonical_species_key: str,
+    accepted_gbif_key: int | None,
+    required_aspects: list[str],
+    query_text: str,
+    query_embedding: list[float],
+    per_aspect_limit: int = 5,
+    budget: int = 20,
+) -> list:
+    """Aspect-filtered enrichment retrieval with coverage-balanced ordering.
+
+    Each requested aspect runs one pgvector query filtered to canonical
+    species identity, confirmed-plant enrichment evidence, trusted
+    provenance, auto-ingested review status, and that covered aspect. The
+    per-aspect hits are balanced round-robin and deduplicated by stable chunk
+    ID. Filtering selects candidates only; semantic judging remains
+    authoritative for coverage.
+    """
+    distinct_aspects = list(
+        dict.fromkeys(aspect for aspect in required_aspects if aspect)
+    )
+    if not distinct_aspects:
+        return []
+    hits_by_aspect: dict[str, list] = {}
+    for aspect in distinct_aspects:
+        try:
+            candidates = await vector_index.retrieve_chunks(
+                KnowledgeRetrievalFilters(
+                    canonical_species_key=canonical_species_key,
+                    accepted_gbif_key=accepted_gbif_key,
+                    evidence_type="confirmed_plant_enrichment",
+                    source_provenance="trusted",
+                    review_status=ReviewStatus.auto_ingested,
+                    covered_aspect=aspect,
+                ),
+                query_text=query_text,
+                query_embedding=query_embedding,
+                limit=per_aspect_limit,
+            )
+        except Exception:
+            continue
+        valid: list = []
+        for chunk in candidates:
+            validations = chunk.metadata.get("validation_provenance")
+            if not isinstance(validations, list):
+                continue
+            covered = set(chunk.metadata.get("covered_aspects") or [])
+            if aspect not in covered:
+                continue
+            if not any(
+                isinstance(v, dict)
+                and aspect in (v.get("covered_aspects") or [])
+                for v in validations
+            ):
+                continue
+            if chunk.id is None:
+                continue
+            valid.append(chunk)
+        if valid:
+            hits_by_aspect[aspect] = valid
+    return balance_enrichment_chunks(hits_by_aspect, budget=budget)
+
+
 def _degraded_result(
     scientific_name: str,
     topic: str,
@@ -213,3 +365,14 @@ def _content_from_sources(scientific_name: str, topic: str, sources: list[Search
 
 def _normalize_domain(domain: str) -> str:
     return domain.lower().removeprefix("www.").strip()
+
+
+def _deduplicate_chunks(chunks: list) -> list:
+    seen: set[str] = set()
+    result: list = []
+    for chunk in chunks:
+        key = str(getattr(chunk, "id", None) or chunk.content[:80])
+        if key not in seen:
+            seen.add(key)
+            result.append(chunk)
+    return result

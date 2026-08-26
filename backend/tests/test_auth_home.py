@@ -19,9 +19,10 @@ from app.auth.tables import (
     users,
 )
 from app.core.settings import get_settings
-from app.identification.gbif import GbifTaxonomy
+from app.identification.gbif import GbifTaxonomy, ProviderLookupError
 from app.main import app
 from app.providers.types import ConfidenceLabel, ImageAnalysisResult, PlantCandidate
+from tests._image_helpers import JPEG_BYTES, PNG_BYTES
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +145,16 @@ async def test_protected_home_summary_requires_and_accepts_session(
         summary = await client.get("/home/summary", headers={"Authorization": f"Bearer {token}"})
         assert summary.status_code == 200
         assert summary.json()["empty_state"] is True
+        assert [
+            item["label"] for item in summary.json()["access"]
+        ] == [
+            "Identify plant",
+            "Search plants",
+            "Light meter",
+            "Reminders",
+            "My Garden",
+            "Assistant",
+        ]
 
         session_validation = await client.get(
             "/auth/session", headers={"Authorization": f"Bearer {token}"}
@@ -445,6 +456,9 @@ async def test_expired_persisted_session_is_rejected(
 async def test_identification_upload_validates_taxonomy_and_requires_confirmation(
     session_factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("JOBS_PRODUCER_ENABLED", "true")
+    get_settings.cache_clear()
+
     async def matched_name(self, scientific_name: str) -> GbifTaxonomy:
         return GbifTaxonomy(
             key=123,
@@ -473,7 +487,7 @@ async def test_identification_upload_validates_taxonomy_and_requires_confirmatio
         created = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.jpg", b"fake-image-bytes", "image/jpeg")},
+            files={"file": ("plant.jpg", JPEG_BYTES, "image/jpeg")},
         )
 
         assert created.status_code == 201
@@ -512,7 +526,7 @@ async def test_identification_upload_with_openai_style_vision_does_not_return_ma
         async def analyze_image(
             self, image: bytes, prompt: str | None = None, **kwargs: object
         ) -> ImageAnalysisResult:
-            assert kwargs["mime_type"] == "image/png"
+            assert kwargs["mime_type"] == "image/jpeg"
             return ImageAnalysisResult(
                 provider="openai-vision",
                 model="gpt-4.1-mini",
@@ -559,7 +573,7 @@ async def test_identification_upload_with_openai_style_vision_does_not_return_ma
         response = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.png", b"fake-png-bytes", "image/png")},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
         )
 
     assert response.status_code == 201
@@ -591,7 +605,7 @@ async def test_identification_reports_no_gbif_match(
         response = await client.post(
             "/identifications",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("plant.png", b"fake-image-bytes", "image/png")},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
         )
 
         assert response.status_code == 201
@@ -599,3 +613,38 @@ async def test_identification_reports_no_gbif_match(
         assert body["status"] == "retry_needed"
         assert body["sad_path"] == "no_gbif_match"
         assert body["candidates"][0]["binomial_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_identification_reports_taxonomy_provider_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unavailable_name(self, scientific_name: str) -> GbifTaxonomy:
+        raise ProviderLookupError("network down")
+
+    monkeypatch.setattr("app.identification.gbif.GbifClient.match_name", unavailable_name)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        payload = {
+            "name": "Iris",
+            "email": "iris@example.com",
+            "password": "password123",
+        }
+        await client.post("/auth/register", json=payload)
+        verified = await client.post(
+            "/auth/credentials/verify",
+            json={"email": payload["email"], "password": payload["password"]},
+        )
+        token = verified.json()["session_token"]
+
+        response = await client.post(
+            "/identifications",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("plant.png", PNG_BYTES, "image/png")},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "retry_needed"
+    assert body["sad_path"] == "taxonomy_unavailable"
+    assert body["candidates"] == []

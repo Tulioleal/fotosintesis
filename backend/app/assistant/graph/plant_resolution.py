@@ -143,12 +143,14 @@ def _sources_from_retrieval(retrieval: object) -> list[dict]:
         if chunk.source_url in seen:
             continue
         seen.add(chunk.source_url)
+        chunk_metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
         sources.append(
             {
-                "title": chunk.metadata.get("title") if isinstance(chunk.metadata, dict) else None,
+                "title": chunk_metadata.get("title"),
                 "url": chunk.source_url,
                 "domain": chunk.source_domain,
                 "confidence": chunk.confidence,
+                "validation_status": chunk_metadata.get("validation_status"),
             }
         )
     return sources
@@ -180,6 +182,8 @@ def _sources_from_web_results(
                 "evidence_source": evidence.evidence_source,
                 "fetch_status": evidence.fetch_status,
                 "snippet_only": not evidence.has_fetched_content,
+                "source_provenance": evidence.validation_status,
+                "validation_status": evidence.validation_status,
             }
         )
     return sources
@@ -212,6 +216,7 @@ def _usable_web_results(
             results.append(
                 TrustedPageEvidence(
                     result=item,
+                    validation_status="",
                     fetch_status="snippet_only",
                     snippet_length=len(item.snippet or ""),
                 )

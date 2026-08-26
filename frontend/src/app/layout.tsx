@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
-import { Bodoni_Moda, Roboto } from "next/font/google";
+import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import "@/styles/globals.scss";
 import { Providers } from "./providers";
 
-const bodoniModa = Bodoni_Moda({
-  subsets: ["latin"],
+const bodoniModa = localFont({
+  src: "./fonts/bodoni-moda-latin.woff2",
   display: "swap",
-  weight: ["400", "500", "700"],
+  weight: "400 900",
   variable: "--font-headline",
 });
 
-const roboto = Roboto({
-  subsets: ["latin"],
+const roboto = localFont({
+  src: "./fonts/roboto-latin.woff2",
   display: "swap",
-  weight: ["300", "400", "500", "700"],
+  weight: "300 700",
   variable: "--font-body",
 });
 

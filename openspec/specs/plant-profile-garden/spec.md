@@ -1,9 +1,7 @@
 ## Purpose
 
 TBD - Created by syncing change `require-confirmed-profile-context`.
-
 ## Requirements
-
 ### Requirement: Confirmed profile access
 
 The system SHALL generate or retrieve an evidence-backed plant profile only for an authenticated user presenting a confirmed, taxonomically validated candidate that belongs to that user. The system SHALL surface user-facing rejection and error messages in English.
@@ -35,12 +33,31 @@ The system SHALL generate or retrieve an evidence-backed plant profile only for 
 
 ### Requirement: Evidence-backed plant profile
 
-The system SHALL generate or retrieve a plant profile using RAG evidence for a confirmed plant.
+The system SHALL generate or retrieve the latest persisted plant profile snapshot for a confirmed plant and SHALL keep that snapshot available while confirmed-plant enrichment is pending, processing, partial, complete, or failed. Snapshot content and sources SHALL remain distinct from current enrichment outcomes and assistant-retrievable evidence. Existing profile sections are not required to regenerate when enrichment completes.
 
 #### Scenario: Sufficient profile evidence
 
 - **WHEN** evidence exists for the confirmed species
 - **THEN** the system renders profile sections with references to the sources used
+
+#### Scenario: Persisted snapshot contains evidence-backed sections
+- **WHEN** the latest persisted profile snapshot contains evidence-backed sections
+- **THEN** the system renders those sections with the sources used to create that snapshot
+
+#### Scenario: Enrichment is pending or processing
+- **WHEN** a user opens a profile while applicable enrichment is `pending` or `processing`
+- **THEN** the system returns the latest persisted snapshot without waiting for the worker
+- **AND** includes current enrichment state and applicable limitations
+
+#### Scenario: Enrichment is partial or failed
+- **WHEN** applicable enrichment finishes `partial` or `failed`
+- **THEN** the system continues returning the latest persisted snapshot
+- **AND** identifies bounded missing aspects or failure limitations without presenting unsupported claims as complete
+
+#### Scenario: Enrichment completes after snapshot creation
+- **WHEN** enrichment indexes evidence after the snapshot was created
+- **THEN** the evidence becomes available to assistant retrieval and future profile generation or refresh behavior
+- **AND** this change does not promise automatic section-level regeneration
 
 ### Requirement: Regional alias fallback
 
@@ -62,12 +79,23 @@ The system MUST show sources, confidence and limitation messages for partial or 
 
 ### Requirement: Garden save
 
-The system SHALL allow saving confirmed plants to Mi Jardin with optional image and user customization.
+The system SHALL allow saving confirmed plants to Mi Jardin with optional image and user customization. The optional image is the identification image linked to the confirmed candidate: the save operation SHALL accept an image path only when it belongs to the caller's identification records for that candidate, and SHALL persist it as the garden plant's image path in the save transaction.
 
 #### Scenario: Confirmed plant saved
 
 - **WHEN** a user saves a confirmed validated plant
 - **THEN** the system creates a garden record associated with the user, plant profile and optional custom data
+
+#### Scenario: Saved plant carries its identification image
+
+- **WHEN** the save request includes the storage path of an identification image owned by the caller for the confirmed candidate
+- **THEN** the created garden plant exposes that image path to authorized reads
+
+#### Scenario: Invalid image reference does not block saving
+
+- **WHEN** the save request omits the image or references a path that fails ownership validation
+- **THEN** the plant saves successfully without an image path when the reference was omitted
+- **AND** an invalid reference returns an English validation error without creating the record
 
 ### Requirement: Mi Jardin management
 
@@ -92,3 +120,242 @@ The system SHALL emit `PlantProfileResponse.sections` keys and `PlantProfileResp
 
 - **WHEN** a plant profile is generated with limited RAG evidence or partial confidence
 - **THEN** every entry in `PlantProfileResponse.limitations` is an English sentence describing the limitation (e.g. "Profile generated with limited RAG evidence; avoid critical care decisions without reviewing additional sources." or "Partial confidence: the recommendations are presented as orientative, not categorical.")
+
+### Requirement: Profile enrichment status
+
+The profile experience SHALL expose metadata-only applicable enrichment state to the authenticated candidate owner and SHALL refresh that state without blocking profile navigation. Polling SHALL continue only for non-terminal states and SHALL stop at a terminal state. The same owner-scoped status SHALL remain discoverable from Home and Garden, and the UI SHALL distinguish evidence enrichment from a subsequent profile refresh.
+
+#### Scenario: Profile has applicable enrichment
+- **WHEN** an authenticated owner retrieves a profile through confirmed candidate context with a current-policy association
+- **THEN** the response includes job identity, lifecycle, and bounded covered or missing aspects
+- **AND** excludes raw job payload and evidence content
+
+#### Scenario: Frontend observes non-terminal enrichment
+- **WHEN** applicable enrichment is `pending` or `processing`
+- **THEN** the frontend polls authorized enrichment status only while the state remains non-terminal
+- **AND** profile navigation remains available
+- **AND** Home and Garden can display the same active work through the shared owner-scoped activity view
+
+#### Scenario: Frontend observes terminal enrichment
+- **WHEN** enrichment becomes `complete`, `partial`, or `failed`
+- **THEN** the frontend stops polling that candidate status
+- **AND** invalidates profile status and snapshot metadata without implying regenerated sections
+- **AND** exposes the sanitized terminal outcome to the cross-page activity view
+
+#### Scenario: Profile refresh remains distinct
+- **WHEN** evidence enrichment becomes terminal and a related profile-refresh job is pending or processing
+- **THEN** the profile and cross-page activity UI identify profile refresh as still active
+- **AND** do not claim that all profile sections have been updated
+
+#### Scenario: Another owner requests status
+- **WHEN** a user requests enrichment state through another owner's candidate
+- **THEN** the system returns the same not-found behavior used for unknown candidate context
+
+### Requirement: Canonical profile identity metadata
+
+The system SHALL retain accepted scientific name as profile display context and SHALL expose accepted GBIF key, normalized binomial, and canonical species key when available. New canonical profile creation SHALL converge on one profile for one canonical species identity.
+
+#### Scenario: Accepted display name differs from binomial
+
+- **WHEN** a confirmed candidate has an authority-bearing or infraspecific accepted name and a normalized binomial
+- **THEN** the profile preserves the accepted name for display
+- **AND** exposes the normalized binomial and canonical identity separately
+
+#### Scenario: Concurrent requests create one canonical profile
+
+- **WHEN** concurrent requests create a previously absent profile for the same canonical species
+- **THEN** both requests return the same persisted canonical profile
+- **AND** the unique-key race does not surface as an API failure
+
+### Requirement: Accepted evidence for new profile snapshots
+
+New profile snapshots SHALL select canonical evidence only when it has trusted provenance, eligible review state, accepted individual aspect support, and applicable validation provenance. Creating a new profile from current accepted evidence MUST NOT regenerate an existing profile.
+
+#### Scenario: Canonical document has no accepted support
+
+- **WHEN** a canonical document exists without accepted aspect support or applicable validation provenance
+- **THEN** new profile generation excludes it
+
+#### Scenario: Canonical accepted evidence exists
+
+- **WHEN** trusted canonical evidence has accepted aspect support and validation provenance before profile creation
+- **THEN** a new profile may include that evidence and its source
+
+#### Scenario: Profile snapshot already exists
+
+- **WHEN** enrichment later accepts evidence for a species with an existing profile
+- **THEN** the existing persisted sections, sources, confidence, and limitations remain exactly unchanged
+
+### Requirement: Bounded enrichment observation
+
+The frontend SHALL poll active enrichment for a bounded client observation window associated with the current candidate and job. Identical active responses and lease heartbeat timestamps MUST NOT extend that window indefinitely. Terminal states SHALL stop polling, and stalled state SHALL provide a one-shot manual refresh while profile actions remain available.
+
+#### Scenario: Active job exceeds the observation window
+
+- **WHEN** an active job remains non-terminal through the bounded client observation window
+- **THEN** automatic polling stops
+- **AND** the UI shows a textual delayed-state message and manual status refresh
+
+#### Scenario: Candidate or job changes
+
+- **WHEN** the viewed candidate or applicable job ID changes
+- **THEN** stale delayed state from the prior context is cleared
+- **AND** the new context receives its own bounded observation window
+
+#### Scenario: Manual status refresh is running
+
+- **WHEN** the user activates manual status refresh
+- **THEN** exactly one immediate refetch runs
+- **AND** the control is disabled with checking text until the request settles
+- **AND** focus is not moved automatically
+
+### Requirement: Accessible enrichment outcome details
+
+The profile SHALL expose one polite enrichment status region, alert semantics for polling errors, textual covered and missing aspect labels, and distinct user-facing text for `retry_exhausted`, `workflow_incomplete`, and `indexing_deferred` limitations.
+
+#### Scenario: Operational partial is displayed
+
+- **WHEN** enrichment returns an operational partial limitation
+- **THEN** the UI displays limitation-specific text rather than one generic fallback
+
+#### Scenario: Poll returns unchanged state
+
+- **WHEN** repeated polling returns the same enrichment state
+- **THEN** the UI retains one polite status region
+- **AND** does not insert duplicate status nodes or move focus
+
+### Requirement: Accurate reminder summaries
+
+The system SHALL derive each garden plant's pending reminder summary from its reminder rows, and the summary SHALL be reconciled by the same counter integrity contract that governs reminders.
+
+#### Scenario: Plant summary reflects pending reminders
+
+- **WHEN** a garden plant's reminder summary is displayed
+- **THEN** the pending reminder count matches the plant's pending reminder rows
+
+#### Scenario: Plant summary is reconcilable
+
+- **WHEN** a garden plant's stored active reminder count is out of sync
+- **THEN** running reminder counter reconciliation repairs the plant's displayed pending reminder count
+
+### Requirement: Section-level evidence fingerprints
+
+The system SHALL associate each generated profile section with a stable section identifier, its applicable canonical aspect set, and a recorded generation version containing a deterministic evidence fingerprint and the generation policy version. The fingerprint SHALL be derived from accepted evidence identifiers and versions for the section's aspects and MUST NOT depend on retrieval order or model response formatting.
+
+#### Scenario: Section records its evidence fingerprint
+
+- **WHEN** a profile section is generated from accepted evidence
+- **THEN** the persisted section version records the evidence fingerprint and generation policy version that produced it
+
+#### Scenario: Fingerprint is stable across regeneration
+
+- **WHEN** the same accepted evidence identifiers and versions are used to generate a section more than once
+- **THEN** the computed fingerprint is identical
+
+#### Scenario: Fingerprint is independent of presentation
+
+- **WHEN** the same accepted evidence is retrieved in a different order or rendered with different formatting
+- **THEN** the computed fingerprint is unchanged
+
+### Requirement: Section-level staleness and regeneration
+
+The system SHALL determine which profile sections depend on changed canonical aspects and SHALL mark only those sections stale when validated evidence changes. Stale sections SHALL be regenerated through durable, retryable, idempotent background work without rebuilding unaffected sections. A successful replacement SHALL swap the active section version atomically, and a failed regeneration MUST keep the previous section version readable and marked stale.
+
+#### Scenario: New evidence affects only mapped sections
+
+- **WHEN** accepted evidence changes for a subset of canonical aspects
+- **THEN** only the profile sections mapped to those aspects are marked stale
+
+#### Scenario: Stale section regenerates independently
+
+- **WHEN** a stale section is regenerated through a durable job
+- **THEN** unrelated profile sections and their metadata remain unchanged
+
+#### Scenario: Successful replacement commits atomically
+
+- **WHEN** a regenerated section is persisted successfully
+- **THEN** it replaces the prior active version atomically and records its new evidence fingerprint and provenance
+
+#### Scenario: Failed regeneration preserves the previous section
+
+- **WHEN** regeneration of a stale section fails
+- **THEN** the previous section version remains readable and is surfaced as stale with an explicit limitation
+
+#### Scenario: Replaying a completed job does not duplicate versions
+
+- **WHEN** a completed refresh job is replayed with the same idempotency key and fingerprint
+- **THEN** no duplicate active section version is created
+
+### Requirement: Profile freshness and refresh status
+
+The system SHALL expose per-section freshness and refresh status so reads can identify stale, refreshing, partial, and current sections without blocking profile navigation. Status SHALL be metadata-only and MUST NOT expose raw job payloads or evidence content.
+
+#### Scenario: Profile identifies section freshness
+
+- **WHEN** an authenticated owner reads a profile whose sections have differing freshness
+- **THEN** the response identifies which sections are stale, refreshing, partial, or current
+
+#### Scenario: Status excludes internal details
+
+- **WHEN** profile freshness and refresh status are returned
+- **THEN** raw job payloads and evidence content are excluded
+
+### Requirement: Legacy profile reconciliation
+
+The system SHALL treat profiles without evidence fingerprints as unknown rather than automatically current. A reconciliation process SHALL evaluate their sections against current evidence coverage, prioritize sections containing insufficient-evidence fallback text for refresh, and SHALL keep existing sourced sections visible until a replacement succeeds. Reconciliation MUST NOT discard historical profile text or provenance.
+
+#### Scenario: Legacy profile with insufficient sections is reconciled
+
+- **WHEN** a profile predates evidence fingerprints and contains insufficient-evidence fallback sections
+- **THEN** reconciliation marks those sections stale for refresh while keeping their current text visible
+
+#### Scenario: Legacy sourced section remains visible until replacement
+
+- **WHEN** a legacy profile has a sourced section without a fingerprint
+- **THEN** the section remains visible and unchanged until a regenerated replacement commits
+
+#### Scenario: Historical text is preserved
+
+- **WHEN** reconciliation evaluates a legacy profile
+- **THEN** historical profile text and provenance are not discarded
+
+### Requirement: Grounded garden care summaries
+
+The system SHALL return only sourced care data in garden list and detail responses. Garden responses SHALL NOT include static care values such as a fixed indirect-light label or a last-watering assertion when no watering events exist. Each garden plant response SHALL include a nullable next-reminder summary and a nullable latest light-measurement summary. Missing care data SHALL remain null rather than being replaced by plausible defaults.
+
+#### Scenario: Plant without light evidence
+
+- **WHEN** a garden plant has no persisted light measurement
+- **THEN** the response's light summary is null
+- **AND** the UI renders a missing-data state instead of an invented light condition
+
+#### Scenario: Plant without watering events
+
+- **WHEN** a garden plant has no recorded watering events
+- **THEN** the response does not include a last-watering assertion
+- **AND** the UI does not display a last-watering value
+
+#### Scenario: Plant with a light measurement
+
+- **WHEN** a garden plant has at least one persisted light measurement
+- **THEN** the response's light summary exposes the latest measurement's source, classification, reliability, and observation instant
+
+#### Scenario: Plant with a pending reminder
+
+- **WHEN** a garden plant has at least one pending reminder
+- **THEN** the response's next-reminder summary exposes the earliest pending reminder's identifier, action, due instant, and effective timezone
+
+### Requirement: Care value provenance
+
+A displayed care value SHALL expose a recognizable provenance category. Profile-derived guidance, sensor/camera/manual measurements, and user-provided location or notes SHALL NOT be collapsed into a single category.
+
+#### Scenario: Profile recommendation labeled distinctly
+
+- **WHEN** the UI displays profile-derived guidance alongside a user measurement
+- **THEN** the profile guidance is labeled as evidence-backed profile recommendation and is visually distinguishable from the measurement
+
+#### Scenario: Measurement labeled by source
+
+- **WHEN** the UI displays a light measurement
+- **THEN** it identifies the recorded source (sensor, camera, or manual) and marks camera readings as approximate
+

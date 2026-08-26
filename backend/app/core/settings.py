@@ -1,7 +1,16 @@
+import json
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.limiter.policy import (
+    EndpointCategory,
+    EndpointPolicy,
+    LimitProfile,
+    LimiterPolicy,
+    StorageFailureMode,
+)
 
 
 class Settings(BaseSettings):
@@ -19,7 +28,7 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "fotosintesis-local"
     object_storage_provider: str = Field(default="local", validation_alias="OBJECT_STORAGE_PROVIDER")
     object_storage_local_root: str = Field(
-        default="storage-data", validation_alias="OBJECT_STORAGE_LOCAL_ROOT"
+        default="/tmp/storage-data", validation_alias="OBJECT_STORAGE_LOCAL_ROOT"
     )
     object_storage_access_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_ACCESS_KEY")
     object_storage_secret_key: str | None = Field(default=None, validation_alias="OBJECT_STORAGE_SECRET_KEY")
@@ -40,6 +49,10 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     trefle_api_key: str | None = None
     perenual_api_key: str | None = None
+    gbif_base_url: str = Field(
+        default="https://api.gbif.org/v1/species/match",
+        validation_alias="GBIF_BASE_URL",
+    )
     openai_text_model: str = "gpt-5.4"
     openai_classifier_model: str = "gpt-5.4-mini"
     openai_vision_model: str = "gpt-5.4"
@@ -56,6 +69,12 @@ class Settings(BaseSettings):
     session_idle_ttl_minutes: int = 30
     session_absolute_ttl_days: int = 7
     recovery_token_ttl_minutes: int = 30
+    recovery_delivery_provider: str = Field(
+        default="sink", validation_alias="RECOVERY_DELIVERY_PROVIDER"
+    )
+    public_origin_url: str = Field(
+        default="http://localhost:3000", validation_alias="PUBLIC_ORIGIN_URL"
+    )
     knowledge_vector_table: str = "knowledge_embeddings"
     embedding_dimension: int = 8
     assistant_classifier_timeout_seconds: float = 8.0
@@ -64,14 +83,246 @@ class Settings(BaseSettings):
     assistant_strong_answer_validation_threshold: float = 0.30
     assistant_judge_timeout_seconds: float = 25.0
     assistant_web_search_timeout_seconds: float = 20.0
+    light_measurement_freshness_sensor_days: int = 7
+    light_measurement_freshness_camera_days: int = 14
+    light_measurement_freshness_manual_days: int = 30
+    light_measurement_freshness_default_days: int = 14
+    light_measurement_min_reliability: str = "medium"
     model_provider_attempt_timeout_seconds: float = 30.0
     judge_provider_attempt_timeout_seconds: float = 30.0
-    search_provider_attempt_timeout_seconds: float = 25.0
+    search_provider_attempt_timeout_seconds: float = 40.0
     vision_provider_attempt_timeout_seconds: float = 30.0
     model_circuit_breaker_duration_seconds: float = 60.0
     judge_circuit_breaker_duration_seconds: float = 60.0
     search_circuit_breaker_duration_seconds: float = 60.0
     vision_circuit_breaker_duration_seconds: float = 60.0
+    jobs_producer_enabled: bool = Field(default=False, validation_alias="JOBS_PRODUCER_ENABLED")
+    jobs_worker_enabled: bool = Field(default=False, validation_alias="JOBS_WORKER_ENABLED")
+    jobs_poll_interval_seconds: float = Field(default=5.0, gt=0, validation_alias="JOBS_POLL_INTERVAL_SECONDS")
+    jobs_batch_size: int = Field(default=10, gt=0, validation_alias="JOBS_BATCH_SIZE")
+    jobs_worker_concurrency: int = Field(default=5, gt=0, validation_alias="JOBS_WORKER_CONCURRENCY")
+    jobs_lease_duration_seconds: float = Field(default=300.0, gt=0, validation_alias="JOBS_LEASE_DURATION_SECONDS")
+    jobs_lease_renewal_interval_seconds: float = Field(default=60.0, gt=0, validation_alias="JOBS_LEASE_RENEWAL_INTERVAL_SECONDS")
+    jobs_max_attempts_default: int = Field(default=3, ge=1, validation_alias="JOBS_MAX_ATTEMPTS_DEFAULT")
+    jobs_backoff_base_seconds: float = Field(default=10.0, gt=0, validation_alias="JOBS_BACKOFF_BASE_SECONDS")
+    jobs_backoff_cap_seconds: float = Field(default=3600.0, gt=0, validation_alias="JOBS_BACKOFF_CAP_SECONDS")
+    jobs_shutdown_drain_seconds: float = Field(default=30.0, gt=0, validation_alias="JOBS_SHUTDOWN_DRAIN_SECONDS")
+    jobs_metrics_host: str = Field(default="0.0.0.0", validation_alias="JOBS_METRICS_HOST")
+    jobs_metrics_port: int = Field(default=9100, ge=0, lt=65536, validation_alias="JOBS_METRICS_PORT")
+    jobs_required_contracts: str = Field(
+        default="",
+        validation_alias="JOBS_REQUIRED_CONTRACTS",
+    )
+    enrichment_activity_terminal_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        le=24 * 30,
+        validation_alias="ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS",
+        description=(
+            "How long terminal enrichment jobs remain visible in the "
+            "owner-scoped background activity view. Capped at 30 days."
+        ),
+    )
+    enrichment_activity_max_items: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        validation_alias="ENRICHMENT_ACTIVITY_MAX_ITEMS",
+        description=(
+            "Cap on enrichment activity items returned in a single response."
+        ),
+    )
+
+    auth_limiter_enabled: bool = Field(default=False, validation_alias="AUTH_LIMITER_ENABLED")
+    auth_limiter_hmac_secret: str | None = Field(
+        default=None, validation_alias="AUTH_LIMITER_HMAC_SECRET"
+    )
+    auth_limiter_hmac_key_version: int = Field(
+        default=1, ge=1, validation_alias="AUTH_LIMITER_HMAC_KEY_VERSION"
+    )
+    auth_limiter_assertion_secret: str | None = Field(
+        default=None, validation_alias="AUTH_LIMITER_ASSERTION_SECRET"
+    )
+    auth_limiter_max_retry_after_seconds: int = Field(
+        default=3600, ge=1, validation_alias="AUTH_LIMITER_MAX_RETRY_AFTER_SECONDS"
+    )
+    auth_limiter_retention_seconds: int = Field(
+        default=86400, gt=0, validation_alias="AUTH_LIMITER_RETENTION_SECONDS"
+    )
+    auth_limiter_cleanup_batch_size: int = Field(
+        default=1000, gt=0, validation_alias="AUTH_LIMITER_CLEANUP_BATCH_SIZE"
+    )
+    evaluation_mode: str = Field(
+        default="recorded",
+        validation_alias="EVALUATION_MODE",
+        description=(
+            "Evaluation execution mode: 'recorded' (default/CI), 'live' (opt-in "
+            "non-deterministic), or 'reference' (debugging only, non-passing)."
+        ),
+    )
+    evaluation_recording_path: str | None = Field(
+        default=None,
+        validation_alias="EVALUATION_RECORDING_PATH",
+        description="Path to the versioned provider recording set for recorded/replay mode.",
+    )
+    evaluation_run_retention: int = Field(
+        default=10,
+        gt=0,
+        validation_alias="EVALUATION_RUN_RETENTION",
+        description="Latest-N bound on retained evaluation run artifact directories.",
+    )
+    assistant_progress_streaming_enabled: bool = Field(
+        default=True,
+        validation_alias="ASSISTANT_PROGRESS_STREAMING_ENABLED",
+        description="Serve the SSE chat progress stream beside the blocking JSON contract.",
+    )
+    assistant_stream_heartbeat_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        validation_alias="ASSISTANT_STREAM_HEARTBEAT_SECONDS",
+        description="Heartbeat interval during silent stages of the SSE chat stream.",
+    )
+
+    identification_max_image_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_BYTES",
+    )
+    identification_max_image_width: int = Field(
+        default=4000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_WIDTH",
+    )
+    identification_max_image_height: int = Field(
+        default=4000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_HEIGHT",
+    )
+    identification_max_image_pixels: int = Field(
+        default=40_000_000,
+        gt=0,
+        validation_alias="IDENTIFICATION_MAX_IMAGE_PIXELS",
+    )
+    identification_output_quality: int = Field(
+        default=85,
+        ge=1,
+        le=100,
+        validation_alias="IDENTIFICATION_OUTPUT_QUALITY",
+    )
+
+    auth_limiter_profiles: str = Field(
+        default="",
+        validation_alias="AUTH_LIMITER_PROFILES",
+        description=(
+            "JSON mapping of endpoint category to {source, account, storage_failure_mode} "
+            "limit profiles; e.g. "
+            '{"registration":{"source":{"limit":10,"window_seconds":3600},'
+            '"account":null,"storage_failure_mode":"fail_closed"}}'
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_job_settings(self) -> "Settings":
+        if self.jobs_lease_renewal_interval_seconds >= self.jobs_lease_duration_seconds:
+            raise ValueError(
+                "jobs_lease_renewal_interval_seconds must be less than jobs_lease_duration_seconds"
+            )
+        return self
+
+    def limiter_policy(self) -> LimiterPolicy:
+        """Build the validated limiter policy from configured profiles.
+
+        When enforcement is disabled, an empty but structurally complete
+        policy is returned so callers can gate on ``auth_limiter_enabled``
+        without special-casing construction. When enforcement is enabled, the
+        policy must cover every closed endpoint category and use safe
+        production values, otherwise a ``ValueError`` is raised.
+        """
+        parsed: dict[str, object] = {}
+        if self.auth_limiter_profiles:
+            try:
+                parsed = json.loads(self.auth_limiter_profiles)
+            except json.JSONDecodeError as error:
+                raise ValueError("auth_limiter_profiles is not valid JSON") from error
+
+        # The distributed authentication boundary is mandatory in production: a
+        # missing or incorrect setting must fail startup rather than silently
+        # removing the whole abuse boundary. Disabled mode stays available only
+        # outside production (local, test, dev).
+        if self.environment in {"prod", "production"} and not self.auth_limiter_enabled:
+            raise ValueError(
+                "auth_limiter_enabled must be true when APP_ENV is prod or production"
+            )
+
+        endpoints: dict[EndpointCategory, EndpointPolicy] = {}
+        for raw_category, raw_policy in parsed.items():
+            if raw_category not in EndpointCategory.__members__:
+                raise ValueError(f"unknown auth limiter endpoint category: {raw_category}")
+            category = EndpointCategory[raw_category]
+            if not isinstance(raw_policy, dict):
+                raise ValueError(f"auth limiter policy for {raw_category} must be an object")
+            source = raw_policy.get("source")
+            if not isinstance(source, dict):
+                raise ValueError(f"auth limiter policy for {raw_category} requires a source rule")
+            account = raw_policy.get("account")
+            failure_mode = raw_policy.get("storage_failure_mode", "fail_closed")
+            if failure_mode not in StorageFailureMode.__members__:
+                raise ValueError(
+                    f"unknown storage_failure_mode for {raw_category}: {failure_mode!r}"
+                )
+            endpoints[category] = EndpointPolicy(
+                source=LimitProfile.model_validate(source),
+                account=LimitProfile.model_validate(account) if account else None,
+                storage_failure_mode=StorageFailureMode[failure_mode],
+            )
+
+        if self.auth_limiter_enabled:
+            if not self.auth_limiter_hmac_secret:
+                raise ValueError("auth_limiter_hmac_secret is required when auth_limiter_enabled")
+            if not self.auth_limiter_assertion_secret:
+                raise ValueError(
+                    "auth_limiter_assertion_secret is required when auth_limiter_enabled"
+                )
+            # Account-aware categories must reject unsafe source-only profiles
+            # when enforcement is enabled. Registration and authjs_post may
+            # legitimately stay source-only. A fully absent category is handled
+            # by the policy's coverage validation below.
+            account_sensitive = {
+                EndpointCategory.credential_verification,
+                EndpointCategory.recovery_initiation,
+                EndpointCategory.recovery_confirmation,
+            }
+            missing_account = [
+                category.value
+                for category in account_sensitive
+                if category in endpoints and endpoints[category].account is None
+            ]
+            if missing_account:
+                raise ValueError(
+                    "account profile required when auth_limiter_enabled for: "
+                    + ", ".join(sorted(missing_account))
+                )
+            return LimiterPolicy(
+                endpoints=endpoints,
+                max_retry_after_seconds=self.auth_limiter_max_retry_after_seconds,
+                retention_seconds=self.auth_limiter_retention_seconds,
+                hmac_key_version=self.auth_limiter_hmac_key_version,
+            )
+        return LimiterPolicy(
+            endpoints={
+                category: EndpointPolicy(
+                    source=LimitProfile(limit=1, window_seconds=3600),
+                    account=LimitProfile(limit=1, window_seconds=3600)
+                    if category in (EndpointCategory.credential_verification, EndpointCategory.recovery_initiation, EndpointCategory.recovery_confirmation)
+                    else None,
+                )
+                for category in EndpointCategory
+            },
+            max_retry_after_seconds=self.auth_limiter_max_retry_after_seconds,
+            retention_seconds=self.auth_limiter_retention_seconds,
+            hmac_key_version=self.auth_limiter_hmac_key_version,
+        )
+
     trusted_source_domains: list[str] = [
         "rhs.org.uk",
         "gardeningsolutions.ifas.ufl.edu",

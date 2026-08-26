@@ -70,7 +70,7 @@
   position: sticky;
   top: 0;
   align-self: stretch;
-  max-height: 100vh;
+  max-height: 100%;
   overflow-y: auto;
 }
 
@@ -160,12 +160,13 @@
   min-width: 0;
   min-height: 0;
   background: $color-background;
-  overflow-y: auto;
 }
 
 .thread {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: $space-lg $space-lg $space-xl;
   display: flex;
   flex-direction: column;
@@ -286,6 +287,13 @@
   line-height: $line-height-relaxed;
 }
 
+.suggestionEvidence {
+  margin: 0;
+  color: $color-on-surface-variant;
+  font-size: 0.78rem;
+  line-height: $line-height-relaxed;
+}
+
 .suggestionError {
   margin: $space-xs 0 0;
   color: $color-on-error-container;
@@ -315,12 +323,10 @@
 }
 
 .composerDock {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 5;
   flex-shrink: 0;
-  background: rgba(249, 249, 247, 0.92);
-  backdrop-filter: saturate(140%) blur(8px);
+  background: rgba(249, 249, 247, 0.96);
   border-top: 1px solid $color-outline-variant;
   padding: $space-sm $space-lg;
 }
@@ -439,10 +445,13 @@
 .sources {
   display: grid;
   gap: 0.5rem;
+  align-content: start;
   padding: $space-sm;
   background: $color-surface-container-lowest;
   border: 1px solid $color-outline-variant;
   border-radius: $radius-lg;
+  max-height: 16rem;
+  overflow-y: auto;
 }
 
 .sourcesList {
@@ -510,10 +519,6 @@
 }
 
 @media (max-width: 719px) {
-  .chatArea {
-    min-height: 0;
-  }
-
   .messageRow {
     max-width: 100%;
   }
@@ -524,10 +529,6 @@
   }
 
   .composerDock {
-    position: static;
-    background: $color-surface;
-    backdrop-filter: none;
-    border-top: 1px solid $color-outline-variant;
-    padding: $space-sm 0 calc(#{$space-md} + env(safe-area-inset-bottom, 0));
+    padding: $space-sm $space-md calc(#{$space-md} + 3.6rem + env(safe-area-inset-bottom, 0));
   }
 }

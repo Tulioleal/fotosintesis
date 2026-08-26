@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -71,6 +71,7 @@ async def test_failed_tool_action_is_not_claimed_complete() -> None:
             "needs_retrieval": False,
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": False,
         },
     )
@@ -132,7 +133,7 @@ async def test_reminder_date_only_requires_explicit_time() -> None:
     assert "To create the reminder I need" in result["answer"]
     assert tools.created_reminders == 0
 
-async def test_reminder_missing_recurrence_defaults_to_none() -> None:
+async def test_reminder_missing_recurrence_asks_before_creating() -> None:
     tools = FakeTools(
         classifier_data={
             "language": "en",
@@ -144,6 +145,7 @@ async def test_reminder_missing_recurrence_defaults_to_none() -> None:
             "confidence": 0.92,
             "needs_retrieval": False,
             "reminder_action": "water",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": False,
         }
     )
@@ -154,8 +156,36 @@ async def test_reminder_missing_recurrence_defaults_to_none() -> None:
     )
 
     assert result.get("answer")
-    assert tools.created_reminders == 1
-    assert tools.reminder_kwargs["recurrence"] == "none"
+    assert "To create the reminder I need" in result["answer"] or "recurrence" in result["answer"].lower()
+    assert tools.created_reminders == 0
+
+
+async def test_free_text_date_without_schema_field_does_not_create() -> None:
+    tools = FakeTools(
+        classifier_data={
+            "language": "en",
+            "answer_language": "en",
+            "intent": "reminder_request",
+            "topic": "watering",
+            "required_aspects": [],
+            "plant_reference": "Pata",
+            "confidence": 0.92,
+            "needs_retrieval": False,
+            "reminder_action": "water",
+            "reminder_recurrence": "weekly",
+            "reminder_suggestion_requested": False,
+        }
+    )
+    result = await AssistantGraph(tools).run(
+        user_id=uuid4(),
+        message="Create a reminder for Pata on 2026-06-01 10:30 to water weekly",
+        plant_hint=None,
+    )
+
+    # Free-text extraction is demoted to a hint; creation requires the
+    # schema-declared classifier value.
+    assert tools.created_reminders == 0
+    assert result.get("requires_confirmation") is True
 
 async def test_complete_reminder_creates_with_due_at_and_recurrence() -> None:
     tools = FakeTools(
@@ -170,6 +200,7 @@ async def test_complete_reminder_creates_with_due_at_and_recurrence() -> None:
             "needs_retrieval": False,
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": False,
         }
     )
@@ -200,6 +231,7 @@ async def test_complete_reminder_suggestion_returns_confirmation_payload() -> No
             "needs_retrieval": False,
             "reminder_action": "water",
             "reminder_recurrence": "weekly",
+            "reminder_due_at": "2026-06-01T10:30",
             "reminder_suggestion_requested": True,
         }
     )

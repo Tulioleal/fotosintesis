@@ -63,7 +63,9 @@ end-to-end evidence:
 
 ## Dev end-to-end evidence
 
-1. Trigger `iac.yml` on `main` (or dispatch manually with
+1. Before enabling immutable tags, inventory deployed and last-healthy tags in
+   each repository and remove only clearly unused mutable temporary tags. Then
+   trigger `iac.yml` on `main` (or dispatch manually with
    `environment: dev`, `tofu_command: apply`) to ensure the dev env
    root is up to date. The apply authenticates as
    `DEV_IAC_SERVICE_ACCOUNT_EMAIL`. The post-apply sync job then
@@ -79,12 +81,20 @@ end-to-end evidence:
      SHAs).
    - Migration `pass`.
    - Rollout `pass`.
+   - Worker readiness `pass`.
    - Required provider API keys `pass`.
    - Backend in-cluster smoke `pass`.
+   - Network policy verification `pass` (allowed probe succeeds and
+     denied probe fails under the default-deny baseline).
    - Frontend public smoke `pass` (or document the DNS gap when
      `ip-http` is in use).
 4. Save the workflow run URLs and the per-step `pass`/`fail` results
    in `validation-evidence.md` under "Dev end-to-end."
+5. Record `gcloud artifacts repositories describe` output proving
+   `dockerConfig.immutableTags=True`, plus the server-side admission result for
+   backend, frontend, migration, and worker manifests. Record worker rollout,
+   worker `/ready` probe, and `JOBS_PRODUCER_ENABLED=true` in the evidence
+   template.
 
 The dev evidence satisfies task 7.7 only when every gate reports
 `pass` and the run URLs are recorded.
@@ -121,9 +131,15 @@ The prod operator must confirm:
    - Verify source images: `success`.
    - Promote images: `success`.
    - Deploy: `success` with `migration=pass`, `rollout=pass`,
-     `required_keys=pass`, `backend_smoke=pass`, `frontend_smoke=pass`.
+     `required_keys=pass`, `worker_readiness=pass`, `backend_smoke=pass`,
+     `frontend_smoke=pass`.
 4. Save the run URLs and per-gate results in `validation-evidence.md`
    under "Prod release."
+
+Network policy verification runs in the dev deploy (the connectivity probe
+step). Prod enforces the same rendered policies; the dev allowed/denied probe
+evidence plus the offline rendered-manifest validation satisfy the network
+policy enforcement requirement before promotion.
 
 The prod evidence satisfies task 7.8 only when every gate reports
 `pass` and the live run URLs are recorded.

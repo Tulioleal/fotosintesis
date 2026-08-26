@@ -5,6 +5,13 @@ import { RegisterForm } from "./RegisterForm";
 const mocks = vi.hoisted(() => ({
   register: vi.fn(),
   push: vi.fn(),
+  ApiClientError: class extends Error {
+    status: number;
+    constructor(status: number, message = "boom") {
+      super(message);
+      this.status = status;
+    }
+  },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -12,6 +19,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/api/client", () => ({
+  ApiClientError: mocks.ApiClientError,
   apiClient: {
     register: mocks.register,
   },
@@ -103,6 +111,30 @@ describe("RegisterForm", () => {
         "No pudimos crear la cuenta. Revisá los datos o intentá con otro correo.",
       ),
     ).toBeInTheDocument();
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  it("shows generic retry timing and prevents resubmission when registration is rate limited", async () => {
+    mocks.register.mockRejectedValueOnce(new mocks.ApiClientError(429));
+    render(<RegisterForm />);
+
+    fireEvent.change(screen.getByLabelText("Nombre"), {
+      target: { value: "Tuli" },
+    });
+    fireEvent.change(screen.getByLabelText("Correo"), {
+      target: { value: "tuli@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Contraseña"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Crear cuenta" }));
+
+    expect(
+      await screen.findByText(
+        "Intentá de nuevo en unos minutos. Demasiados intentos desde esta conexión.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Crear cuenta" })).toBeDisabled();
     expect(mocks.push).not.toHaveBeenCalled();
   });
 });

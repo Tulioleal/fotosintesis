@@ -1,9 +1,7 @@
 ## Purpose
 
 Define the shared Fotosintesis frontend visual foundation for tokens, brand naming, reference adaptation, fonts, icons, UI primitives, and responsive visual rules.
-
 ## Requirements
-
 ### Requirement: Fotosintesis design tokens
 The frontend SHALL expose the Fotosintesis visual foundation as shared tokens for colors, typography, spacing, radii, surfaces, outlines, and elevation.
 
@@ -267,38 +265,18 @@ The `/identify` journey SHALL apply the archived Fotosíntesis visual foundation
 
 ### Requirement: Assistant experience applies Fotosíntesis foundation
 
-The `/assistant` experience SHALL apply the archived Fotosíntesis visual foundation to the assistant layout, plant context sidebar, message stream, composer, supporting cards, and state treatments.
+The `/assistant` experience SHALL apply the archived Fotosíntesis visual foundation to the assistant layout, plant context sidebar, message stream, composer, supporting cards, and state treatments. When a server-authored stage stream is active, the pending treatment SHALL present live stage labels and progress within the same Fotosíntesis state language, replacing the static pending copy without introducing a competing visual system.
 
-#### Scenario: Desktop assistant follows reference structure
+#### Scenario: Pending state renders live stages
 
-- **WHEN** an authenticated user opens `/assistant` on the desktop viewport class used for visual verification
-- **AND** plant context is available
-- **THEN** the assistant screen visually follows `frontend/REFERENCES/asistente_ai/screen.png` and `frontend/REFERENCES/asistente_ai/code.html` for task-focused header treatment, contextual plant sidebar, main chat area, anchored composer, rounded message bubbles, botanical tonal surfaces, typography, color, spacing, and hierarchy
-- **AND** the screen uses the shared Fotosíntesis colors, typography, spacing, radii, surfaces, outlines, and elevation tokens
+- WHEN a chat turn streams server-authored stage events
+- THEN the pending region shows the current stage label and bounded progress treatment using Fotosíntesis tokens and typography
+- AND the rotating client-side stopgap copy is not displayed while the stream is active
 
-#### Scenario: Plant context sidebar adapts live context
+#### Scenario: Fallback retains the established pending treatment
 
-- **WHEN** the assistant is opened with plant context query parameters
-- **THEN** the contextual sidebar presents the plant display name or nickname and available scientific/binomial context in the reference sidebar structure
-- **AND** unavailable image, location, or notes data uses neutral placeholder treatment without inventing botanical or user-specific facts
-
-#### Scenario: Assistant without plant context remains usable
-
-- **WHEN** the assistant is opened without plant context query parameters
-- **THEN** the chat remains usable without an empty or misleading plant context sidebar
-- **AND** the layout keeps the same Fotosíntesis visual language for the header, chat stream, empty state, and composer
-
-#### Scenario: Mobile assistant avoids shell navigation conflict
-
-- **WHEN** an authenticated user opens `/assistant` on a mobile viewport within the private shell
-- **THEN** the assistant layout remains readable and operable with no horizontal overflow
-- **AND** the composer remains visible or reachable without conflicting with the private shell bottom navigation
-
-#### Scenario: Reference copy is adapted
-
-- **WHEN** implementation adapts copy from the assistant reference that contains `PlantCare` or unsupported placeholder behavior
-- **THEN** visible user-facing copy uses `Fotosíntesis` and accurate current product messaging
-- **AND** route behavior and accessible names are preserved unless explicitly updated by this spec
+- WHEN streaming is unavailable, disabled, or fails mid-turn
+- THEN the pending region falls back to the existing Fotosíntesis pending copy and treatment without layout drift
 
 ### Requirement: Assistant visual verification state
 
@@ -388,3 +366,4 @@ The care-tool redesign SHALL define and use visual verification states for remin
 
 - **WHEN** implementation intentionally deviates from `frontend/REFERENCES/recordatorios/screen.png` or from the derived light-meter care-tool pattern
 - **THEN** the deviation and reason are documented in the implementation verification notes or design follow-up before the change is considered complete
+

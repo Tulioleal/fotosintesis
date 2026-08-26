@@ -1,17 +1,22 @@
 ## Purpose
 
 TBD - Defines the assistant-agent capability for plant-care chat, orchestration, tools, grounded answers, and safe failure handling.
-
 ## Requirements
-
 ### Requirement: Chat experience
 
-The system SHALL provide a chat API and frontend conversation UI for a plant-care assistant.
+The system SHALL provide a chat API and frontend conversation UI for a plant-care assistant. The blocking JSON chat contract SHALL remain canonical; the system MAY additionally expose a server-sent-events variant of the same conversation flow that streams bounded stage-progress events and terminates with the identical response payload, subject to the streaming capability contract.
 
-#### Scenario: User sends botanical question
+#### Scenario: Blocking contract is unaffected by streaming
 
-- **WHEN** a user sends a supported plant-care question
-- **THEN** the system creates or continues a conversation and returns an assistant response
+- WHEN a client uses the blocking chat endpoint
+- THEN request validation, persistence, retryable-failure semantics, and the response schema are identical to the pre-streaming contract
+- AND stage emission adds no observable difference to the blocking response
+
+#### Scenario: Both transports share one execution path
+
+- WHEN a chat turn executes via either transport
+- THEN the same assistant service and graph orchestration produce the outcome
+- AND streaming differs only in transport framing, not in routing, validation, or persistence behavior
 
 ### Requirement: Separated plant taxonomy context
 
@@ -74,70 +79,18 @@ The backend SHALL use LangGraph nodes for intent classification, user context lo
 
 ### Requirement: Multilingual care intent classification
 
-The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, and `needs_retrieval`. The classifier SHALL use the configured cheaper/faster model from the same provider family as the main answer model. Classifier output MUST pass schema validation before it can drive routing or retrieval. Classifier confidence SHALL be retained as observability metadata and SHALL NOT be the sole reason to reject an otherwise valid classifier output. Deterministic Spanish-keyword-based semantic intent detection SHALL NOT be used; the multilingual LLM classifier and explicit request fields (`plant`, `plant_binomial_name`, `plant_scientific_name`, reminder action fields, light measurement fields) are the sole semantic-intent path. Non-semantic safety boundaries (such as the prompt-injection `INJECTION_PATTERNS` check) MAY remain deterministic.
+The assistant plant-care answer pipeline SHALL classify user input before retrieval using a closed multilingual classifier contract that includes `language`, `answer_language`, `intent`, `topic`, `required_aspects`, `plant_reference`, `confidence`, `needs_retrieval` — and, for reminder intents, the schema-declared reminder scheduling fields `reminder_action`, `reminder_recurrence`, `reminder_due_at`, and `reminder_suggestion_requested`. Reminder-driven routing and creation SHALL activate only from schema-valid classifier output carrying those fields or from explicit structured request context; reading reminder fields from undeclared raw classifier output SHALL NOT occur. Classifier output MUST pass schema validation before it can drive routing, retrieval, or reminder actions. Deterministic Spanish-keyword-based semantic intent detection SHALL NOT be used; the multilingual LLM classifier and explicit request fields are the sole semantic-intent path. Non-semantic safety boundaries MAY remain deterministic.
 
-#### Scenario: Spanish watering frequency classification
+#### Scenario: Reminder fields arrive only through the declared schema
 
-- **WHEN** a user asks a Spanish plant-care question about how often to water a confirmed plant
-- **THEN** the classifier output uses `intent: "plant_care_question"`, `topic: "watering"`, includes `watering_frequency_or_trigger` in `required_aspects`, sets `answer_language` to Spanish, and marks retrieval as needed
+- WHEN the chat reminder branch evaluates classifier output for action, recurrence, due date, or suggestion-request signals
+- THEN it reads only schema-validated reminder scheduling fields from the classified result
+- AND undeclared or raw-output reminder fields are treated as absent
 
-#### Scenario: Italian watering frequency classification
+#### Scenario: Reminder intent without complete schedule fields
 
-- **WHEN** a user asks an Italian plant-care question about watering frequency for a confirmed plant
-- **THEN** the classifier output maps the question to the canonical `watering_frequency_or_trigger` required aspect and preserves Italian as the answer language
-
-#### Scenario: Multi-aspect classification
-
-- **WHEN** a user asks one plant-care question covering watering and light
-- **THEN** the classifier output includes only the applicable domain-qualified watering and light required aspects directly requested by the message
-
-#### Scenario: Symptom diagnosis classification
-
-- **WHEN** a user asks what yellow leaves, browning, leaf drop, wilting, spots, lesions, mushy tissue, or stunted growth could mean without explicitly asking about a specific care routine
-- **THEN** the classifier uses `topic: "diagnosis"`
-- **AND** required aspects use matching `diagnosis_*` values such as `diagnosis_leaf_color_change_causes`, `diagnosis_leaf_browning_causes`, or `diagnosis_triage_steps`
-- **AND** the classifier does not add `watering_*`, `nutrition_*`, `pest_*`, or `disease_*` aspects unless the user wording explicitly requests or strongly implies that domain
-
-#### Scenario: Pest classification uses pest aspects
-
-- **WHEN** a user describes pests, insects, webbing, white dots, scale, mealybugs, mites, aphids, or asks how to treat a plant pest
-- **THEN** the classifier uses `topic: "pests"`
-- **AND** required aspects use `pest_*` values such as `pest_identification`, `pest_treatment_action`, `pest_isolation_steps`, or `pest_prevention_steps`
-
-#### Scenario: Disease classification uses disease aspects
-
-- **WHEN** a user asks about plant disease, infection, fungal or bacterial symptoms, or disease prevention or treatment
-- **THEN** the classifier uses `topic: "disease"`
-- **AND** required aspects use `disease_*` values such as `disease_identification`, `disease_treatment_action`, `disease_prevention_steps`, or `disease_spread_risk`
-
-#### Scenario: Toxicity and safety classification
-
-- **WHEN** a user asks whether a plant is safe for pets, children, humans, skin contact, ingestion, chemical treatment, disposal, cross-contamination, or emergency escalation
-- **THEN** the classifier uses `topic: "toxicity_safety"`
-- **AND** required aspects use applicable `toxicity_*` or `safety_*` values such as `toxicity_pet_safety`, `toxicity_child_safety`, `toxicity_skin_irritation_risk`, or `safety_when_to_contact_vet_or_poison_control`
-
-#### Scenario: Broad care classification stays general
-
-- **WHEN** a user asks for broad beginner care, a general care summary, common mistakes, care priorities, or a monitoring routine without requesting specific care domains
-- **THEN** the classifier may use `topic: "general_care"`
-- **AND** required aspects use matching `general_*` values instead of over-selecting unrelated domain-specific aspects
-
-#### Scenario: Non-care intent routes away from care retrieval
-
-- **WHEN** the classifier returns `garden_action`, `reminder_request`, `light_measurement_question`, `plant_identification_question`, `out_of_domain`, or `unsafe_or_injection`
-- **THEN** the assistant routes according to the non-care intent and does not run the plant-care evidence retrieval pipeline
-
-#### Scenario: Low-confidence valid classifier output routes normally
-
-- **WHEN** the classifier returns schema-valid output with confidence lower than the configured classification threshold
-- **THEN** the assistant uses the classifier output for routing
-- **AND** the assistant records the low confidence as diagnostic or structured log metadata without adding a tool failure
-
-#### Scenario: Spanish-keyword deterministic routing is removed
-
-- **WHEN** the LLM classifier is unavailable or returns invalid output and a non-English user message contains common Spanish reminder, light-measurement, edibility, pet-safety, native-range, or identification keywords
-- **THEN** the assistant MUST NOT route the message to `reminder_request`, `light_measurement_question`, `plant_identification_question`, or a domain-specific care route based on those keywords
-- **AND** the assistant falls back to `plant_care_question_unknown` (with `topic: "general_care"` and `required_aspects: ["general_care_summary"]`) or asks for clarification
+- WHEN schema-valid classifier output indicates a reminder request with missing action, date, time, or recurrence values
+- THEN the assistant asks for the missing information before any creation
 
 ### Requirement: Classifier fallback handling
 
@@ -1432,3 +1385,160 @@ Assistant entry links from existing plant journeys SHALL remain valid and keep t
 
 - **WHEN** this change is implemented
 - **THEN** reminders, light-meter, garden detail, and plant profile screens are not visually redesigned beyond any minimal link or query-context preservation needed for assistant entry
+
+### Requirement: Authoritative confirmed candidate context
+
+The assistant chat API SHALL accept optional confirmed candidate context. The backend SHALL resolve candidate ownership, confirmation state, taxonomy validation, accepted GBIF key, and normalized binomial server-side. Client-supplied taxonomy strings SHALL remain non-authoritative display context.
+
+#### Scenario: Owned confirmed candidate is supplied
+
+- **WHEN** an authenticated user sends the ID of their confirmed, taxonomically validated candidate
+- **THEN** assistant graph state receives the server-resolved canonical species key, accepted GBIF key, normalized binomial, and accepted scientific display name
+
+#### Scenario: Candidate context is unauthorized or invalid
+
+- **WHEN** candidate context belongs to another user or is unconfirmed or unvalidated
+- **THEN** the backend does not use that candidate's taxonomy for retrieval
+- **AND** does not trust a client-supplied canonical replacement
+
+### Requirement: Candidate identity precedence
+
+Server-resolved confirmed candidate identity SHALL take precedence over garden plant matching. Garden context MAY supply canonical identity only when authoritative candidate identity is absent.
+
+#### Scenario: Display hint matches a different garden plant
+
+- **WHEN** candidate identity resolves species A and a display hint matches garden plant B
+- **THEN** retrieval continues using species A's canonical identity
+- **AND** species B cannot overwrite accepted GBIF key or normalized binomial
+
+### Requirement: Confirmed candidate assistant handoff
+
+Identification, profile, and garden assistant links SHALL preserve confirmed candidate ID when available, and the assistant frontend SHALL map it to the chat request contract.
+
+#### Scenario: User opens assistant from a confirmed profile
+
+- **WHEN** a confirmed candidate ID is available in the source view
+- **THEN** the assistant URL includes that ID
+- **AND** the chat request includes `confirmed_candidate_id`
+
+#### Scenario: Legacy plant-only assistant entry
+
+- **WHEN** no confirmed candidate ID is available
+- **THEN** existing plant, binomial, and scientific-name context remains supported
+
+### Requirement: Semantic light context relevance
+
+The multilingual classifier contract SHALL include a bounded, schema-validated light-context relevance signal indicating whether a plant-care request can materially benefit from a recent light measurement. Relevance SHALL be decided semantically by the classifier for applicable care topics such as watering, location, growth, stress, diagnosis, and recovery. Semantic relevance MUST NOT be implemented with hardcoded language keywords, translated word lists, regexes, or substring rules. Classifier failure SHALL follow the existing conservative fallback and clarification rules, and a non-relevant request SHALL NOT trigger a light-measurement lookup.
+
+#### Scenario: Relevant care request signals light relevance
+
+- **WHEN** a user asks a plant-care question whose answer can materially benefit from a recent light measurement for the selected plant
+- **THEN** the schema-validated classifier output signals that light context is relevant
+- **AND** the assistant proceeds to evaluate plant-specific light context
+
+#### Scenario: Irrelevant request does not signal light relevance
+
+- **WHEN** a user asks a plant-care question where light cannot affect the answer
+- **THEN** the classifier output does not signal light relevance
+- **AND** the assistant does not perform a light-measurement lookup
+
+#### Scenario: Classifier failure does not speculate
+
+- **WHEN** the classifier fails, times out, or returns invalid output after the existing repair and fallback rules
+- **THEN** the assistant does not perform a speculative light-measurement lookup
+- **AND** follows the existing conservative clarification or fallback behavior
+
+### Requirement: Owner- and plant-scoped light context retrieval
+
+When light context is relevant, the assistant SHALL query only light measurements associated with the authenticated user and the selected garden plant. Only an eligible measurement — one whose source and units are interpretable by the configured policy, whose reliability meets the configured minimum, and whose age is within the configured per-source freshness threshold — SHALL be treated as current and retained in assistant state.
+
+#### Scenario: Eligible measurement is retained
+
+- **WHEN** a relevant request finds an eligible measurement for the selected plant
+- **THEN** the assistant retains that measurement in assistant state for answer context
+- **AND** does not discard a successful non-empty lookup result
+
+#### Scenario: Foreign-plant measurement is excluded
+
+- **WHEN** a found measurement is associated with a different garden plant than the selected plant
+- **THEN** the assistant does not include it in the recommendation context
+
+#### Scenario: Stale or unreliable measurement is excluded
+
+- **WHEN** a found measurement exceeds its source freshness threshold or falls below the reliability minimum
+- **THEN** the assistant does not treat it as a current observation
+
+### Requirement: Light-grounded synthesis and disclosure
+
+An eligible light measurement SHALL enter answer synthesis as a contextual observation, not as universal or species-level evidence. The answer SHALL disclose the measurement date, source, reliability, and approximate status when a camera-derived value is used, and SHALL avoid categorical conclusions from one isolated reading. Species-level recommendations SHALL remain distinguishable from user measurements.
+
+#### Scenario: Observation disclosed with provenance
+
+- **WHEN** an eligible measurement influences a recommendation
+- **THEN** the answer states when and how the reading was collected and its reliability
+- **AND** explains how the reading influenced the recommendation without replacing species-level evidence
+
+#### Scenario: Camera reading retains approximate designation
+
+- **WHEN** a camera-derived measurement is used
+- **THEN** the answer presents it as approximate rather than precise
+
+### Requirement: Bounded light context behavior
+
+Non-relevant requests SHALL NOT invoke the light-measurement lookup. When relevant light context is absent, stale, or unreliable and would materially limit guidance, the answer SHALL explain the limitation and recommend obtaining a new reading. When light does not affect the answer, the answer SHALL NOT mention measurement absence.
+
+#### Scenario: Unrelated request skips lookup
+
+- **WHEN** a request cannot be affected by light measurements
+- **THEN** the assistant performs no light-measurement lookup
+
+#### Scenario: Missing relevant context suggests remeasurement
+
+- **WHEN** a relevant request has no eligible measurement and the absence materially limits the guidance
+- **THEN** the answer explains the limitation and recommends obtaining a new reading
+
+#### Scenario: Irrelevant absence is not disclosed
+
+- **WHEN** light context is not relevant to the request
+- **THEN** the answer does not mention that no measurement was found
+
+### Requirement: Structured reminder suggestion generation
+
+The assistant SHALL generate reminder suggestions as schema-validated structured output grounded in contextual evidence: confirmed taxonomy, profile evidence, garden location, notes, active reminders, and timezone. It SHALL load a valid light measurement only when semantic classification requires it, and SHALL NOT derive action intent from semantic regular expressions or fixed calendar defaults.
+
+#### Scenario: Suggestion grounded in evidence
+
+- **WHEN** the assistant generates a reminder suggestion
+- **THEN** it produces schema-validated structured output using confirmed taxonomy, profile evidence, garden location, notes, active reminders, and timezone
+
+#### Scenario: Light loaded only when relevant
+
+- **WHEN** semantic classification does not require light context
+- **THEN** the assistant does not load a light measurement for the suggestion
+
+#### Scenario: No regex or fixed defaults
+
+- **WHEN** the assistant generates a suggestion
+- **THEN** action intent and schedule come from schema-validated model output, not from semantic regular expressions or fixed next-day defaults
+
+### Requirement: Bounded evaluation traces
+
+The assistant SHALL expose bounded, redacted traces of tool outcomes and retrieved evidence identifiers needed by evaluation harnesses. These traces MUST exclude prompts, source bodies, raw model reasoning, user notes, and credentials.
+
+#### Scenario: Tool outcome trace is bounded
+
+- **WHEN** the assistant executes a tool during a chat turn
+- **THEN** the graph state includes a bounded tool record with the tool name, success state, and a bounded error category
+- **AND** the record excludes tool arguments, retrieved document bodies, and provider internals
+
+#### Scenario: Retrieval evidence identifiers are exposed
+
+- **WHEN** the assistant retrieves evidence during a chat turn
+- **THEN** the graph state exposes the retrieved evidence identifiers and bounded source metadata
+- **AND** the state does not expose full evidence text, prompts, or user notes
+
+#### Scenario: Traces are available to the evaluation harness
+
+- **WHEN** the evaluation harness runs the assistant graph
+- **THEN** it can read the bounded tool and retrieval traces from the returned graph state without additional provider or database calls
+

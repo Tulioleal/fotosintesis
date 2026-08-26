@@ -6,13 +6,19 @@ on:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
-      - "deploy/k8s/base/**"
+      - ".github/workflows/deploy.yml"
+      - "deploy/k8s/**"
+      - "deploy/scripts/**"
+      - "docker-compose.yml"
       - "infra/opentofu/**"
   pull_request:
     paths:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
-      - "deploy/k8s/base/**"
+      - ".github/workflows/deploy.yml"
+      - "deploy/k8s/**"
+      - "deploy/scripts/**"
+      - "docker-compose.yml"
   workflow_call:
     inputs:
       environment:
@@ -65,11 +71,100 @@ jobs:
           EMBEDDING_PROVIDER: mock
           OBJECT_STORAGE_PROVIDER: local
           OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
-        run: pytest
+        run: pytest --ignore=tests/integration
+
+  evaluation:
+    name: Assistant quality gate (recorded)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # Advisory rollout: flip continue-on-error to false once the gate's
+    # thresholds are calibrated against a stable baseline.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
+      - name: Run recorded evaluation gate
+        run: python scripts/run_evaluation.py --mode recorded --providers mock --recording app/evaluation/data/recordings/ci-recording.json --output app/evaluation/data/runs
+
+  policy:
+    name: Manifest security policy (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Render manifests for both environments
+        run: |
+          mkdir -p /tmp/rendered-dev /tmp/rendered-prod
+          sh deploy/k8s/render.sh deploy/k8s/dev/values.env.example /tmp/rendered-dev
+          sh deploy/k8s/render.sh deploy/k8s/prod/values.env.example /tmp/rendered-prod
+      - name: Run Checkov on rendered manifests
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: /tmp/rendered-dev
+          framework: kubernetes
+          check: CKV_K8S_20,CKV_K8S_21,CKV_K8S_22,CKV_K8S_23,CKV_K8S_27,CKV_K8S_35
+          download_external_modules: false
+      - name: Run Checkov on prod rendered manifests
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: /tmp/rendered-prod
+          framework: kubernetes
+          check: CKV_K8S_20,CKV_K8S_21,CKV_K8S_22,CKV_K8S_23,CKV_K8S_27,CKV_K8S_35
+          download_external_modules: false
+
+  pg-test:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: fotosintesis
+          POSTGRES_USER: fotosintesis
+          POSTGRES_PASSWORD: fotosintesis
+        options: >-
+          --health-cmd "pg_isready -U fotosintesis -d fotosintesis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
+      - name: Run PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis
+          MODEL_PROVIDER: mock
+          VISION_PROVIDER: mock
+          JUDGE_PROVIDER: mock
+          SEARCH_PROVIDER: mock
+          EMBEDDING_PROVIDER: mock
+          OBJECT_STORAGE_PROVIDER: local
+          OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
+        run: pytest tests/integration -v
 
   build:
     name: Build and push backend image
-    needs: validate
+    needs: [validate, pg-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: dev
@@ -107,6 +202,14 @@ jobs:
           tags: ${{ env.ARTIFACT_REGISTRY_URL }}/backend:${{ steps.meta.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify non-root image runtime identity
+        run: |
+          sh backend/scripts/check-image-runtime.sh "${{ env.ARTIFACT_REGISTRY_URL }}/backend:${{ steps.meta.outputs.image_tag }}"
+      - name: Bounded production-command smoke tests
+        env:
+          SMOKE_TIMEOUT: "20"
+        run: |
+          sh backend/scripts/smoke-image-commands.sh "${{ env.ARTIFACT_REGISTRY_URL }}/backend:${{ steps.meta.outputs.image_tag }}"
 
   deploy-dev:
     name: Deploy backend to dev

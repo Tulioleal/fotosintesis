@@ -1,10 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { PlantIcon, PlusIcon } from "@phosphor-icons/react";
+import { BellIcon, PlantIcon, PlusIcon } from "@phosphor-icons/react";
 import { apiClient, type GardenPlant } from "@/lib/api/client";
 import { resolveImageUrl } from "@/lib/images";
+import { formatDueDate } from "@/lib/timezones";
 import { AppLink, Card, ImageCard, Notice, PageHeader } from "@/components/ui";
+import { EnrichmentActivitySummary } from "../enrichment/EnrichmentActivitySummary";
 import iconStyles from "@/components/ui/Icons.module.scss";
 import styles from "./GardenList.module.scss";
 import Image from "next/image";
@@ -19,11 +21,22 @@ function displayPlantName(plant: GardenPlant): string {
   );
 }
 
-function formatCareStatus(plant: GardenPlant): string {
-  if (plant.active_reminders && plant.active_reminders > 0) {
-    return `${plant.active_reminders} recordatorio${plant.active_reminders === 1 ? "" : "s"} activo${plant.active_reminders === 1 ? "" : "s"}`;
+function formatCareStatus(plant: GardenPlant): React.ReactNode {
+  if (plant.next_reminder) {
+    const { action, due_at, timezone } = plant.next_reminder;
+    return (
+      <>
+        <BellIcon
+          aria-hidden="true"
+          size="0.9rem"
+          weight="regular"
+          className={iconStyles.tonePrimary}
+        />
+        {`${action} · ${formatDueDate(due_at, timezone)}`}
+      </>
+    );
   }
-  return "Último riego: Sin registros";
+  return "Sin cuidados pendientes";
 }
 
 export function GardenList() {
@@ -57,6 +70,8 @@ export function GardenList() {
         }
       />
 
+      <EnrichmentActivitySummary />
+
       {garden.isError ? (
         <Notice tone="error" role="alert">
           {garden.error.message || "No pudimos cargar Mi Jardín."}
@@ -85,7 +100,6 @@ export function GardenList() {
           const imageSrc = resolveImageUrl(plant.image_path);
           const name = displayPlantName(plant);
           const location = plant.location ?? "Sin ubicación";
-          const care = "Luz indirecta";
 
           return (
             <AppLink
@@ -110,7 +124,7 @@ export function GardenList() {
                   />
                 }
                 title={name}
-                description={`${location} • ${care}`}
+                description={location}
                 meta={
                   <span className={styles.cardFooter}>
                     {formatCareStatus(plant)}

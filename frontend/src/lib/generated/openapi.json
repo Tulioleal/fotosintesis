@@ -114,6 +114,18 @@
       },
       "AssistantChatRequest": {
         "properties": {
+          "confirmed_candidate_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Candidate Id"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -274,15 +286,56 @@
             "title": "Action",
             "type": "string"
           },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
           "due_at": {
             "format": "date-time",
             "title": "Due At",
             "type": "string"
           },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
           "garden_plant_id": {
             "format": "uuid",
             "title": "Garden Plant Id",
             "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
           },
           "plant_name": {
             "title": "Plant Name",
@@ -294,6 +347,28 @@
           "suggestion_justification": {
             "title": "Suggestion Justification",
             "type": "string"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "required": [
@@ -383,6 +458,21 @@
             ],
             "title": "Domain"
           },
+          "source_provenance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "trusted",
+                  "external_fallback"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provenance"
+          },
           "title": {
             "anyOf": [
               {
@@ -420,10 +510,37 @@
         "title": "Body_create_identification_identifications_post",
         "type": "object"
       },
+      "CandidateEnrichmentStatus": {
+        "properties": {
+          "candidate_id": {
+            "format": "uuid",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobStatusResponse"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "policy_version",
+          "job"
+        ],
+        "title": "CandidateEnrichmentStatus",
+        "type": "object"
+      },
       "ConfirmationResponse": {
         "properties": {
           "candidate": {
             "$ref": "#/components/schemas/TaxonomyCandidate"
+          },
+          "enrichment": {
+            "$ref": "#/components/schemas/CandidateEnrichmentStatus"
           },
           "status": {
             "title": "Status",
@@ -432,7 +549,8 @@
         },
         "required": [
           "status",
-          "candidate"
+          "candidate",
+          "enrichment"
         ],
         "title": "ConfirmationResponse",
         "type": "object"
@@ -479,6 +597,288 @@
         ],
         "title": "CredentialsVerifyResponse",
         "type": "object"
+      },
+      "EnrichmentActivityItem": {
+        "properties": {
+          "candidate_id": {
+            "format": "uuid",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_type": {
+            "$ref": "#/components/schemas/JobType"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/EnrichmentActivityPhase"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrichmentActivityResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scientific_name": {
+            "minLength": 1,
+            "title": "Scientific Name",
+            "type": "string"
+          },
+          "species_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Species Key"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_type",
+          "phase",
+          "status",
+          "created_at",
+          "updated_at",
+          "scientific_name",
+          "candidate_id"
+        ],
+        "title": "EnrichmentActivityItem",
+        "type": "object"
+      },
+      "EnrichmentActivityPhase": {
+        "enum": [
+          "evidence",
+          "profile_refresh"
+        ],
+        "title": "EnrichmentActivityPhase",
+        "type": "string"
+      },
+      "EnrichmentActivityResponse": {
+        "properties": {
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentActivityItem"
+            },
+            "maxItems": 100,
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "title": "EnrichmentActivityResponse",
+        "type": "object"
+      },
+      "EnrichmentActivityResult": {
+        "additionalProperties": false,
+        "description": "Bounded, metadata-only outcome for the cross-page activity view.\n\nCounts and limitation categories only: never raw aspects, source bodies,\nclaims, quotes, or provider diagnostics.",
+        "properties": {
+          "covered_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Covered Count",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "missing_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Missing Count",
+            "type": "integer"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "noop"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "regenerated_section_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Regenerated Section Count",
+            "type": "integer"
+          },
+          "stale_section_count": {
+            "default": 0,
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Stale Section Count",
+            "type": "integer"
+          }
+        },
+        "title": "EnrichmentActivityResult",
+        "type": "object"
+      },
+      "EnrichmentJobResult": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisition_avoided": {
+            "default": false,
+            "title": "Acquisition Avoided",
+            "type": "boolean"
+          },
+          "covered_aspects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Covered Aspects",
+            "type": "array"
+          },
+          "covered_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Covered Count",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "missing_aspects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Missing Aspects",
+            "type": "array"
+          },
+          "missing_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Missing Count",
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "complete",
+              "partial"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "outcome",
+          "policy_version",
+          "covered_aspects",
+          "missing_aspects",
+          "covered_count",
+          "missing_count"
+        ],
+        "title": "EnrichmentJobResult",
+        "type": "object"
+      },
+      "EnrichmentLimitation": {
+        "enum": [
+          "missing_required_aspects",
+          "safety_evidence_rejected",
+          "retry_exhausted",
+          "workflow_incomplete",
+          "indexing_deferred"
+        ],
+        "title": "EnrichmentLimitation",
+        "type": "string"
       },
       "GardenDeleteResponse": {
         "properties": {
@@ -675,6 +1075,16 @@
             ],
             "title": "Image Path"
           },
+          "light_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LightSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "location": {
             "anyOf": [
               {
@@ -685,6 +1095,16 @@
               }
             ],
             "title": "Location"
+          },
+          "next_reminder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReminderSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "nickname": {
             "anyOf": [
@@ -718,6 +1138,131 @@
           "created_at"
         ],
         "title": "GardenPlantResponse",
+        "type": "object"
+      },
+      "GbifCandidate": {
+        "properties": {
+          "accepted_key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Key"
+          },
+          "accepted_scientific_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Scientific Name"
+          },
+          "binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binomial Name"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "genus": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genus"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "species": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Species"
+          },
+          "synonyms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Synonyms",
+            "type": "array"
+          },
+          "taxonomic_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomic Status"
+          }
+        },
+        "title": "GbifCandidate",
+        "type": "object"
+      },
+      "GbifSearchResponse": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/GbifCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          }
+        },
+        "title": "GbifSearchResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -854,6 +1399,137 @@
         "title": "IdentificationStatus",
         "type": "string"
       },
+      "JobFailureCategory": {
+        "enum": [
+          "invalid_payload",
+          "unsupported_payload_version",
+          "unknown_job_type",
+          "database_transient",
+          "provider_transient",
+          "indexing_transient",
+          "invariant_violation",
+          "attempts_exhausted",
+          "unexpected_error",
+          "lease_expired",
+          "lease_lost",
+          "insufficient_evidence"
+        ],
+        "title": "JobFailureCategory",
+        "type": "string"
+      },
+      "JobLimitation": {
+        "enum": [
+          "some_claims_failed",
+          "indexing_deferred"
+        ],
+        "title": "JobLimitation",
+        "type": "string"
+      },
+      "JobStatus": {
+        "enum": [
+          "pending",
+          "processing",
+          "complete",
+          "partial",
+          "failed"
+        ],
+        "title": "JobStatus",
+        "type": "string"
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "attempt_count": {
+            "minimum": 0.0,
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "job_type": {
+            "$ref": "#/components/schemas/JobType"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "minimum": 1.0,
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReadJobResult"
+              },
+              {
+                "$ref": "#/components/schemas/EnrichmentJobResult"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileRefreshJobResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job_type",
+          "status",
+          "attempt_count",
+          "max_attempts",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "JobStatusResponse",
+        "type": "object"
+      },
+      "JobType": {
+        "enum": [
+          "ingest_validated_claims",
+          "enrich_confirmed_plant",
+          "refresh_profile"
+        ],
+        "title": "JobType",
+        "type": "string"
+      },
       "LightClassification": {
         "enum": [
           "baja",
@@ -980,6 +1656,124 @@
         "title": "LightMeasurementDto",
         "type": "object"
       },
+      "LightSummary": {
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/LightClassification"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "lux": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lux"
+          },
+          "measured_at": {
+            "format": "date-time",
+            "title": "Measured At",
+            "type": "string"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/MeasurementReliability"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MeasurementSource"
+          }
+        },
+        "required": [
+          "id",
+          "classification",
+          "reliability",
+          "source",
+          "measured_at"
+        ],
+        "title": "LightSummary",
+        "type": "object"
+      },
+      "LocalPlantSearchResult": {
+        "properties": {
+          "binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binomial Name"
+          },
+          "common_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Common Name"
+          },
+          "has_evidence": {
+            "title": "Has Evidence",
+            "type": "boolean"
+          },
+          "matched_field": {
+            "title": "Matched Field",
+            "type": "string"
+          },
+          "matched_value": {
+            "title": "Matched Value",
+            "type": "string"
+          },
+          "profile_id": {
+            "format": "uuid",
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "scientific_name": {
+            "title": "Scientific Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "scientific_name",
+          "matched_field",
+          "matched_value",
+          "has_evidence"
+        ],
+        "title": "LocalPlantSearchResult",
+        "type": "object"
+      },
+      "ManualCandidateCreate": {
+        "properties": {
+          "gbif": {
+            "$ref": "#/components/schemas/GbifCandidate"
+          },
+          "query": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "gbif"
+        ],
+        "title": "ManualCandidateCreate",
+        "type": "object"
+      },
       "MeasurementReliability": {
         "enum": [
           "high",
@@ -1000,12 +1794,45 @@
       },
       "PlantProfileResponse": {
         "properties": {
+          "accepted_gbif_key": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Gbif Key"
+          },
           "aliases": {
             "items": {
               "$ref": "#/components/schemas/ProfileAlias"
             },
             "title": "Aliases",
             "type": "array"
+          },
+          "binomial_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binomial Name"
+          },
+          "canonical_species_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Species Key"
           },
           "common_name": {
             "anyOf": [
@@ -1022,6 +1849,38 @@
             "title": "Confidence",
             "type": "number"
           },
+          "confirmed_candidate_image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed Candidate Image Path"
+          },
+          "enrichment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateEnrichmentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation_policy_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Policy Version"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -1037,6 +1896,13 @@
           "scientific_name": {
             "title": "Scientific Name",
             "type": "string"
+          },
+          "section_status": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileSectionStatus"
+            },
+            "title": "Section Status",
+            "type": "array"
           },
           "sections": {
             "additionalProperties": {
@@ -1119,6 +1985,97 @@
           "name"
         ],
         "title": "ProfileAlias",
+        "type": "object"
+      },
+      "ProfileRefreshJobResult": {
+        "additionalProperties": false,
+        "properties": {
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/EnrichmentLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "complete",
+              "partial",
+              "noop"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "regenerated_sections": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Regenerated Sections",
+            "type": "array"
+          },
+          "stale_sections": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Stale Sections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "outcome",
+          "policy_version"
+        ],
+        "title": "ProfileRefreshJobResult",
+        "type": "object"
+      },
+      "ProfileSectionStatus": {
+        "description": "Per-section freshness metadata (metadata-only, never raw payloads).\n\n``status`` is one of ``current``, ``stale``, ``refreshing``, ``partial``.\n``generated_at`` is the timestamp of the active section version.",
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "status"
+        ],
+        "title": "ProfileSectionStatus",
         "type": "object"
       },
       "ProfileSource": {
@@ -1243,6 +2200,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "required": [
@@ -1252,6 +2220,77 @@
           "email_verified"
         ],
         "title": "PublicAuthUser",
+        "type": "object"
+      },
+      "RateLimitResponse": {
+        "description": "Bounded authentication rate-limit response body.\n\nThe JSON body contains only a generic ``detail``; the whole-second retry\ndelay is carried by the ``Retry-After`` response header declared on the\nrelevant routes. Never include account, source, or storage details.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "RateLimitResponse",
+        "type": "object"
+      },
+      "ReadJobError": {
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/JobFailureCategory"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "category"
+        ],
+        "title": "ReadJobError",
+        "type": "object"
+      },
+      "ReadJobResult": {
+        "properties": {
+          "failed": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/components/schemas/JobLimitation"
+            },
+            "maxItems": 10,
+            "title": "Limitations",
+            "type": "array"
+          },
+          "partial": {
+            "default": false,
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "skipped": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "succeeded": {
+            "default": 0,
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Succeeded",
+            "type": "integer"
+          }
+        },
+        "title": "ReadJobResult",
         "type": "object"
       },
       "RecoveryConfirmRequest": {
@@ -1344,6 +2383,28 @@
         "title": "RegisterResponse",
         "type": "object"
       },
+      "ReminderClarificationResult": {
+        "properties": {
+          "kind": {
+            "const": "clarification",
+            "default": "clarification",
+            "title": "Kind",
+            "type": "string"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Fields",
+            "type": "array"
+          }
+        },
+        "required": [
+          "missing_fields"
+        ],
+        "title": "ReminderClarificationResult",
+        "type": "object"
+      },
       "ReminderCreate": {
         "properties": {
           "action": {
@@ -1382,6 +2443,17 @@
             "format": "time",
             "title": "Time",
             "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "required": [
@@ -1459,6 +2531,17 @@
               }
             ],
             "title": "Suggestion Justification"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "required": [
@@ -1471,6 +2554,26 @@
           "status"
         ],
         "title": "ReminderDto",
+        "type": "object"
+      },
+      "ReminderDuplicateResult": {
+        "properties": {
+          "existing_reminder_id": {
+            "format": "uuid",
+            "title": "Existing Reminder Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "duplicate",
+            "default": "duplicate",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "existing_reminder_id"
+        ],
+        "title": "ReminderDuplicateResult",
         "type": "object"
       },
       "ReminderRecurrence": {
@@ -1491,6 +2594,228 @@
         ],
         "title": "ReminderStatus",
         "type": "string"
+      },
+      "ReminderSuggestionEvidence": {
+        "properties": {
+          "active_reminders": {
+            "default": 0,
+            "title": "Active Reminders",
+            "type": "integer"
+          },
+          "light_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Light Context"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "profile_sections": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Profile Sections",
+            "type": "array"
+          },
+          "taxonomy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxonomy"
+          }
+        },
+        "title": "ReminderSuggestionEvidence",
+        "type": "object"
+      },
+      "ReminderSuggestionMetricRequest": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "accepted",
+              "edited",
+              "rejected"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "ReminderSuggestionMetricRequest",
+        "type": "object"
+      },
+      "ReminderSuggestionRequest": {
+        "properties": {
+          "garden_plant_id": {
+            "format": "uuid",
+            "title": "Garden Plant Id",
+            "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request"
+          }
+        },
+        "required": [
+          "garden_plant_id"
+        ],
+        "title": "ReminderSuggestionRequest",
+        "type": "object"
+      },
+      "ReminderSuggestionResult": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ReminderSuggestionEvidence"
+          },
+          "garden_plant_id": {
+            "format": "uuid",
+            "title": "Garden Plant Id",
+            "type": "string"
+          },
+          "justification": {
+            "title": "Justification",
+            "type": "string"
+          },
+          "kind": {
+            "const": "suggestion",
+            "default": "suggestion",
+            "title": "Kind",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "plant_name": {
+            "title": "Plant Name",
+            "type": "string"
+          },
+          "recurrence": {
+            "$ref": "#/components/schemas/ReminderRecurrence"
+          },
+          "time": {
+            "format": "time",
+            "title": "Time",
+            "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "garden_plant_id",
+          "plant_name",
+          "action",
+          "date",
+          "time",
+          "recurrence",
+          "evidence",
+          "confidence",
+          "justification"
+        ],
+        "title": "ReminderSuggestionResult",
+        "type": "object"
+      },
+      "ReminderSummary": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "due_at": {
+            "format": "date-time",
+            "title": "Due At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "due_at"
+        ],
+        "title": "ReminderSummary",
+        "type": "object"
       },
       "ReminderUpdate": {
         "properties": {
@@ -1564,9 +2889,33 @@
               }
             ],
             "title": "Time"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
         "title": "ReminderUpdate",
+        "type": "object"
+      },
+      "SearchLocalResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/LocalPlantSearchResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "title": "SearchLocalResponse",
         "type": "object"
       },
       "TaxonomyCandidate": {
@@ -1669,6 +3018,17 @@
             "title": "Id",
             "type": "string"
           },
+          "image_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Path"
+          },
           "possible_match_copy": {
             "title": "Possible Match Copy",
             "type": "string"
@@ -1725,6 +3085,23 @@
           "validation_status"
         ],
         "title": "TaxonomyCandidate",
+        "type": "object"
+      },
+      "TimezoneUpdateRequest": {
+        "properties": {
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "TimezoneUpdateRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -1859,9 +3236,219 @@
         ]
       }
     },
+    "/assistant/chat/stream": {
+      "post": {
+        "operationId": "assistant_chat_stream_assistant_chat_stream_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistant Chat Stream",
+        "tags": [
+          "assistant"
+        ]
+      }
+    },
+    "/auth/admit/authjs_post": {
+      "post": {
+        "description": "Narrow internal admission endpoint for relevant unauthenticated Auth.js POST operations.\n\nThe frontend Auth.js boundary calls this endpoint (protected by the same\nsigned source assertion used by every other limiter header) before\ninvoking Auth.js work. A rejected or storage-failed outcome is translated\ninto the bounded retry contract so the distributed ``authjs_post`` policy\nhas a real runtime call site and session reads and authenticated logout\nremain unchanged.",
+        "operationId": "admit_authjs_post_auth_admit_authjs_post_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Admit Authjs Post Auth Admit Authjs Post Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Admit Authjs Post",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/auth/credentials/verify": {
       "post": {
         "operationId": "verify_credentials_auth_credentials_verify_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1892,6 +3479,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Verify Credentials",
@@ -1969,9 +3594,183 @@
         ]
       }
     },
+    "/auth/me": {
+      "get": {
+        "operationId": "get_current_profile_auth_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAuthUser"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Current Profile",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/me/timezone": {
+      "patch": {
+        "operationId": "update_timezone_auth_me_timezone_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimezoneUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAuthUser"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Timezone",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/auth/recovery/confirm": {
       "post": {
         "operationId": "confirm_recovery_auth_recovery_confirm_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2006,6 +3805,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Confirm Recovery",
@@ -2017,6 +3854,40 @@
     "/auth/recovery/request": {
       "post": {
         "operationId": "request_recovery_auth_recovery_request_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2047,6 +3918,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Request Recovery",
@@ -2058,6 +3967,40 @@
     "/auth/register": {
       "post": {
         "operationId": "register_auth_register_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-fotosintesis-source-assertion",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Fotosintesis-Source-Assertion"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2088,6 +4031,44 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Distributed authentication limit reached; retry after the bounded delay.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying (clamped to the configured maximum).",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RateLimitResponse"
+                }
+              }
+            },
+            "description": "Shared limiter storage unavailable; the request is denied without account or storage details.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole-second delay the client should wait before retrying.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Register",
@@ -2481,6 +4462,74 @@
         ]
       }
     },
+    "/garden/{garden_id}/image": {
+      "get": {
+        "operationId": "get_garden_plant_image_garden__garden_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "garden_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Garden Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Garden Plant Image",
+        "tags": [
+          "plant-profile-garden"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",
@@ -2644,6 +4693,81 @@
         ]
       }
     },
+    "/identifications/candidates/{candidate_id}/enrichment": {
+      "get": {
+        "operationId": "get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateEnrichmentStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Candidate Enrichment",
+        "tags": [
+          "identifications"
+        ]
+      }
+    },
     "/identifications/{identification_id}/candidates/{candidate_id}/confirm": {
       "post": {
         "operationId": "confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post",
@@ -2726,6 +4850,183 @@
         "summary": "Confirm Candidate",
         "tags": [
           "identifications"
+        ]
+      }
+    },
+    "/jobs/enrichment-activity": {
+      "get": {
+        "operationId": "get_enrichment_activity_jobs_enrichment_activity_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichmentActivityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "422": {
+            "description": "Malformed cursor"
+          }
+        },
+        "summary": "Get Enrichment Activity",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_status_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job Status",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -3210,6 +5511,179 @@
         ]
       }
     },
+    "/reminders/suggestions": {
+      "post": {
+        "operationId": "suggest_reminder_reminders_suggestions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderSuggestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "clarification": "#/components/schemas/ReminderClarificationResult",
+                      "duplicate": "#/components/schemas/ReminderDuplicateResult",
+                      "suggestion": "#/components/schemas/ReminderSuggestionResult"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ReminderSuggestionResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReminderClarificationResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReminderDuplicateResult"
+                    }
+                  ],
+                  "title": "Response Suggest Reminder Reminders Suggestions Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Suggest Reminder",
+        "tags": [
+          "reminders"
+        ]
+      }
+    },
+    "/reminders/suggestions/metrics": {
+      "post": {
+        "operationId": "record_suggestion_metric_reminders_suggestions_metrics_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderSuggestionMetricRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Record Suggestion Metric Reminders Suggestions Metrics Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Suggestion Metric",
+        "tags": [
+          "reminders"
+        ]
+      }
+    },
     "/reminders/{reminder_id}": {
       "delete": {
         "operationId": "delete_reminder_reminders__reminder_id__delete",
@@ -3440,6 +5914,308 @@
         "summary": "Complete Reminder",
         "tags": [
           "reminders"
+        ]
+      }
+    },
+    "/search": {
+      "get": {
+        "operationId": "search_local_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchLocalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Local",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/search/candidates": {
+      "post": {
+        "operationId": "create_manual_candidate_search_candidates_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualCandidateCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxonomyCandidate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Manual Candidate",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/search/candidates/{candidate_id}/confirm": {
+      "post": {
+        "operationId": "confirm_manual_candidate_search_candidates__candidate_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Manual Candidate",
+        "tags": [
+          "search"
+        ]
+      }
+    },
+    "/search/gbif": {
+      "get": {
+        "operationId": "search_gbif_search_gbif_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GbifSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Gbif",
+        "tags": [
+          "search"
         ]
       }
     }

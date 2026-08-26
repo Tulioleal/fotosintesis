@@ -13,6 +13,7 @@ services:
       - "3000:3000"
     volumes:
       - .:/workspace
+      - ${HOME}/.cache/node/corepack:/root/.cache/node/corepack
       - pnpm-store:/root/.local/share/pnpm/store
     depends_on:
       - backend
@@ -26,12 +27,47 @@ services:
       DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@postgres:5432/fotosintesis
       OBJECT_STORAGE_PROVIDER: local
       OBJECT_STORAGE_BUCKET: fotosintesis-local
-      OBJECT_STORAGE_LOCAL_ROOT: storage-data
+      OBJECT_STORAGE_LOCAL_ROOT: /tmp/storage-data
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       OBJECT_STORAGE_ACCESS_KEY: minioadmin
       OBJECT_STORAGE_SECRET_KEY: minioadmin
+      JOBS_PRODUCER_ENABLED: "${JOBS_PRODUCER_ENABLED:-true}"
+      KNOWLEDGE_VECTOR_TABLE: "llamaindex_knowledge_vectors"
+      JOBS_WORKER_ENABLED: "false"
+      ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS: "24"
+      ENRICHMENT_ACTIVITY_MAX_ITEMS: "20"
     ports:
       - "8000:8000"
+    volumes:
+      - .:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /workspace/backend
+    command: sh -c "pip install -e . && python -m app.jobs.worker"
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@postgres:5432/fotosintesis
+      OBJECT_STORAGE_PROVIDER: local
+      OBJECT_STORAGE_BUCKET: fotosintesis-local
+      OBJECT_STORAGE_LOCAL_ROOT: /tmp/storage-data
+      JOBS_PRODUCER_ENABLED: "${JOBS_PRODUCER_ENABLED:-true}"
+      KNOWLEDGE_VECTOR_TABLE: "llamaindex_knowledge_vectors"
+      JOBS_WORKER_ENABLED: "${JOBS_WORKER_ENABLED:-true}"
+      JOBS_POLL_INTERVAL_SECONDS: "5"
+      JOBS_BATCH_SIZE: "10"
+      JOBS_WORKER_CONCURRENCY: "5"
+      JOBS_LEASE_DURATION_SECONDS: "300"
+      JOBS_LEASE_RENEWAL_INTERVAL_SECONDS: "60"
+      JOBS_MAX_ATTEMPTS_DEFAULT: "3"
+      JOBS_BACKOFF_BASE_SECONDS: "10"
+      JOBS_BACKOFF_CAP_SECONDS: "3600"
+      JOBS_SHUTDOWN_DRAIN_SECONDS: "30"
+      JOBS_REQUIRED_CONTRACTS: "enrich_confirmed_plant:1,refresh_profile:1"
     volumes:
       - .:/workspace
     depends_on:

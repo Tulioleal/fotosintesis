@@ -199,3 +199,142 @@ The system SHALL document rollback using previous backend and frontend 40-charac
 #### Scenario: Migration incompatibility is documented
 - **WHEN** a migration creates a state incompatible with the desired rollback image
 - **THEN** the documentation directs operators to restore from an approved database backup or apply a reviewed forward-fix migration before deploying compatible images
+
+### Requirement: Durable background worker deployment
+
+The GCP runtime SHALL deploy the durable background worker as a long-running Kubernetes Deployment separate from the backend API and migration Job, using the same immutable backend image version and compatible runtime configuration.
+
+#### Scenario: Worker is deployed with backend release
+- **WHEN** deployment manifests are rendered for a release that enables durable jobs
+- **THEN** they include a worker Deployment using the same 40-character backend Git commit SHA image as the API
+- **AND** the worker runs the dedicated worker entrypoint rather than Uvicorn or the migration command
+
+#### Scenario: Worker uses runtime dependencies
+- **WHEN** the worker starts in GKE
+- **THEN** it uses the backend workload identity, database connectivity, runtime secrets, provider configuration, and resource limits required by registered handlers
+- **AND** it does not expose a public Kubernetes Service
+
+#### Scenario: Migration Job remains separate
+- **WHEN** deployment applies database migrations and worker manifests
+- **THEN** the one-shot migration Job completes before the new worker rollout is considered ready
+- **AND** the migration Job is not reused as a long-running job consumer
+
+### Requirement: Worker deployment verification
+
+Deployment and release workflows SHALL verify the worker Deployment rollout when durable background jobs are enabled.
+
+#### Scenario: Worker rollout succeeds
+- **WHEN** the worker manifest is applied during deployment
+- **THEN** the deployment workflow waits for the worker Deployment rollout before reporting success
+
+#### Scenario: Worker rollout fails
+- **WHEN** the worker cannot start, connect to required runtime dependencies, or reach its desired replica state
+- **THEN** the deployment workflow reports failure and does not present the release as fully successful
+
+### Requirement: Local worker operation
+
+The project SHALL document and provide a reproducible command for running the durable worker separately from the API in local development.
+#### Scenario: Developer runs worker locally
+
+- **WHEN** a developer starts the documented worker command with valid local configuration
+- **THEN** the worker uses the same PostgreSQL-backed job contracts and handler registry as the deployed runtime
+
+### Requirement: Kubernetes workload security baseline
+
+GCP application workloads SHALL enforce the image runtime contract with Kubernetes pod and container security contexts. Application containers MUST run as non-root, MUST disallow privilege escalation, MUST drop all Linux capabilities unless a specific capability is documented as required, and SHALL use `RuntimeDefault` seccomp unless a workload-specific exception documents the concrete runtime reason and compensating control.
+
+#### Scenario: Application workload is rendered
+
+- **WHEN** backend API, frontend, worker, or migration manifests are rendered for an environment
+- **THEN** pod or container fields enforce non-root execution and `RuntimeDefault` seccomp
+- **AND** each application container disables privilege escalation and drops `ALL` Linux capabilities
+
+#### Scenario: Image metadata regresses to root
+
+- **WHEN** an application image defaults to UID 0 but its workload requires non-root execution
+- **THEN** the workload does not silently start as root
+- **AND** deployment verification reports the runtime identity failure
+
+#### Scenario: Supporting container requires an exception
+
+- **WHEN** an init container or sidecar cannot satisfy an applicable security-context field
+- **THEN** its manifest or adjacent operational documentation identifies the exact container, unsupported field, concrete workload reason, and compensating control
+- **AND** omission of the field without that exception is not accepted
+
+### Requirement: Read-only workload filesystems
+
+Application containers SHALL use read-only root filesystems where their verified runtime behavior permits it, and required runtime writes SHALL use explicit minimally scoped volume mounts. Any writable-root exception MUST identify the workload, required operation, and path that prevents read-only operation.
+
+#### Scenario: Workload requires temporary writable storage
+
+- **WHEN** a verified API, frontend, worker, or migration operation requires temporary filesystem writes
+- **THEN** the workload mounts an explicit writable volume at the documented path
+- **AND** unrelated root filesystem paths remain read-only
+
+#### Scenario: Workload keeps a writable root filesystem
+
+- **WHEN** an application container cannot use a read-only root filesystem
+- **THEN** the reviewed deployment artifacts document the failing operation and required writable path instead of silently omitting `readOnlyRootFilesystem`
+
+### Requirement: Explicit container resource governance
+
+Every deployed regular container, init container, and native sidecar SHALL declare CPU and memory requests and limits. Values SHALL be explicit and reviewable for each environment and workload role, including backend API, frontend, migration, worker, Cloud SQL proxy, and any other supporting container.
+
+#### Scenario: Environment manifests declare bounded resources
+
+- **WHEN** Kubernetes manifests are rendered for development or production
+- **THEN** every container class has non-empty CPU and memory requests and limits
+- **AND** the effective values are visible in the rendered environment artifacts
+
+#### Scenario: Workload roles need different resource profiles
+
+- **WHEN** API, frontend, worker, migration, or sidecar resource needs differ
+- **THEN** environment configuration provides explicit role-specific values rather than leaving a role unbounded or applying an undocumented implicit default
+
+#### Scenario: Resource values are operationally tuned
+
+- **WHEN** observed throttling, OOM termination, steady-state usage, or scheduling pressure shows that a resource value is unsuitable
+- **THEN** operators update the explicit environment value through review and retain requests and limits for the affected container
+
+### Requirement: Hardened workload rollout and rollback
+
+Deployment operations SHALL verify hardened API, frontend, worker, migration, and supporting-container behavior in development before promotion. Rollback SHALL use a prior reviewed immutable image and compatible manifests without permanently removing the non-root runtime or resource-governance baseline.
+
+#### Scenario: Hardened release is promoted
+
+- **WHEN** a release candidate passes image checks, rendered-manifest policy checks, and development-cluster smoke tests
+- **THEN** the same immutable images and reviewed manifest policy structure are eligible for promotion
+
+#### Scenario: Hardened release requires rollback
+
+- **WHEN** runtime filesystem compatibility or resource values cause a deployment failure
+- **THEN** operators can redeploy a prior reviewed immutable image and compatible manifest revision
+- **AND** any temporary policy exception is explicit and does not leave workloads unbounded or running as root
+
+### Requirement: Cluster network policy enforcement
+
+The GKE cluster SHALL enable a supported network policy enforcement mechanism explicitly in OpenTofu, and application namespaces SHALL apply default-deny ingress and egress baselines with narrow allow rules for required traffic.
+
+#### Scenario: Enforcement is enabled
+
+- **WHEN** the GKE cluster is configured for an environment
+- **THEN** OpenTofu explicitly enables a supported enforcement mechanism (such as Dataplane V2)
+- **AND** the enforcement choice and any in-place update or recreation requirement are documented
+
+#### Scenario: Application namespace defaults deny traffic
+
+- **WHEN** application manifests are rendered for an environment
+- **THEN** the application namespace includes default-deny ingress and egress NetworkPolicies
+- **AND** required traffic is represented by explicit narrow allow policies rather than broad exceptions
+
+#### Scenario: External provider egress is documented
+
+- **WHEN** application workloads need access to external model, search, taxonomy, or evidence providers
+- **THEN** the policy allows only the bounded egress the chosen mechanism supports (for example, HTTPS egress)
+- **AND** documentation states the limitation instead of claiming FQDN-level isolation
+
+#### Scenario: Enforcement must roll back
+
+- **WHEN** a network policy deployment disrupts required traffic
+- **THEN** operators can disable enforcement or remove the policy resources to restore previous connectivity
+- **AND** the rollback path is documented and exercised before promotion

@@ -61,6 +61,7 @@ def reset_provider_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EMBEDDING_PROVIDER", "mock")
     monkeypatch.setenv("TREFLE_PROVIDER", "mock")
     monkeypatch.setenv("PERENUAL_PROVIDER", "mock")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "8")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("TREFLE_API_KEY", "")
@@ -100,6 +101,10 @@ def fake_gemini_module(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
+    class FakeAutomaticFunctionCallingConfig:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
     class FakePart:
         @staticmethod
         def from_bytes(*, data: bytes, mime_type: str) -> dict[str, object]:
@@ -125,6 +130,9 @@ def fake_gemini_module(monkeypatch: pytest.MonkeyPatch) -> None:
 
     genai_types_module = types.SimpleNamespace()
     genai_types_module.GenerateContentConfig = FakeGenerateContentConfig
+    genai_types_module.AutomaticFunctionCallingConfig = (
+        FakeAutomaticFunctionCallingConfig
+    )
     genai_types_module.Part = FakePart
     genai_types_module.GoogleSearch = FakeGoogleSearch
     genai_types_module.Tool = FakeTool

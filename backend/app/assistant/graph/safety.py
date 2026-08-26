@@ -6,10 +6,6 @@ from app.assistant.graph.constants import LEGACY_ASPECT_TRANSLATION
 from app.assistant.graph.types import AssistantState
 
 
-def _is_safety_sensitive_question(message: str) -> bool:
-    return False
-
-
 def _has_missing_safety_aspect(state: AssistantState | dict) -> bool:
     translated = [LEGACY_ASPECT_TRANSLATION.get(value, value) for value in state.get("missing_aspects", [])]
     return any(is_safety_sensitive_aspect(value) for value in translated if value in RequiredAspect._value2member_map_)
@@ -34,5 +30,4 @@ __all__ = [
     "_has_missing_safety_aspect",
     "_has_relevant_plant_context",
     "_has_requested_safety_aspect",
-    "_is_safety_sensitive_question",
 ]

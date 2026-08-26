@@ -23,6 +23,14 @@ Start with local object storage:
 docker compose --profile storage up frontend backend postgres minio
 ```
 
+Start with enrichment confirmation and processing:
+
+```bash
+docker compose up frontend backend worker postgres
+```
+
+When the worker is running, the confirmation endpoint is enabled and enrichment jobs are processed automatically.
+
 Run the backend directly:
 
 ```bash
@@ -59,7 +67,7 @@ pnpm --filter frontend test
 Run Playwright against the local stack:
 
 ```bash
-docker compose up frontend backend postgres
+docker compose up frontend backend worker postgres -d
 pnpm --filter frontend test:e2e
 ```
 

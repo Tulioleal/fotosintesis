@@ -128,7 +128,7 @@ def upgrade() -> None:
     op.create_index("ix_knowledge_embeddings_chunk_id", "knowledge_embeddings", ["chunk_id"])
     op.execute(
         "ALTER TABLE knowledge_embeddings "
-        "ALTER COLUMN embedding_vector TYPE vector(8) USING embedding_vector::vector"
+        "ALTER COLUMN embedding_vector TYPE vector(1536) USING embedding_vector::vector"
     )
     op.execute(
         "CREATE INDEX ix_knowledge_embeddings_vector "

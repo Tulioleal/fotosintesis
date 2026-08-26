@@ -4,8 +4,16 @@ Docker Compose is the local development path. It is separate from cloud OpenTofu
 
 ## Start The Local Stack
 
+Basic UI/API mode (accepts confirmations; enrichment jobs stay pending until a worker is started):
+
 ```bash
 docker compose up frontend backend postgres
+```
+
+Confirmation and enrichment mode:
+
+```bash
+docker compose up frontend backend worker postgres
 ```
 
 Start optional local object storage:
@@ -51,12 +59,29 @@ Run frontend component tests:
 pnpm --filter frontend test
 ```
 
-Run Playwright against the local stack:
+### Focused Enrichment E2E
+
+The enrichment journey uses an isolated Compose project, deterministic AI
+providers, a local GBIF fixture, real Auth.js registration, PostgreSQL
+migrations, the durable worker, and a production Next.js build.
+
+Run:
 
 ```bash
-docker compose up frontend backend postgres
-pnpm --filter frontend test:e2e
+pnpm e2e:enrichment
 ```
+
+The script builds Next.js with offline font responses, waits for every service
+to become healthy, runs the enrichment journey serially, and removes only the
+isolated `photosynthesis-e2e` containers and volumes.
+
+Port 3000 must be available before starting. The command never reuses an
+unrelated frontend server.
+
+PostgreSQL and the backend remain internal to the isolated Compose network and
+do not publish host ports during this workflow. The command refuses to start
+when another enrichment E2E run is active, preventing concurrent runs from
+removing each other's containers or volumes.
 
 ## Evaluation
 
@@ -64,7 +89,34 @@ The backend evaluation runner uses deterministic mocks unless real providers are
 
 ```bash
 cd backend
-python -m app.evaluation.runner
+python scripts/run_evaluation.py --mode recorded
 ```
+
+Or from the repository root: `pnpm eval`.
+
+### Quality gate
+
+Runs are approved by the `quality_gate` profile (the CLI default):
+
+- Aggregate LLM-judge pass rate over supported cases must reach **0.60**.
+- Per-case judge scores follow the shared rubric passing score (0.75); tool assertions must be fully satisfied.
+- A supported-case ratio below **0.20** fails the run as a *coverage failure*, distinct from quality failures.
+- Execution or metric errors block approval.
+- Thresholds must be strictly positive or omitted entirely; `0.0` is invalid profile configuration.
+
+The gate writes `report.md` and `result.json` under `app/evaluation/data/runs/`
+(retention bounded by `EVALUATION_RUN_RETENTION`, default latest 10) and exits
+non-zero when not approved. CI replays the committed recording set
+(`app/evaluation/data/recordings/ci-recording.json`) with `--providers mock`.
+
+Refresh the committed recording after intentional graph changes:
+
+```bash
+cd backend
+EMBEDDING_DIMENSION=8 python scripts/record_evaluation_set.py
+```
+
+The `EMBEDDING_DIMENSION=8` override matches the deterministic mock embedding
+provider; omit it only when running against real embedding models.
 
 Use real provider credentials only through local environment files or secret managers. Do not commit provider keys, database passwords, session secrets or API tokens.

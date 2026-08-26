@@ -6,18 +6,33 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.models import AuthUser
+from app.core.settings import get_settings
 from app.db.session import get_async_session
-from app.identification.gbif import GbifClient
+from app.identification.gbif import GbifClient, ProviderLookupError
+from app.identification.confirmation import (
+    CandidateConfirmationService,
+    ConfirmationRejectedError,
+    ConfirmationSchedulingUnavailable,
+)
+from app.identification.image_processing import (
+    ImageValidationError,
+    normalize_identification_image,
+)
 from app.identification.repository import IdentificationRepository
 from app.identification.schemas import ConfirmationResponse, IdentificationResponse
+from app.enrichment import get_current_enrichment_policy
+from app.jobs.repository import JobRepository
+from app.jobs.schemas import CandidateEnrichmentStatus
+from app.observability.logging import get_logger
 from app.providers.factory import get_provider_registry
 from app.storage.factory import get_object_storage
 from app.storage.models import ObjectUpload
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/identifications", tags=["identifications"])
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 @router.post("", response_model=IdentificationResponse, status_code=status.HTTP_201_CREATED)
@@ -26,38 +41,55 @@ async def create_identification(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> IdentificationResponse:
+    settings = get_settings()
     content = await file.read()
     mime_type = file.content_type or "application/octet-stream"
     if mime_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=415, detail="Upload a JPEG, PNG, or WebP image.")
-    if not content or len(content) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=422, detail="The image is empty or exceeds 8 MB.")
+    if not content or len(content) > settings.identification_max_image_bytes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The image is empty or exceeds {settings.identification_max_image_bytes} bytes.",
+        )
 
-    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
-    path = f"identifications/{user.id}/{uuid4()}.{extension}"
+    try:
+        normalized = normalize_identification_image(content)
+    except ImageValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from None
+
+    path = f"identifications/{user.id}/{uuid4()}.jpg"
     stored = await get_object_storage().put_object(
-        ObjectUpload(path=path, content=content, mime_type=mime_type)
+        ObjectUpload(path=path, content=normalized.content, mime_type=normalized.mime_type)
     )
 
     repository = IdentificationRepository(session)
-    identification_id = await repository.create_identification(
-        user_id=user.id,
-        storage_path=stored.path,
-        mime_type=stored.mime_type,
-        size_bytes=stored.size_bytes,
-        metadata={"filename": file.filename or "plant-image", "bucket": stored.bucket},
-        status="needs_confirmation",
-        message="Review these possible matches before confirming a species.",
-    )
+    try:
+        identification_id = await repository.create_identification(
+            user_id=user.id,
+            storage_path=stored.path,
+            mime_type=stored.mime_type,
+            size_bytes=stored.size_bytes,
+            metadata={
+                "filename": file.filename or "plant-image",
+                "bucket": stored.bucket,
+                "width": normalized.width,
+                "height": normalized.height,
+            },
+            status="needs_confirmation",
+            message="Review these possible matches before confirming a species.",
+        )
+    except Exception:
+        await _compensate_stored_object(stored.path)
+        raise
 
     try:
         analysis = await get_provider_registry().vision.analyze_image(
-            content,
+            normalized.content,
             prompt=(
                 "Identify visible plant candidates only. Return common name, scientific name, "
                 "visible traits and qualitative confidence; never present the result as definitive."
             ),
-            mime_type=mime_type,
+            mime_type=normalized.mime_type,
         )
     except Exception:
         return await _sad_response(
@@ -98,11 +130,37 @@ async def create_identification(
             candidates=candidates,
         )
 
-    gbif = GbifClient()
+    try:
+        gbif = GbifClient()
+        resolved = [
+            (candidate, await gbif.match_name(candidate.scientific_name)) for candidate in reliable
+        ]
+    except ProviderLookupError as exc:
+        logger.warning(
+            "identification_taxonomy_lookup_failed",
+            extra={
+                "ctx_identification_id": str(identification_id),
+                "ctx_cause_type": exc.cause_type,
+                "ctx_attempts": exc.attempts,
+                "ctx_latency_seconds": (
+                    round(exc.latency_seconds, 6)
+                    if exc.latency_seconds is not None
+                    else None
+                ),
+            },
+            exc_info=True,
+        )
+        return await _sad_response(
+            repository,
+            identification_id,
+            user.id,
+            "taxonomy_unavailable",
+            "GBIF taxonomy validation is temporarily unavailable. Retry shortly.",
+        )
+
     validated = 0
-    for candidate in reliable:
-        taxonomy = await gbif.match_name(candidate.scientific_name)
-        if taxonomy.matched:
+    for candidate, taxonomy in resolved:
+        if taxonomy.has_canonical_identity:
             validated += 1
         await repository.add_candidate(
             identification_id=identification_id, candidate=candidate, taxonomy=taxonomy
@@ -123,6 +181,17 @@ async def create_identification(
     return response
 
 
+async def _compensate_stored_object(path: str) -> None:
+    """Best-effort deletion of a just-stored object whose record could not persist."""
+    try:
+        await get_object_storage().delete_object(path)
+    except Exception:
+        logger.exception(
+            "identification_object_cleanup_failed",
+            extra={"ctx_object_path": path},
+        )
+
+
 async def _sad_response(
     repository: IdentificationRepository,
     identification_id: UUID,
@@ -139,11 +208,23 @@ async def _sad_response(
     )
     if candidates:
         gbif = GbifClient()
-        for candidate in candidates[:3]:
+        try:
+            resolved = [
+                (candidate, await gbif.match_name(candidate.scientific_name))
+                for candidate in candidates[:3]
+            ]
+        except ProviderLookupError:
+            logger.warning(
+                "identification_recovery_taxonomy_lookup_failed",
+                extra={"ctx_identification_id": str(identification_id)},
+                exc_info=True,
+            )
+            resolved = []
+        for candidate, taxonomy in resolved:
             await repository.add_candidate(
                 identification_id=identification_id,
                 candidate=candidate,
-                taxonomy=await gbif.match_name(candidate.scientific_name),
+                taxonomy=taxonomy,
             )
     response = await repository.get_response(identification_id, user_id)
     if response is None:
@@ -158,12 +239,38 @@ async def confirm_candidate(
     user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> ConfirmationResponse:
-    candidate = await IdentificationRepository(session).confirm_candidate(
-        identification_id=identification_id, candidate_id=candidate_id, user_id=user.id
-    )
-    if candidate is None:
+    try:
+        return await CandidateConfirmationService(session).confirm(
+            identification_id=identification_id,
+            candidate_id=candidate_id,
+            user_id=user.id,
+        )
+    except ConfirmationRejectedError:
         raise HTTPException(
             status_code=409,
             detail="You can only confirm a taxonomically validated candidate.",
-        )
-    return ConfirmationResponse(status="confirmed", candidate=candidate)
+        ) from None
+    except ConfirmationSchedulingUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Plant enrichment scheduling is temporarily unavailable.",
+        ) from None
+
+
+@router.get(
+    "/candidates/{candidate_id}/enrichment",
+    response_model=CandidateEnrichmentStatus,
+)
+async def get_candidate_enrichment(
+    candidate_id: UUID,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> CandidateEnrichmentStatus:
+    enrichment = await JobRepository(session).get_candidate_enrichment_status(
+        candidate_id=candidate_id,
+        user_id=user.id,
+        policy_version=get_current_enrichment_policy().version,
+    )
+    if enrichment is None:
+        raise HTTPException(status_code=404, detail="Candidate enrichment not found.")
+    return enrichment

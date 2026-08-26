@@ -33,6 +33,12 @@ variable "deletion_protection" {
   type = bool
 }
 
+variable "dataplane_v2" {
+  type        = bool
+  default     = true
+  description = "Enable GKE Dataplane V2 (ADVANCED_DATAPATH). Dataplane V2 provides built-in Kubernetes NetworkPolicy enforcement. Enabling it on an existing cluster recreates the node pools; it cannot be disabled in place. When true, do not also enable the Calico network_policy addon (GKE rejects it)."
+}
+
 variable "labels" {
   type    = map(string)
   default = {}

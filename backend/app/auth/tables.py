@@ -12,6 +12,7 @@ users = sa.Table(
     sa.Column("email", sa.String(length=320), nullable=False, unique=True, index=True),
     sa.Column("email_verified", sa.Boolean(), nullable=False, server_default=sa.false()),
     sa.Column("password_hash", sa.Text(), nullable=True),
+    sa.Column("timezone", sa.String(length=80), nullable=True),
     sa.Column("image", sa.Text(), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -41,10 +42,24 @@ recovery_tokens = sa.Table(
     metadata,
     sa.Column("id", sa.Uuid(), primary_key=True),
     sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
-    sa.Column("token", sa.String(length=255), nullable=False, unique=True, index=True),
+    sa.Column("token_hash", sa.String(length=64), nullable=False, unique=True, index=True),
     sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("invalidated_at", sa.DateTime(timezone=True), nullable=True),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    ),
+)
+sa.Index(
+    "ix_recovery_tokens_user_active",
+    recovery_tokens.c.user_id,
+    postgresql_where=sa.and_(
+        recovery_tokens.c.used_at.is_(None),
+        recovery_tokens.c.invalidated_at.is_(None),
+    ),
+    sqlite_where=sa.and_(
+        recovery_tokens.c.used_at.is_(None),
+        recovery_tokens.c.invalidated_at.is_(None),
     ),
 )
 
@@ -73,7 +88,19 @@ identification_candidates = sa.Table(
         "identification_id",
         sa.Uuid(),
         sa.ForeignKey("identification_images.id", ondelete="CASCADE"),
+        nullable=True,
+    ),
+    sa.Column(
+        "origin",
+        sa.String(length=40),
         nullable=False,
+        server_default="image_identification",
+    ),
+    sa.Column(
+        "user_id",
+        sa.Uuid(),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
     ),
     sa.Column("common_name", sa.String(length=180), nullable=True),
     sa.Column("suggested_scientific_name", sa.String(length=240), nullable=False),
@@ -105,8 +132,56 @@ knowledge_documents = sa.Table(
     sa.Column("content", sa.Text(), nullable=False),
     sa.Column("confidence", sa.Float(), nullable=False),
     sa.Column("review_status", sa.String(length=40), nullable=False, index=True),
+    sa.Column("validated_claim_ingestion_key", sa.String(length=255), nullable=True),
+    sa.Column("validated_claim_index_status", sa.String(length=20), nullable=True),
+    sa.Column("canonical_species_key", sa.String(length=512), nullable=True),
+    sa.Column("accepted_gbif_key", sa.Integer(), nullable=True),
+    sa.Column("normalized_binomial", sa.String(length=240), nullable=True),
+    sa.Column("canonical_source_url", sa.Text(), nullable=True),
+    sa.Column("canonical_source_domain", sa.String(length=180), nullable=True),
+    sa.Column("source_version", sa.String(length=255), nullable=True),
+    sa.Column("normalized_content_hash", sa.String(length=64), nullable=True),
+    sa.Column("source_retrieved_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("source_published_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("enrichment_provenance", sa.JSON(), nullable=True),
+    sa.Column(
+        "taxonomy_provenance_id",
+        sa.Uuid(),
+        sa.ForeignKey("taxonomy_provenance_snapshots.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.CheckConstraint(
+        "validated_claim_index_status IS NULL OR "
+        "validated_claim_index_status IN ('pending', 'complete')",
+        name="ck_knowledge_documents_validated_claim_index_status",
+    ),
+    sa.CheckConstraint(
+        "canonical_species_key IS NULL OR ("
+        "normalized_binomial IS NOT NULL AND canonical_source_url IS NOT NULL AND "
+        "canonical_source_domain IS NOT NULL AND source_version IS NOT NULL AND "
+        "normalized_content_hash IS NOT NULL AND source_retrieved_at IS NOT NULL AND "
+        "enrichment_provenance IS NOT NULL AND taxonomy_provenance_id IS NOT NULL)",
+        name="ck_knowledge_documents_enrichment_identity_complete",
+    ),
+)
+sa.Index(
+    "uq_knowledge_documents_validated_claim_ingestion_key",
+    knowledge_documents.c.validated_claim_ingestion_key,
+    unique=True,
+    postgresql_where=knowledge_documents.c.validated_claim_ingestion_key.is_not(None),
+    sqlite_where=knowledge_documents.c.validated_claim_ingestion_key.is_not(None),
+)
+sa.Index(
+    "uq_knowledge_documents_enrichment_content_identity",
+    knowledge_documents.c.canonical_species_key,
+    knowledge_documents.c.canonical_source_url,
+    knowledge_documents.c.source_version,
+    knowledge_documents.c.normalized_content_hash,
+    unique=True,
+    postgresql_where=knowledge_documents.c.canonical_species_key.is_not(None),
+    sqlite_where=knowledge_documents.c.canonical_species_key.is_not(None),
 )
 
 knowledge_sources = sa.Table(
@@ -175,7 +250,7 @@ knowledge_embeddings = sa.Table(
     sa.Column("provider", sa.String(length=120), nullable=False),
     sa.Column("model", sa.String(length=120), nullable=True),
     sa.Column("embedding", sa.JSON(), nullable=False),
-    sa.Column("embedding_vector", VECTOR(8).with_variant(sa.JSON(), "sqlite"), nullable=True),
+    sa.Column("embedding_vector", VECTOR(1536).with_variant(sa.JSON(), "sqlite"), nullable=True),
     sa.Column("embedding_dimension", sa.Integer(), nullable=False),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
 )
@@ -193,12 +268,29 @@ plant_profiles = sa.Table(
     sa.Column("sources", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
     sa.Column("confidence", sa.Float(), nullable=False),
     sa.Column("limitations", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+    sa.Column("accepted_gbif_key", sa.Integer(), nullable=True),
+    sa.Column("normalized_binomial", sa.String(length=240), nullable=True),
+    sa.Column("canonical_species_key", sa.String(length=512), nullable=True),
+    sa.Column("generation_policy_version", sa.Integer(), nullable=True),
+    sa.Column(
+        "section_versions",
+        sa.JSON(),
+        nullable=False,
+        server_default=sa.text("'{}'"),
+    ),
     sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
     sa.Column(
         "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
     ),
+)
+sa.Index(
+    "uq_plant_profiles_canonical_species_key",
+    plant_profiles.c.canonical_species_key,
+    unique=True,
+    postgresql_where=plant_profiles.c.canonical_species_key.is_not(None),
+    sqlite_where=plant_profiles.c.canonical_species_key.is_not(None),
 )
 
 garden_plants = sa.Table(
@@ -277,7 +369,398 @@ reminders = sa.Table(
     sa.Column("recurrence", sa.String(length=80), nullable=True),
     sa.Column("status", sa.String(length=40), nullable=False, server_default="pending"),
     sa.Column("suggestion_justification", sa.Text(), nullable=True),
+    sa.Column("timezone", sa.String(length=80), nullable=True),
     sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+)
+
+application_jobs = sa.Table(
+    "application_jobs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True),
+    sa.Column("conversation_id", sa.Uuid(), nullable=True),
+    sa.Column("job_type", sa.String(length=80), nullable=False),
+    sa.Column("payload_version", sa.Integer(), nullable=False),
+    sa.Column("payload", sa.JSON(), nullable=False),
+    sa.Column("status", sa.String(length=20), nullable=False, server_default="pending"),
+    sa.Column("idempotency_key", sa.String(length=255), nullable=False),
+    sa.Column("active_deduplication_key", sa.String(length=255), nullable=True),
+    sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
+    sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="1"),
+    sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("lease_owner", sa.String(length=255), nullable=True),
+    sa.Column("lease_token", sa.String(length=255), nullable=True),
+    sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("last_error", sa.JSON(), nullable=True),
+    sa.Column("result", sa.JSON(), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+    sa.UniqueConstraint("job_type", "idempotency_key", name="uq_application_jobs_job_type_idempotency_key"),
+    sa.CheckConstraint("status IN ('pending', 'processing', 'complete', 'partial', 'failed')", name="ck_application_jobs_status"),
+    sa.CheckConstraint(
+        "job_type IN ('ingest_validated_claims', 'enrich_confirmed_plant', 'refresh_profile')",
+        name="ck_application_jobs_type",
+    ),
+    sa.CheckConstraint("payload_version >= 1", name="ck_application_jobs_payload_version"),
+    sa.CheckConstraint("attempt_count >= 0", name="ck_application_jobs_attempt_count"),
+    sa.CheckConstraint("max_attempts >= 1", name="ck_application_jobs_max_attempts"),
+    sa.CheckConstraint(
+        "(lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR "
+        "(lease_owner IS NULL AND lease_token IS NULL AND lease_expires_at IS NULL)",
+        name="ck_application_jobs_lease_consistency",
+    ),
+)
+
+sa.Index(
+    "ix_application_jobs_status_available_at",
+    application_jobs.c.status,
+    application_jobs.c.available_at,
+    postgresql_where=application_jobs.c.status.in_(["pending", "processing"]),
+)
+sa.Index(
+    "uq_application_jobs_active_deduplication_key",
+    application_jobs.c.active_deduplication_key,
+    unique=True,
+    postgresql_where=sa.and_(
+        application_jobs.c.active_deduplication_key.is_not(None),
+        application_jobs.c.status.in_(["pending", "processing"]),
+    ),
+    sqlite_where=sa.and_(
+        application_jobs.c.active_deduplication_key.is_not(None),
+        application_jobs.c.status.in_(["pending", "processing"]),
+    ),
+)
+
+candidate_enrichment_jobs = sa.Table(
+    "candidate_enrichment_jobs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    sa.Column(
+        "candidate_id",
+        sa.Uuid(),
+        sa.ForeignKey("identification_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("policy_version", sa.Integer(), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.UniqueConstraint(
+        "candidate_id",
+        "policy_version",
+        name="uq_candidate_enrichment_jobs_candidate_policy",
+    ),
+    sa.CheckConstraint("policy_version >= 1", name="ck_candidate_enrichment_jobs_policy_version"),
+)
+sa.Index(
+    "ix_candidate_enrichment_jobs_owner_candidate_policy",
+    candidate_enrichment_jobs.c.user_id,
+    candidate_enrichment_jobs.c.candidate_id,
+    candidate_enrichment_jobs.c.policy_version,
+)
+sa.Index("ix_candidate_enrichment_jobs_job_id", candidate_enrichment_jobs.c.job_id)
+
+profile_refresh_enrichment_jobs = sa.Table(
+    "profile_refresh_enrichment_jobs",
+    metadata,
+    sa.Column(
+        "refresh_job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "enrichment_job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+)
+sa.Index(
+    "ix_profile_refresh_enrichment_jobs_enrichment_id",
+    profile_refresh_enrichment_jobs.c.enrichment_job_id,
+)
+
+taxonomy_provenance_snapshots = sa.Table(
+    "taxonomy_provenance_snapshots",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column("canonical_species_key", sa.String(length=512), nullable=False),
+    sa.Column("accepted_gbif_key", sa.Integer(), nullable=True),
+    sa.Column("normalized_binomial", sa.String(length=240), nullable=False),
+    sa.Column("taxonomy_source", sa.String(length=80), nullable=False, server_default="gbif"),
+    sa.Column("taxonomy_source_version", sa.String(length=255), nullable=False),
+    sa.Column("snapshot", sa.JSON(), nullable=False),
+    sa.Column(
+        "previous_snapshot_id",
+        sa.Uuid(),
+        sa.ForeignKey("taxonomy_provenance_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.UniqueConstraint(
+        "canonical_species_key",
+        "taxonomy_source",
+        "taxonomy_source_version",
+        name="uq_taxonomy_provenance_species_source_version",
+    ),
+)
+sa.Index(
+    "ix_taxonomy_provenance_resolution",
+    taxonomy_provenance_snapshots.c.accepted_gbif_key,
+    taxonomy_provenance_snapshots.c.normalized_binomial,
+    taxonomy_provenance_snapshots.c.resolved_at,
+)
+
+knowledge_document_aspect_supports = sa.Table(
+    "knowledge_document_aspect_supports",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "document_id",
+        sa.Uuid(),
+        sa.ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("aspect", sa.String(length=120), nullable=False),
+    sa.Column("support_confidence", sa.Float(), nullable=False),
+    sa.Column("review_status", sa.String(length=40), nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.UniqueConstraint(
+        "document_id",
+        "aspect",
+        name="uq_knowledge_document_aspect_supports_document_aspect",
+    ),
+    sa.CheckConstraint(
+        "support_confidence >= 0 AND support_confidence <= 1",
+        name="ck_knowledge_document_aspect_supports_confidence",
+    ),
+)
+sa.Index(
+    "ix_knowledge_document_aspect_supports_aspect",
+    knowledge_document_aspect_supports.c.aspect,
+)
+
+enrichment_validation_runs = sa.Table(
+    "enrichment_validation_runs",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column(
+        "taxonomy_provenance_id",
+        sa.Uuid(),
+        sa.ForeignKey("taxonomy_provenance_snapshots.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    sa.Column("policy_version", sa.Integer(), nullable=False),
+    sa.Column("required_aspects", sa.JSON(), nullable=False),
+    sa.Column("covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("missing_aspects", sa.JSON(), nullable=False),
+    sa.Column("answerability_status", sa.String(length=20), nullable=False),
+    sa.Column("judge_confidence", sa.Float(), nullable=False),
+    sa.Column("validation_metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+    sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    sa.CheckConstraint("policy_version >= 1", name="ck_enrichment_validation_runs_policy_version"),
+    sa.CheckConstraint(
+        "answerability_status IN ('full', 'partial', 'insufficient', 'contradictory')",
+        name="ck_enrichment_validation_runs_answerability_status",
+    ),
+    sa.CheckConstraint(
+        "judge_confidence >= 0 AND judge_confidence <= 1",
+        name="ck_enrichment_validation_runs_judge_confidence",
+    ),
+)
+sa.Index(
+    "ix_enrichment_validation_runs_job_created_at",
+    enrichment_validation_runs.c.job_id,
+    enrichment_validation_runs.c.created_at,
+)
+sa.Index(
+    "ix_enrichment_validation_runs_taxonomy_policy",
+    enrichment_validation_runs.c.taxonomy_provenance_id,
+    enrichment_validation_runs.c.policy_version,
+)
+
+enrichment_validation_evidence = sa.Table(
+    "enrichment_validation_evidence",
+    metadata,
+    sa.Column("id", sa.Uuid(), primary_key=True),
+    sa.Column(
+        "validation_run_id",
+        sa.Uuid(),
+        sa.ForeignKey(
+            "enrichment_validation_runs.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    ),
+    sa.Column(
+        "document_id",
+        sa.Uuid(),
+        sa.ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+    ),
+    sa.UniqueConstraint(
+        "validation_run_id",
+        "document_id",
+        name="uq_enrichment_validation_evidence_run_document",
+    ),
+)
+sa.Index(
+    "ix_enrichment_validation_evidence_document_run",
+    enrichment_validation_evidence.c.document_id,
+    enrichment_validation_evidence.c.validation_run_id,
+)
+
+enrichment_telemetry_observations = sa.Table(
+    "enrichment_telemetry_observations",
+    metadata,
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("policy_label", sa.String(length=40), nullable=False),
+    sa.Column("lifecycle_outcome", sa.String(length=20), nullable=False),
+    sa.Column("acquisition_avoided", sa.Boolean(), nullable=False),
+    sa.Column("local_covered_count", sa.Integer(), nullable=False),
+    sa.Column("final_covered_count", sa.Integer(), nullable=False),
+    sa.Column("coverage_gain", sa.Integer(), nullable=False),
+    sa.Column("accepted_aspect_count", sa.Integer(), nullable=False),
+    sa.Column("search_count", sa.Integer(), nullable=False),
+    sa.Column("duration_seconds", sa.Float(), nullable=False),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.func.now(),
+    ),
+    sa.CheckConstraint(
+        "policy_label IN ('1', 'unsupported')",
+        name="ck_enrichment_telemetry_policy_label",
+    ),
+    sa.CheckConstraint(
+        "lifecycle_outcome IN ('complete', 'partial', 'failed')",
+        name="ck_enrichment_telemetry_lifecycle_outcome",
+    ),
+    sa.CheckConstraint(
+        "local_covered_count >= 0 AND local_covered_count <= 100",
+        name="ck_enrichment_telemetry_local_covered_count",
+    ),
+    sa.CheckConstraint(
+        "final_covered_count >= 0 AND final_covered_count <= 100",
+        name="ck_enrichment_telemetry_final_covered_count",
+    ),
+    sa.CheckConstraint(
+        "coverage_gain >= -100 AND coverage_gain <= 100",
+        name="ck_enrichment_telemetry_coverage_gain",
+    ),
+    sa.CheckConstraint(
+        "accepted_aspect_count >= 0 AND accepted_aspect_count <= 100",
+        name="ck_enrichment_telemetry_accepted_aspect_count",
+    ),
+    sa.CheckConstraint(
+        "search_count >= 0 AND search_count <= 100",
+        name="ck_enrichment_telemetry_search_count",
+    ),
+    sa.CheckConstraint(
+        "duration_seconds >= 0 AND duration_seconds < 1.7976931348623157e308",
+        name="ck_enrichment_telemetry_duration_seconds",
+    ),
+)
+
+sa.Index(
+    "ix_application_jobs_processing_lease_expires",
+    application_jobs.c.status,
+    application_jobs.c.lease_expires_at,
+    postgresql_where=application_jobs.c.status == "processing",
+)
+
+enrichment_job_progress = sa.Table(
+    "enrichment_job_progress",
+    metadata,
+    sa.Column(
+        "job_id",
+        sa.Uuid(),
+        sa.ForeignKey("application_jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    sa.Column("policy_version", sa.Integer(), nullable=False),
+    sa.Column("required_aspects", sa.JSON(), nullable=False),
+    sa.Column("local_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("persisted_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("indexed_covered_aspects", sa.JSON(), nullable=False),
+    sa.Column("final_judged_covered_aspects", sa.JSON(), nullable=True),
+    sa.Column("final_judged_missing_aspects", sa.JSON(), nullable=True),
+    sa.Column("answerability_status", sa.String(length=20), nullable=True),
+    sa.Column(
+        "acquisition_avoided",
+        sa.Boolean(),
+        nullable=False,
+        server_default=sa.false(),
+    ),
+    sa.Column("search_count", sa.Integer(), nullable=False, server_default="0"),
+    sa.Column(
+        "accepted_aspect_count",
+        sa.Integer(),
+        nullable=False,
+        server_default="0",
+    ),
+    sa.Column("last_validation_run_id", sa.Uuid(), nullable=True),
+    sa.Column(
+        "created_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.Column(
+        "updated_at",
+        sa.DateTime(timezone=True),
+        server_default=sa.func.now(),
+        nullable=False,
+    ),
+    sa.CheckConstraint(
+        "policy_version >= 1",
+        name="ck_enrichment_job_progress_policy_version",
+    ),
+    sa.CheckConstraint(
+        "answerability_status IS NULL OR answerability_status IN "
+        "('full', 'partial', 'insufficient', 'contradictory')",
+        name="ck_enrichment_job_progress_answerability_status",
+    ),
+    sa.CheckConstraint(
+        "search_count >= 0 AND search_count <= 100",
+        name="ck_enrichment_job_progress_search_count",
+    ),
+    sa.CheckConstraint(
+        "accepted_aspect_count >= 0 AND accepted_aspect_count <= 100",
+        name="ck_enrichment_job_progress_accepted_aspect_count",
+    ),
 )
 
 light_measurements = sa.Table(

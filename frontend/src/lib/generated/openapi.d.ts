@@ -21,6 +21,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/assistant/chat/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assistant Chat Stream */
+        post: operations["assistant_chat_stream_assistant_chat_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/admit/authjs_post": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit Authjs Post
+         * @description Narrow internal admission endpoint for relevant unauthenticated Auth.js POST operations.
+         *
+         *     The frontend Auth.js boundary calls this endpoint (protected by the same
+         *     signed source assertion used by every other limiter header) before
+         *     invoking Auth.js work. A rejected or storage-failed outcome is translated
+         *     into the bounded retry contract so the distributed ``authjs_post`` policy
+         *     has a real runtime call site and session reads and authenticated logout
+         *     remain unchanged.
+         */
+        post: operations["admit_authjs_post_auth_admit_authjs_post_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/credentials/verify": {
         parameters: {
             query?: never;
@@ -53,6 +97,40 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Current Profile */
+        get: operations["get_current_profile_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me/timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Timezone */
+        patch: operations["update_timezone_auth_me_timezone_patch"];
         trace?: never;
     };
     "/auth/recovery/confirm": {
@@ -159,6 +237,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/garden/{garden_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Garden Plant Image */
+        get: operations["get_garden_plant_image_garden__garden_id__image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -210,6 +305,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/identifications/candidates/{candidate_id}/enrichment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Candidate Enrichment */
+        get: operations["get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/identifications/{identification_id}/candidates/{candidate_id}/confirm": {
         parameters: {
             query?: never;
@@ -221,6 +333,40 @@ export interface paths {
         put?: never;
         /** Confirm Candidate */
         post: operations["confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/enrichment-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Enrichment Activity */
+        get: operations["get_enrichment_activity_jobs_enrichment_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Job Status */
+        get: operations["get_job_status_jobs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -297,6 +443,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reminders/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Suggest Reminder */
+        post: operations["suggest_reminder_reminders_suggestions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reminders/suggestions/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Suggestion Metric */
+        post: operations["record_suggestion_metric_reminders_suggestions_metrics_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reminders/{reminder_id}": {
         parameters: {
             query?: never;
@@ -326,6 +506,74 @@ export interface paths {
         put?: never;
         /** Complete Reminder */
         post: operations["complete_reminder_reminders__reminder_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Local */
+        get: operations["search_local_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Manual Candidate */
+        post: operations["create_manual_candidate_search_candidates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/candidates/{candidate_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm Manual Candidate */
+        post: operations["confirm_manual_candidate_search_candidates__candidate_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search/gbif": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Gbif */
+        get: operations["search_gbif_search_gbif_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -385,6 +633,8 @@ export interface components {
         };
         /** AssistantChatRequest */
         AssistantChatRequest: {
+            /** Confirmed Candidate Id */
+            confirmed_candidate_id?: string | null;
             /** Conversation Id */
             conversation_id?: string | null;
             /** Message */
@@ -441,21 +691,35 @@ export interface components {
         AssistantReminderSuggestion: {
             /** Action */
             action: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Date */
+            date?: string | null;
             /**
              * Due At
              * Format: date-time
              */
             due_at: string;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Garden Plant Id
              * Format: uuid
              */
             garden_plant_id: string;
+            /** Limitations */
+            limitations?: string[];
             /** Plant Name */
             plant_name: string;
             recurrence: components["schemas"]["ReminderRecurrence"];
             /** Suggestion Justification */
             suggestion_justification: string;
+            /** Time */
+            time?: string | null;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** AssistantRetryableError */
         AssistantRetryableError: {
@@ -490,6 +754,8 @@ export interface components {
             confidence?: number | null;
             /** Domain */
             domain?: string | null;
+            /** Source Provenance */
+            source_provenance?: ("trusted" | "external_fallback") | null;
             /** Title */
             title?: string | null;
             /** Url */
@@ -504,9 +770,21 @@ export interface components {
              */
             file: string;
         };
+        /** CandidateEnrichmentStatus */
+        CandidateEnrichmentStatus: {
+            /**
+             * Candidate Id
+             * Format: uuid
+             */
+            candidate_id: string;
+            job: components["schemas"]["JobStatusResponse"];
+            /** Policy Version */
+            policy_version: number;
+        };
         /** ConfirmationResponse */
         ConfirmationResponse: {
             candidate: components["schemas"]["TaxonomyCandidate"];
+            enrichment: components["schemas"]["CandidateEnrichmentStatus"];
             /** Status */
             status: string;
         };
@@ -531,6 +809,122 @@ export interface components {
             session_token: string;
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** EnrichmentActivityItem */
+        EnrichmentActivityItem: {
+            /**
+             * Candidate Id
+             * Format: uuid
+             */
+            candidate_id: string;
+            /** Common Name */
+            common_name?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            job_type: components["schemas"]["JobType"];
+            last_error?: components["schemas"]["ReadJobError"] | null;
+            phase: components["schemas"]["EnrichmentActivityPhase"];
+            result?: components["schemas"]["EnrichmentActivityResult"] | null;
+            /** Scientific Name */
+            scientific_name: string;
+            /** Species Key */
+            species_key?: string | null;
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * EnrichmentActivityPhase
+         * @enum {string}
+         */
+        EnrichmentActivityPhase: "evidence" | "profile_refresh";
+        /** EnrichmentActivityResponse */
+        EnrichmentActivityResponse: {
+            /**
+             * Has More
+             * @default false
+             */
+            has_more: boolean;
+            /** Items */
+            items?: components["schemas"]["EnrichmentActivityItem"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /**
+         * EnrichmentActivityResult
+         * @description Bounded, metadata-only outcome for the cross-page activity view.
+         *
+         *     Counts and limitation categories only: never raw aspects, source bodies,
+         *     claims, quotes, or provider diagnostics.
+         */
+        EnrichmentActivityResult: {
+            /**
+             * Covered Count
+             * @default 0
+             */
+            covered_count: number;
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /**
+             * Missing Count
+             * @default 0
+             */
+            missing_count: number;
+            /** Outcome */
+            outcome?: ("complete" | "partial" | "noop") | null;
+            /**
+             * Regenerated Section Count
+             * @default 0
+             */
+            regenerated_section_count: number;
+            /**
+             * Stale Section Count
+             * @default 0
+             */
+            stale_section_count: number;
+        };
+        /** EnrichmentJobResult */
+        EnrichmentJobResult: {
+            /**
+             * Acquisition Avoided
+             * @default false
+             */
+            acquisition_avoided: boolean;
+            /** Covered Aspects */
+            covered_aspects: string[];
+            /** Covered Count */
+            covered_count: number;
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /** Missing Aspects */
+            missing_aspects: string[];
+            /** Missing Count */
+            missing_count: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "partial";
+            /** Policy Version */
+            policy_version: number;
+        };
+        /**
+         * EnrichmentLimitation
+         * @enum {string}
+         */
+        EnrichmentLimitation: "missing_required_aspects" | "safety_evidence_rejected" | "retry_exhausted" | "workflow_incomplete" | "indexing_deferred";
         /** GardenDeleteResponse */
         GardenDeleteResponse: {
             /** Status */
@@ -609,13 +1003,43 @@ export interface components {
             id: string;
             /** Image Path */
             image_path?: string | null;
+            light_summary?: components["schemas"]["LightSummary"] | null;
             /** Location */
             location?: string | null;
+            next_reminder?: components["schemas"]["ReminderSummary"] | null;
             /** Nickname */
             nickname?: string | null;
             /** Notes */
             notes?: string | null;
             profile: components["schemas"]["PlantProfileResponse"];
+        };
+        /** GbifCandidate */
+        GbifCandidate: {
+            /** Accepted Key */
+            accepted_key?: number | null;
+            /** Accepted Scientific Name */
+            accepted_scientific_name?: string | null;
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Family */
+            family?: string | null;
+            /** Genus */
+            genus?: string | null;
+            /** Key */
+            key?: number | null;
+            /** Rank */
+            rank?: string | null;
+            /** Species */
+            species?: string | null;
+            /** Synonyms */
+            synonyms?: string[];
+            /** Taxonomic Status */
+            taxonomic_status?: string | null;
+        };
+        /** GbifSearchResponse */
+        GbifSearchResponse: {
+            /** Candidates */
+            candidates?: components["schemas"]["GbifCandidate"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -676,6 +1100,55 @@ export interface components {
          */
         IdentificationStatus: "needs_confirmation" | "retry_needed" | "no_reliable_candidate";
         /**
+         * JobFailureCategory
+         * @enum {string}
+         */
+        JobFailureCategory: "invalid_payload" | "unsupported_payload_version" | "unknown_job_type" | "database_transient" | "provider_transient" | "indexing_transient" | "invariant_violation" | "attempts_exhausted" | "unexpected_error" | "lease_expired" | "lease_lost" | "insufficient_evidence";
+        /**
+         * JobLimitation
+         * @enum {string}
+         */
+        JobLimitation: "some_claims_failed" | "indexing_deferred";
+        /**
+         * JobStatus
+         * @enum {string}
+         */
+        JobStatus: "pending" | "processing" | "complete" | "partial" | "failed";
+        /** JobStatusResponse */
+        JobStatusResponse: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            job_type: components["schemas"]["JobType"];
+            last_error?: components["schemas"]["ReadJobError"] | null;
+            /** Max Attempts */
+            max_attempts: number;
+            /** Result */
+            result?: components["schemas"]["ReadJobResult"] | components["schemas"]["EnrichmentJobResult"] | components["schemas"]["ProfileRefreshJobResult"] | null;
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * JobType
+         * @enum {string}
+         */
+        JobType: "ingest_validated_claims" | "enrich_confirmed_plant" | "refresh_profile";
+        /**
          * LightClassification
          * @enum {string}
          */
@@ -723,6 +1196,50 @@ export interface components {
              */
             user_id: string;
         };
+        /** LightSummary */
+        LightSummary: {
+            classification: components["schemas"]["LightClassification"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Lux */
+            lux?: number | null;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            reliability: components["schemas"]["MeasurementReliability"];
+            source: components["schemas"]["MeasurementSource"];
+        };
+        /** LocalPlantSearchResult */
+        LocalPlantSearchResult: {
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Common Name */
+            common_name?: string | null;
+            /** Has Evidence */
+            has_evidence: boolean;
+            /** Matched Field */
+            matched_field: string;
+            /** Matched Value */
+            matched_value: string;
+            /**
+             * Profile Id
+             * Format: uuid
+             */
+            profile_id: string;
+            /** Scientific Name */
+            scientific_name: string;
+        };
+        /** ManualCandidateCreate */
+        ManualCandidateCreate: {
+            gbif: components["schemas"]["GbifCandidate"];
+            /** Query */
+            query: string;
+        };
         /**
          * MeasurementReliability
          * @enum {string}
@@ -735,12 +1252,23 @@ export interface components {
         MeasurementSource: "sensor" | "camera" | "manual";
         /** PlantProfileResponse */
         PlantProfileResponse: {
+            /** Accepted Gbif Key */
+            accepted_gbif_key?: number | null;
             /** Aliases */
             aliases?: components["schemas"]["ProfileAlias"][];
+            /** Binomial Name */
+            binomial_name?: string | null;
+            /** Canonical Species Key */
+            canonical_species_key?: string | null;
             /** Common Name */
             common_name?: string | null;
             /** Confidence */
             confidence: number;
+            /** Confirmed Candidate Image Path */
+            confirmed_candidate_image_path?: string | null;
+            enrichment?: components["schemas"]["CandidateEnrichmentStatus"] | null;
+            /** Generation Policy Version */
+            generation_policy_version?: number | null;
             /**
              * Id
              * Format: uuid
@@ -750,6 +1278,8 @@ export interface components {
             limitations?: string[];
             /** Scientific Name */
             scientific_name: string;
+            /** Section Status */
+            section_status?: components["schemas"]["ProfileSectionStatus"][];
             /** Sections */
             sections?: {
                 [key: string]: string[];
@@ -769,6 +1299,39 @@ export interface components {
             name: string;
             /** Region */
             region?: string | null;
+        };
+        /** ProfileRefreshJobResult */
+        ProfileRefreshJobResult: {
+            /** Limitations */
+            limitations?: components["schemas"]["EnrichmentLimitation"][];
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "partial" | "noop";
+            /** Policy Version */
+            policy_version: number;
+            /** Regenerated Sections */
+            regenerated_sections?: string[];
+            /** Stale Sections */
+            stale_sections?: string[];
+        };
+        /**
+         * ProfileSectionStatus
+         * @description Per-section freshness metadata (metadata-only, never raw payloads).
+         *
+         *     ``status`` is one of ``current``, ``stale``, ``refreshing``, ``partial``.
+         *     ``generated_at`` is the timestamp of the active section version.
+         */
+        ProfileSectionStatus: {
+            /** Generated At */
+            generated_at?: string | null;
+            /** Policy Version */
+            policy_version?: number | null;
+            /** Section */
+            section: string;
+            /** Status */
+            status: string;
         };
         /** ProfileSource */
         ProfileSource: {
@@ -833,6 +1396,54 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /**
+         * RateLimitResponse
+         * @description Bounded authentication rate-limit response body.
+         *
+         *     The JSON body contains only a generic ``detail``; the whole-second retry
+         *     delay is carried by the ``Retry-After`` response header declared on the
+         *     relevant routes. Never include account, source, or storage details.
+         */
+        RateLimitResponse: {
+            /** Detail */
+            detail: string;
+        };
+        /** ReadJobError */
+        ReadJobError: {
+            category: components["schemas"]["JobFailureCategory"];
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+        };
+        /** ReadJobResult */
+        ReadJobResult: {
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /** Limitations */
+            limitations?: components["schemas"]["JobLimitation"][];
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Succeeded
+             * @default 0
+             */
+            succeeded: number;
         };
         /** RecoveryConfirmRequest */
         RecoveryConfirmRequest: {
@@ -872,6 +1483,16 @@ export interface components {
         RegisterResponse: {
             user: components["schemas"]["PublicAuthUser"];
         };
+        /** ReminderClarificationResult */
+        ReminderClarificationResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "clarification";
+            /** Missing Fields */
+            missing_fields: string[];
+        };
         /** ReminderCreate */
         ReminderCreate: {
             /** Action */
@@ -895,6 +1516,8 @@ export interface components {
              * Format: time
              */
             time: string;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** ReminderDeleteResponse */
         ReminderDeleteResponse: {
@@ -928,6 +1551,21 @@ export interface components {
             status: components["schemas"]["ReminderStatus"];
             /** Suggestion Justification */
             suggestion_justification?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** ReminderDuplicateResult */
+        ReminderDuplicateResult: {
+            /**
+             * Existing Reminder Id
+             * Format: uuid
+             */
+            existing_reminder_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "duplicate";
         };
         /**
          * ReminderRecurrence
@@ -939,6 +1577,96 @@ export interface components {
          * @enum {string}
          */
         ReminderStatus: "pending" | "completed" | "cancelled";
+        /** ReminderSuggestionEvidence */
+        ReminderSuggestionEvidence: {
+            /**
+             * Active Reminders
+             * @default 0
+             */
+            active_reminders: number;
+            /** Light Context */
+            light_context?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Profile Sections */
+            profile_sections?: string[];
+            /** Taxonomy */
+            taxonomy?: string | null;
+        };
+        /** ReminderSuggestionMetricRequest */
+        ReminderSuggestionMetricRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "accepted" | "edited" | "rejected";
+        };
+        /** ReminderSuggestionRequest */
+        ReminderSuggestionRequest: {
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** Request */
+            request?: string | null;
+        };
+        /** ReminderSuggestionResult */
+        ReminderSuggestionResult: {
+            /** Action */
+            action: string;
+            /** Confidence */
+            confidence: number;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            evidence: components["schemas"]["ReminderSuggestionEvidence"];
+            /**
+             * Garden Plant Id
+             * Format: uuid
+             */
+            garden_plant_id: string;
+            /** Justification */
+            justification: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "suggestion";
+            /** Limitations */
+            limitations?: string[];
+            /** Plant Name */
+            plant_name: string;
+            recurrence: components["schemas"]["ReminderRecurrence"];
+            /**
+             * Time
+             * Format: time
+             */
+            time: string;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** ReminderSummary */
+        ReminderSummary: {
+            /** Action */
+            action: string;
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Timezone */
+            timezone?: string | null;
+        };
         /** ReminderUpdate */
         ReminderUpdate: {
             /** Action */
@@ -952,6 +1680,13 @@ export interface components {
             suggestion_justification?: string | null;
             /** Time */
             time?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** SearchLocalResponse */
+        SearchLocalResponse: {
+            /** Results */
+            results?: components["schemas"]["LocalPlantSearchResult"][];
         };
         /** TaxonomyCandidate */
         TaxonomyCandidate: {
@@ -978,6 +1713,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Image Path */
+            image_path?: string | null;
             /** Possible Match Copy */
             possible_match_copy: string;
             /** Species */
@@ -991,6 +1728,11 @@ export interface components {
             validation_status: components["schemas"]["ValidationStatus"];
             /** Visible Traits */
             visible_traits?: string[];
+        };
+        /** TimezoneUpdateRequest */
+        TimezoneUpdateRequest: {
+            /** Timezone */
+            timezone?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1052,10 +1794,104 @@ export interface operations {
             };
         };
     };
+    assistant_chat_stream_assistant_chat_stream_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssistantChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admit_authjs_post_auth_admit_authjs_post_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+        };
+    };
     verify_credentials_auth_credentials_verify_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1081,6 +1917,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
                 };
             };
         };
@@ -1120,10 +1978,83 @@ export interface operations {
             };
         };
     };
+    get_current_profile_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAuthUser"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_timezone_auth_me_timezone_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TimezoneUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAuthUser"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_recovery_auth_recovery_confirm_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1153,12 +2084,37 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
         };
     };
     request_recovery_auth_recovery_request_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1186,12 +2142,37 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
         };
     };
     register_auth_register_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-fotosintesis-source-key"?: string | null;
+                "x-fotosintesis-source-assertion"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1217,6 +2198,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Distributed authentication limit reached; retry after the bounded delay. */
+            429: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying (clamped to the configured maximum). */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
+                };
+            };
+            /** @description Shared limiter storage unavailable; the request is denied without account or storage details. */
+            503: {
+                headers: {
+                    /** @description Whole-second delay the client should wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitResponse"];
                 };
             };
         };
@@ -1400,6 +2403,39 @@ export interface operations {
             };
         };
     };
+    get_garden_plant_image_garden__garden_id__image_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                garden_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_health_get: {
         parameters: {
             query?: never;
@@ -1492,6 +2528,41 @@ export interface operations {
             };
         };
     };
+    get_candidate_enrichment_identifications_candidates__candidate_id__enrichment_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                candidate_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateEnrichmentStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_candidate_identifications__identification_id__candidates__candidate_id__confirm_post: {
         parameters: {
             query?: never;
@@ -1516,6 +2587,96 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ConfirmationResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_enrichment_activity_jobs_enrichment_activity_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrichmentActivityResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed cursor */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_job_status_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -1733,6 +2894,82 @@ export interface operations {
             };
         };
     };
+    suggest_reminder_reminders_suggestions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderSuggestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderSuggestionResult"] | components["schemas"]["ReminderClarificationResult"] | components["schemas"]["ReminderDuplicateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_suggestion_metric_reminders_suggestions_metrics_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderSuggestionMetricRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_reminder_reminders__reminder_id__delete: {
         parameters: {
             query?: never;
@@ -1829,6 +3066,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReminderDto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_local_search_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchLocalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_manual_candidate_search_candidates_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualCandidateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyCandidate"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_manual_candidate_search_candidates__candidate_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                candidate_id: string;
+            };
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_gbif_search_gbif_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: {
+                fotosintesis_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GbifSearchResponse"];
                 };
             };
             /** @description Validation Error */

@@ -6,10 +6,24 @@ on:
     paths:
       - "frontend/**"
       - "frontend/Dockerfile"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "backend/openapi-baseline.json"
+      - "backend/app/api/**"
+      - "backend/app/**/schemas.py"
+      - "backend/scripts/export_openapi.py"
       - ".github/workflows/frontend-ci.yml"
   pull_request:
     paths:
       - "frontend/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "backend/openapi-baseline.json"
+      - "backend/app/api/**"
+      - "backend/app/**/schemas.py"
+      - "backend/scripts/export_openapi.py"
       - ".github/workflows/frontend-ci.yml"
   workflow_call:
     inputs:
@@ -25,6 +39,7 @@ permissions:
   contents: read
   id-token: write
   deployments: write
+  pull-requests: read
 
 concurrency:
   group: frontend-ci-${{ github.ref }}
@@ -44,6 +59,28 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            auth:
+              - 'frontend/auth.ts'
+              - 'frontend/auth.test.ts'
+              - 'frontend/types/next-auth.d.ts'
+              - 'frontend/src/middleware.ts'
+              - 'frontend/src/middleware.test.ts'
+              - 'frontend/src/lib/server/**'
+              - 'frontend/src/app/api/auth/**'
+              - 'frontend/src/app/(auth)/**'
+              - 'frontend/src/app/(private)/layout.tsx'
+              - 'frontend/src/app/(private)/home/**'
+              - 'frontend/e2e/auth-home.spec.ts'
+              - 'frontend/e2e/support/auth-backend-stub.mjs'
+              - 'frontend/playwright.auth.config.ts'
+              - 'frontend/scripts/smoke-auth-failclosed.mjs'
+              - 'frontend/package.json'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/frontend-ci.yml'
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -51,18 +88,37 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        if: steps.filter.outputs.auth == 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Verify authentication dependency security gate
+        run: pnpm check:auth-deps
+      - name: Audit high-severity production dependencies
+        run: pnpm audit --prod --audit-level high
       - name: Lint
         run: pnpm lint
       - name: Typecheck
         run: pnpm typecheck
       - name: Unit tests
         run: pnpm test
+      - name: Verify generated OpenAPI contracts
+        run: pnpm openapi:check
       - name: Build
         env:
           NEXT_PUBLIC_API_BASE_URL: ${{ vars.FRONTEND_API_BASE_URL || 'http://localhost:8000' }}
           AUTH_SECRET: ${{ secrets.FRONTEND_BUILD_AUTH_SECRET }}
           AUTH_TRUST_HOST: "true"
         run: pnpm build
+      - name: Smoke test fail-closed production auth
+        env:
+          AUTH_SMOKE_PORT: 3123
+        run: pnpm smoke:auth-failclosed
+      - name: Authentication end-to-end regression
+        if: steps.filter.outputs.auth == 'true'
+        env:
+          AUTH_STUB_PORT: 18199
+          AUTH_E2E_APP_PORT: 13001
+        run: pnpm test:e2e:auth
 
   build:
     name: Build and push frontend image
@@ -105,6 +161,9 @@ jobs:
           tags: ${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Verify non-root frontend image runtime
+        run: |
+          sh frontend/scripts/check-image-runtime.sh "${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}"
 
   deploy-dev:
     name: Deploy frontend to dev

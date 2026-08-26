@@ -15,7 +15,7 @@ def _search_unusable_hook(
 ) -> _UnusableSearchOutputError | None:
     if not result:
         return _UnusableSearchOutputError(
-            f"{provider_name} returned no results"
+            f"unusable search output: {provider_name} returned no results"
         )
     return None
 

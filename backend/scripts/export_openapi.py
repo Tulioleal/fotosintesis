@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -10,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.main import app  # noqa: E402
+from scripts.check_openapi_diff import current_openapi, render_openapi  # noqa: E402
 
 
 def main() -> None:
@@ -20,7 +19,7 @@ def main() -> None:
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(app.openapi(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.write_text(render_openapi(current_openapi()), encoding="utf-8")
 
 
 if __name__ == "__main__":

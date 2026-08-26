@@ -613,3 +613,235 @@ Runtime botanical retrieval, trusted web fallback, and fallback evidence acquisi
 
 - **WHEN** an assistant chat request includes only `plant` and retrieval or acquisition is needed in a legacy flow that permits plant-only confirmed context
 - **THEN** RAG retrieval, trusted web fallback, and fallback evidence acquisition use `plant` as the plant name
+
+### Requirement: Durable validated assistant claim ingestion
+
+The system SHALL persist normalized source-supported assistant claims through a durable `ingest_validated_claims` job instead of in-process background tasks. Enqueueing SHALL NOT delay execution of the ingestion handler before returning the assistant response, and the handler MUST preserve the existing trusted-source, final-judge support, rollback, chunking, embedding, and indexing rules.
+
+#### Scenario: Assistant emits validated ingestion claims
+- **WHEN** the assistant persists a response with one or more normalized ingestion claims supported by the final semantic judge
+- **THEN** the same request transaction persists a versioned `ingest_validated_claims` job associated with the user and conversation
+- **AND** the assistant response can return without waiting for claim ingestion, embedding, or indexing to execute
+
+#### Scenario: Assistant emits no validated claims
+- **WHEN** the final assistant state contains no normalized source-supported ingestion claims
+- **THEN** the system does not create an `ingest_validated_claims` job
+
+#### Scenario: Assistant persistence rolls back
+- **WHEN** persistence of the assistant response and its enqueue operation rolls back
+- **THEN** no ingestion job from that failed response becomes eligible for execution
+
+### Requirement: Idempotent validated claim persistence
+
+The durable validated-claim handler SHALL use a stable ingestion identity derived from normalized confirmed taxonomy, source provenance, covered aspects, supported claim, evidence quote, and ingestion policy version so repeated attempts do not duplicate equivalent knowledge documents, chunks, or embeddings.
+
+#### Scenario: Handler retries after claim persistence
+- **WHEN** a validated claim was committed before a worker lost its lease or failed to record job completion
+- **THEN** the next attempt recognizes the persisted ingestion identity
+- **AND** does not create duplicate knowledge documents, chunks, or embeddings for that claim
+
+#### Scenario: Job contains multiple claim outcomes
+- **WHEN** some claims are persisted successfully and other eligible claims cannot be persisted after their allowed handling
+- **THEN** the handler records bounded successful, skipped, and failed counts
+- **AND** can return a `partial` result without placing raw claims or evidence text in job result metadata
+
+#### Scenario: Permanently invalid claim payload
+- **WHEN** a persisted job payload does not satisfy the versioned validated-claim schema
+- **THEN** the handler performs no knowledge persistence for that invalid payload
+- **AND** reports a non-retryable sanitized failure
+
+### Requirement: Durable claim ingestion degradation
+
+Failure or delay of durable validated-claim ingestion MUST NOT retract or block the already persisted user-facing assistant response.
+
+#### Scenario: Worker is unavailable after chat response
+- **WHEN** an assistant response and ingestion job are committed but no worker is available
+- **THEN** the response remains available to the user
+- **AND** the pending job remains eligible when a worker becomes available
+
+#### Scenario: Ingestion exhausts retries
+- **WHEN** durable claim ingestion reaches its maximum attempts without a useful persisted result
+- **THEN** the job remains inspectable as `failed` with bounded failure metadata
+- **AND** the assistant response remains available
+
+### Requirement: Offline aspect-targeted evidence acquisition
+
+The knowledge acquisition system SHALL support non-chat-time confirmed-species acquisition with separate complete `required_aspects` and missing-only `acquisition_aspects`. Search SHALL target only `acquisition_aspects`. When acquisition runs, final combined semantic judging SHALL evaluate all `required_aspects` using local and selected acquired evidence; when acquisition is unnecessary, the normalized all-required local result SHALL establish final coverage without invoking acquisition.
+
+#### Scenario: Offline enrichment requests missing aspects
+- **WHEN** enrichment supplies composite taxonomy, `required_aspects`, and `acquisition_aspects`
+- **THEN** acquisition searches only `acquisition_aspects` using confirmed taxonomy
+- **AND** excludes display names, nicknames, classifier references, and unvalidated free-form names
+
+#### Scenario: Final combined evidence is judged
+- **WHEN** trusted acquired evidence is available
+- **THEN** the combined judge receives every `required_aspect`, local evidence and its normalized result, selected acquired evidence, and source metadata
+- **AND** returns normalized final covered and missing aspects, source support, contradictions, reason, and confidence
+
+#### Scenario: Semantic evidence uses multilingual phrasing
+- **WHEN** evidence directly supports a required aspect using non-English, synonymous, or paraphrased wording
+- **THEN** semantic judging can accept it without hardcoded keyword, translated-term, regex, substring, or token-presence gates
+
+#### Scenario: Acquisition adds no answerable support
+- **WHEN** trusted search and safe page fetching produce no accepted support for `acquisition_aspects`
+- **THEN** acquisition returns internal `insufficient`
+- **AND** does not create an unsupported knowledge document
+
+### Requirement: Explicit enrichment evidence metadata ownership
+
+The system SHALL persist accepted enrichment evidence through separate immutable content, individual aspect-support, validation-run, and bounded job-result records. Required, covered, and missing aspect sets SHALL belong to validation runs rather than content-document identity.
+
+#### Scenario: Accepted content document is persisted
+- **WHEN** final judging returns source support for a claim
+- **THEN** the content document stores composite species identity, canonical source and domain, source version, content hash, immutable claim/quote content, required `source_retrieved_at`, nullable `source_published_at`, and enrichment provenance
+
+#### Scenario: Individual aspect support is persisted
+- **WHEN** a content document supports one or more canonical aspects
+- **THEN** each supported aspect has an idempotent association containing support confidence and review status
+
+#### Scenario: Validation run is persisted
+- **WHEN** semantic validation completes with accepted support
+- **THEN** the validation record stores policy version, required aspects, covered aspects, missing aspects, answerability status, judge confidence, and validation metadata
+
+#### Scenario: Bounded job result is persisted
+- **WHEN** enrichment reaches `complete` or useful `partial`
+- **THEN** the job result stores bounded aggregate covered and missing identifiers, counts, limitations, and lifecycle outcome
+- **AND** does not duplicate immutable content or validation metadata
+
+#### Scenario: Source publication date is unknown
+- **WHEN** accepted evidence has no reliable publication date
+- **THEN** `source_published_at` is null
+- **AND** `source_retrieved_at` remains required
+
+#### Scenario: Unsupported acquired content is excluded
+- **WHEN** acquired content is absent from normalized final source support or final judging is `insufficient` or `contradictory`
+- **THEN** the system does not persist, chunk, embed, or index that content
+
+#### Scenario: Full fetched page is available
+- **WHEN** trusted page fetching returns a complete source body
+- **THEN** the system persists small contextualized source-supported claims rather than the full page by default
+
+### Requirement: Enrichment evidence convergence and retrieval
+
+Content documents SHALL converge by composite species identity, canonical source, source version, and content hash. Individual aspect support SHALL converge by content and canonical aspect. Source version SHALL be provenance and content-identity metadata, not an evidence-eligibility rule. Accepted content SHALL be embedded and indexed once through the existing vector path and SHALL be retrievable by later assistant requests.
+
+#### Scenario: Equivalent evidence is ingested repeatedly
+- **WHEN** retries submit the same content and aspect support
+- **THEN** the system reuses the document, aspect associations, chunks, embeddings, and vector nodes
+
+#### Scenario: Policy version changes
+- **WHEN** unchanged content and aspect support are accepted under a later policy
+- **THEN** later validation provenance is retained
+- **AND** content, aspect associations, chunks, embeddings, and vector nodes are not duplicated
+
+#### Scenario: Accepted evidence becomes retrievable
+- **WHEN** relational persistence and vector indexing complete
+- **THEN** later assistant retrieval for the same composite species and covered aspect can find the evidence with source, date, confidence, review, and validation provenance
+
+#### Scenario: Vector indexing fails after relational persistence
+- **WHEN** accepted evidence commits but indexing fails transiently
+- **THEN** retry converges through stable identities without duplicating relational evidence
+
+#### Scenario: Updated source is ingested
+- **WHEN** source version or accepted content hash changes
+- **THEN** the system may create a new content version
+- **AND** preserves prior source and validation records
+
+### Requirement: Enrichment source-support binding without lexical authority
+
+Offline enrichment evidence persistence SHALL bind normalized semantic source support to supplied canonical source packages without using exact quote substring, keyword, regex, translated-term, token-presence, or language-specific matching as evidence-coverage authority. Deterministic checks SHALL remain limited to schema validity, canonical requested aspects, source identity, trust status, non-empty claim and quote, and safety thresholds.
+
+#### Scenario: Judge returns source-bound semantic paraphrase
+- **WHEN** final combined judging accepts a requested aspect from a supplied trusted source and returns a non-empty paraphrased evidence quote
+- **THEN** the support is not rejected solely because the quote is not an exact substring of normalized source text
+
+#### Scenario: Judge returns structurally invalid support
+- **WHEN** final combined judging omits canonical requested aspects, a supplied source identity, a non-empty claim, or a non-empty evidence quote
+- **THEN** that support is excluded from persistence and indexing
+
+### Requirement: Enrichment aspect metadata repair on reuse
+
+Reused enrichment evidence SHALL expose the complete relationally accepted canonical aspect set to vector indexing after every successful aspect-association update. Vector metadata refresh SHALL use stable node identities and MUST NOT duplicate content, chunks, embeddings, or nodes.
+
+#### Scenario: Reused content receives additional support
+- **WHEN** an existing enrichment document receives an idempotent association for an additional canonical aspect
+- **THEN** its vector retrieval metadata is refreshed from authoritative relational state
+- **AND** later retrieval filtered by that aspect can find the existing document
+
+#### Scenario: Vector refresh retries
+- **WHEN** vector metadata refresh fails after relational support commits
+- **THEN** retry converges the stable vector nodes from current relational metadata
+- **AND** does not duplicate relational or vector effects
+
+### Requirement: Bounded academic trusted page fetching
+
+Trusted page fetching SHALL require HTTPS, an approved source hostname before and after redirects, bounded redirects, a request timeout, supported text content types, and a bounded response body. The fetcher MUST read no more than the configured maximum bytes plus one overflow-detection byte before rejecting an oversized response.
+
+#### Scenario: Trusted page is within bounds
+
+- **WHEN** an approved HTTPS page and its redirects remain approved and return a supported bounded response
+- **THEN** the fetcher returns extracted content and final source metadata
+
+#### Scenario: Response exceeds the byte limit
+
+- **WHEN** a response contains more than the configured maximum bytes
+- **THEN** the fetcher stops after the overflow-detection byte
+- **AND** rejects the content without buffering the complete response
+
+#### Scenario: Redirect leaves approved sources
+
+- **WHEN** a trusted page redirects to HTTP or an unapproved hostname
+- **THEN** the fetched content is rejected
+
+### Requirement: Deterministic new source identity
+
+New enrichment evidence SHALL use one deterministic normalized HTTPS source URL for trust checks, judge source binding, persistence, and content identity. Normalization SHALL lowercase the hostname, remove fragments and default HTTPS ports, use the final approved redirect URL, and retain semantically significant path and query data. Historical source identities MUST NOT be rewritten by this change.
+
+#### Scenario: Equivalent basic URL forms are acquired
+
+- **WHEN** new source URLs differ only by hostname case, fragment, empty path, or default HTTPS port
+- **THEN** they converge on one source identity
+
+#### Scenario: Distinct path or query is acquired
+
+- **WHEN** source URLs differ in path or ordered query values
+- **THEN** normalization preserves that distinction
+
+### Requirement: Provenance for fetched enrichment content
+
+Accepted fetched evidence SHALL retain final source URL, retrieval time, nullable publication time, and stable source version. Missing or unreliable publication metadata SHALL remain null rather than being invented.
+
+#### Scenario: Fetch has stable version metadata
+
+- **WHEN** a successful fetch supplies usable source-version metadata
+- **THEN** accepted evidence stores that version and retrieval timestamp
+
+#### Scenario: Publication time is unavailable
+
+- **WHEN** no reliable publication time is supplied
+- **THEN** accepted evidence stores a null publication time
+- **AND** remains eligible under policy v1 because policy v1 has no age-expiry rule
+
+### Requirement: Evidence-change signals after accepted ingestion
+
+The system SHALL emit an evidence-change signal after accepted evidence ingestion commits, describing the affected composite species identity and canonical aspects, so profile refresh can determine which sections depend on the change. The signal MUST be transactional with the accepted-ingestion commit and MUST NOT expose evidence content or raw payloads.
+
+#### Scenario: Accepted evidence emits a change signal
+
+- **WHEN** accepted enrichment evidence commits for a composite species
+- **THEN** the system records an evidence-change signal for that species and the changed canonical aspects in the same transaction
+
+#### Scenario: Change signal scopes to changed aspects
+
+- **WHEN** accepted evidence supports a subset of canonical aspects
+- **THEN** the change signal identifies only those changed aspects
+
+#### Scenario: Change signal excludes evidence content
+
+- **WHEN** an evidence-change signal is recorded
+- **THEN** it contains species identity and canonical aspects without raw evidence content or job payloads
+
+#### Scenario: Rolled-back ingestion emits no signal
+
+- **WHEN** accepted evidence ingestion rolls back
+- **THEN** no evidence-change signal becomes eligible for refresh

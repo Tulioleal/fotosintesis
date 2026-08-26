@@ -1,11 +1,15 @@
 from math import sqrt
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tables import (
+    enrichment_validation_evidence,
+    enrichment_validation_runs,
     knowledge_chunks,
+    knowledge_document_aspect_supports,
     knowledge_documents,
     knowledge_embeddings,
     knowledge_sources,
@@ -14,11 +18,15 @@ from app.core.settings import Settings, get_settings
 from app.db.repository import RepositoryBase
 from app.knowledge.chunking import chunk_document
 from app.knowledge.schemas import (
+    EnrichmentEvidenceMetadata,
+    EnrichmentEvidenceState,
     KnowledgeChunk,
     KnowledgeDocumentInput,
     KnowledgeRetrievalFilters,
     PersistedKnowledgeDocument,
     ReviewStatus,
+    ValidatedClaimIndexStatus,
+    ValidatedClaimState,
 )
 
 
@@ -32,19 +40,43 @@ class KnowledgeRepository(RepositoryBase):
         document: KnowledgeDocumentInput,
         *,
         chunks: list[KnowledgeChunk] | None = None,
+        commit: bool = True,
+        ingestion_key: str | None = None,
+        document_id: UUID | None = None,
+        validated_claim_index_status: ValidatedClaimIndexStatus | None = None,
+        enrichment: EnrichmentEvidenceMetadata | None = None,
     ) -> PersistedKnowledgeDocument:
-        document_id = uuid4()
-        await self.session.execute(
-            insert(knowledge_documents).values(
-                id=document_id,
-                species_id=document.species_id,
-                scientific_name=document.scientific_name,
-                topic=document.topic,
-                title=document.title,
-                content=document.content,
-                confidence=document.confidence,
-                review_status=document.review_status.value,
+        document_id = document_id or uuid4()
+        insert_values = dict(
+            id=document_id,
+            species_id=document.species_id,
+            scientific_name=document.scientific_name,
+            topic=document.topic,
+            title=document.title,
+            content=document.content,
+            confidence=document.confidence,
+            review_status=document.review_status.value,
+        )
+        if ingestion_key is not None:
+            insert_values["validated_claim_ingestion_key"] = ingestion_key
+        if validated_claim_index_status is not None:
+            insert_values["validated_claim_index_status"] = validated_claim_index_status.value
+        if enrichment is not None:
+            insert_values.update(
+                canonical_species_key=enrichment.canonical_species_key,
+                accepted_gbif_key=enrichment.accepted_gbif_key,
+                normalized_binomial=enrichment.normalized_binomial,
+                canonical_source_url=str(enrichment.canonical_source_url),
+                canonical_source_domain=enrichment.canonical_source_domain,
+                source_version=enrichment.source_version,
+                normalized_content_hash=enrichment.normalized_content_hash,
+                source_retrieved_at=enrichment.source_retrieved_at,
+                source_published_at=enrichment.source_published_at,
+                enrichment_provenance=enrichment.enrichment_provenance,
+                taxonomy_provenance_id=enrichment.taxonomy_provenance_id,
             )
+        await self.session.execute(
+            insert(knowledge_documents).values(**insert_values)
         )
 
         source_ids: dict[str, UUID] = {}
@@ -66,7 +98,7 @@ class KnowledgeRepository(RepositoryBase):
 
         saved_chunks: list[KnowledgeChunk] = []
         for chunk in chunks or chunk_document(document):
-            chunk_id = uuid4()
+            chunk_id = chunk.id or uuid4()
             source_id = source_ids.get(chunk.source_url)
             await self.session.execute(
                 insert(knowledge_chunks).values(
@@ -92,7 +124,8 @@ class KnowledgeRepository(RepositoryBase):
                 )
             )
 
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
         return PersistedKnowledgeDocument(id=document_id, chunks=saved_chunks)
 
     async def add_embeddings(
@@ -102,6 +135,7 @@ class KnowledgeRepository(RepositoryBase):
         embeddings: list[list[float]],
         provider: str,
         model: str | None,
+        commit: bool = True,
     ) -> None:
         if len(chunks) != len(embeddings):
             raise ValueError("Embedding count must match chunk count")
@@ -121,7 +155,8 @@ class KnowledgeRepository(RepositoryBase):
                     embedding_dimension=len(embedding),
                 )
             )
-        await self.session.commit()
+        if commit:
+            await self.session.commit()
 
     def _validate_embedding_dimension(self, embedding: list[float]) -> None:
         expected_dimension = self.settings.embedding_dimension
@@ -168,6 +203,308 @@ class KnowledgeRepository(RepositoryBase):
             )
         return chunks[:limit]
 
+    async def find_document_by_ingestion_key(self, ingestion_key: str) -> UUID | None:
+        row = (
+            await self.session.execute(
+                select(knowledge_documents.c.id).where(
+                    knowledge_documents.c.validated_claim_ingestion_key == ingestion_key
+                )
+            )
+        ).first()
+        return row._mapping["id"] if row else None
+
+    async def get_validated_claim_state(
+        self, ingestion_key: str
+    ) -> ValidatedClaimState | None:
+        document = (
+            await self.session.execute(
+                select(
+                    knowledge_documents.c.id,
+                    knowledge_documents.c.validated_claim_index_status,
+                ).where(
+                    knowledge_documents.c.validated_claim_ingestion_key == ingestion_key
+                )
+            )
+        ).mappings().one_or_none()
+        if document is None:
+            return None
+        if document["validated_claim_index_status"] is None:
+            raise ValueError("validated claim document is missing index status")
+
+        rows = (
+            await self.session.execute(
+                select(
+                    knowledge_chunks,
+                    knowledge_embeddings.c.embedding.label("stored_embedding"),
+                    knowledge_embeddings.c.provider.label("embedding_provider"),
+                    knowledge_embeddings.c.model.label("embedding_model"),
+                )
+                .join(
+                    knowledge_embeddings,
+                    knowledge_embeddings.c.chunk_id == knowledge_chunks.c.id,
+                )
+                .where(knowledge_chunks.c.document_id == document["id"])
+                .order_by(knowledge_chunks.c.chunk_index)
+            )
+        ).mappings().all()
+        if not rows:
+            raise ValueError("validated claim document has no persisted chunks and embeddings")
+
+        return ValidatedClaimState(
+            document_id=document["id"],
+            index_status=ValidatedClaimIndexStatus(
+                document["validated_claim_index_status"]
+            ),
+            chunks=[_row_to_chunk(row) for row in rows],
+            embeddings=[list(row["stored_embedding"]) for row in rows],
+            embedding_provider=rows[0]["embedding_provider"],
+            embedding_model=rows[0]["embedding_model"],
+        )
+
+    async def get_enrichment_evidence_state(
+        self,
+        metadata: EnrichmentEvidenceMetadata,
+    ) -> EnrichmentEvidenceState | None:
+        document_id = await self.session.scalar(
+            select(knowledge_documents.c.id).where(
+                knowledge_documents.c.canonical_species_key
+                == metadata.canonical_species_key,
+                knowledge_documents.c.canonical_source_url
+                == str(metadata.canonical_source_url),
+                knowledge_documents.c.source_version == metadata.source_version,
+                knowledge_documents.c.normalized_content_hash
+                == metadata.normalized_content_hash,
+            )
+        )
+        if document_id is None:
+            return None
+        return await self.get_enrichment_evidence_state_by_document_id(document_id)
+
+    async def get_enrichment_evidence_state_by_document_id(
+        self,
+        document_id: UUID,
+        *,
+        for_update: bool = False,
+    ) -> EnrichmentEvidenceState | None:
+        """Load authoritative enrichment state for a stable document identity.
+
+        When ``for_update`` is set the knowledge document row is locked with
+        ``SELECT ... FOR UPDATE`` so concurrent aspect mutation and vector
+        refresh serialize on the same stable content. The chunk ``covered_aspects``
+        metadata is always recomputed from the relational aspect-support table
+        and never taken from cached chunk JSON.
+        """
+        document_statement = select(knowledge_documents.c.id).where(
+            knowledge_documents.c.id == document_id
+        )
+        if for_update:
+            document_statement = document_statement.with_for_update()
+        found = (await self.session.execute(document_statement)).first()
+        if found is None:
+            return None
+        aspect_rows = (
+            await self.session.execute(
+                select(knowledge_document_aspect_supports.c.aspect).where(
+                    knowledge_document_aspect_supports.c.document_id == document_id
+                )
+            )
+        ).scalars().all()
+        aspects = list(dict.fromkeys(aspect_rows))
+        rows = (
+            await self.session.execute(
+                select(
+                    knowledge_chunks,
+                    knowledge_embeddings.c.embedding.label("stored_embedding"),
+                    knowledge_embeddings.c.provider.label("embedding_provider"),
+                    knowledge_embeddings.c.model.label("embedding_model"),
+                )
+                .join(
+                    knowledge_embeddings,
+                    knowledge_embeddings.c.chunk_id == knowledge_chunks.c.id,
+                )
+                .where(knowledge_chunks.c.document_id == document_id)
+                .order_by(knowledge_chunks.c.chunk_index)
+            )
+        ).mappings().all()
+        if not rows:
+            raise ValueError("enrichment evidence has no persisted chunks and embeddings")
+        chunks = []
+        for row in rows:
+            chunk = _row_to_chunk(row)
+            chunks.append(
+                chunk.model_copy(
+                    update={
+                        "metadata": {
+                            **(chunk.metadata or {}),
+                            "covered_aspects": aspects,
+                        }
+                    }
+                )
+            )
+        return EnrichmentEvidenceState(
+            document_id=document_id,
+            chunks=chunks,
+            embeddings=[list(row["stored_embedding"]) for row in rows],
+            embedding_provider=rows[0]["embedding_provider"],
+            embedding_model=rows[0]["embedding_model"],
+        )
+
+    async def add_enrichment_aspect_supports(
+        self,
+        *,
+        document_id: UUID,
+        aspects: list[str],
+        confidence: float,
+        review_status: ReviewStatus,
+    ) -> None:
+        # Serialize aspect mutation on the stable document row so concurrent
+        # validations for different aspects cannot interleave support writes
+        # or the chunk JSON recomputation. The lock is held until the caller
+        # commits.
+        locked = (
+            await self.session.execute(
+                select(knowledge_documents.c.id)
+                .where(knowledge_documents.c.id == document_id)
+                .with_for_update()
+            )
+        ).first()
+        if locked is None:
+            raise ValueError("enrichment evidence document is not available for association")
+        normalized_aspects = list(dict.fromkeys(aspects))
+        for aspect in normalized_aspects:
+            await self.session.execute(
+                pg_insert(knowledge_document_aspect_supports)
+                .values(
+                    id=uuid4(),
+                    document_id=document_id,
+                    aspect=aspect,
+                    support_confidence=confidence,
+                    review_status=review_status.value,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        knowledge_document_aspect_supports.c.document_id,
+                        knowledge_document_aspect_supports.c.aspect,
+                    ]
+                )
+            )
+        committed_rows = (
+            await self.session.execute(
+                select(knowledge_document_aspect_supports.c.aspect).where(
+                    knowledge_document_aspect_supports.c.document_id == document_id
+                )
+            )
+        ).scalars().all()
+        committed_aspects = list(dict.fromkeys(committed_rows))
+        chunk_rows = (
+            await self.session.execute(
+                select(knowledge_chunks.c.id, knowledge_chunks.c.metadata).where(
+                    knowledge_chunks.c.document_id == document_id
+                )
+            )
+        ).mappings().all()
+        for row in chunk_rows:
+            metadata = dict(row["metadata"] or {})
+            metadata["covered_aspects"] = committed_aspects
+            await self.session.execute(
+                update(knowledge_chunks)
+                .where(knowledge_chunks.c.id == row["id"])
+                .values(metadata=metadata)
+            )
+
+    async def add_enrichment_validation_run(
+        self,
+        *,
+        validation_id: UUID,
+        job_id: UUID,
+        taxonomy_provenance_id: UUID,
+        policy_version: int,
+        required_aspects: list[str],
+        covered_aspects: list[str],
+        missing_aspects: list[str],
+        answerability_status: str,
+        judge_confidence: float,
+        validation_metadata: dict[str, object],
+    ) -> None:
+        """Create the validation run without associating documents.
+
+        Document associations are inserted separately by
+        ``add_enrichment_validation_evidence`` under the Phase B document
+        lock. Repository methods never commit; the caller owns the commit.
+        """
+        await self.session.execute(
+            pg_insert(enrichment_validation_runs)
+            .values(
+                id=validation_id,
+                job_id=job_id,
+                taxonomy_provenance_id=taxonomy_provenance_id,
+                policy_version=policy_version,
+                required_aspects=required_aspects,
+                covered_aspects=covered_aspects,
+                missing_aspects=missing_aspects,
+                answerability_status=answerability_status,
+                judge_confidence=judge_confidence,
+                validation_metadata=validation_metadata,
+            )
+            .on_conflict_do_nothing(index_elements=[enrichment_validation_runs.c.id])
+        )
+
+    async def add_enrichment_validation_evidence(
+        self,
+        *,
+        validation_id: UUID,
+        document_id: UUID,
+    ) -> None:
+        """Insert one idempotent validation-document association.
+
+        Uses the existing unique constraint so a replayed Phase B never
+        duplicates the row. Repository methods never commit; the caller owns
+        the commit.
+        """
+        await self.session.execute(
+            pg_insert(enrichment_validation_evidence)
+            .values(
+                id=uuid4(),
+                validation_run_id=validation_id,
+                document_id=document_id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    enrichment_validation_evidence.c.validation_run_id,
+                    enrichment_validation_evidence.c.document_id,
+                ]
+            )
+        )
+
+    async def mark_validated_claim_index_complete(self, document_id: UUID) -> None:
+        result = await self.session.execute(
+            update(knowledge_documents)
+            .where(
+                knowledge_documents.c.id == document_id,
+                knowledge_documents.c.validated_claim_index_status.in_(
+                    [
+                        ValidatedClaimIndexStatus.pending.value,
+                        ValidatedClaimIndexStatus.complete.value,
+                    ]
+                ),
+            )
+            .values(
+                validated_claim_index_status=ValidatedClaimIndexStatus.complete.value,
+                updated_at=func.now(),
+            )
+        )
+        if result.rowcount != 1:
+            raise ValueError("validated claim document was not available for completion")
+
+    async def set_document_ingestion_key(
+        self, *, document_id: UUID, ingestion_key: str
+    ) -> None:
+        await self.session.execute(
+            update(knowledge_documents)
+            .where(knowledge_documents.c.id == document_id)
+            .values(validated_claim_ingestion_key=ingestion_key)
+        )
+
     async def get_chunks_by_ids(self, chunk_ids: list[UUID]) -> dict[UUID, KnowledgeChunk]:
         if not chunk_ids:
             return {}
@@ -176,7 +513,158 @@ class KnowledgeRepository(RepositoryBase):
                 select(knowledge_chunks).where(knowledge_chunks.c.id.in_(chunk_ids))
             )
         ).all()
-        return {row.id: _row_to_chunk(row._mapping) for row in rows}
+        chunks: dict[UUID, KnowledgeChunk] = {
+            row.id: _row_to_chunk(row._mapping) for row in rows
+        }
+        source_ids = {
+            chunk.source_id for chunk in chunks.values() if chunk.source_id is not None
+        }
+        validation_status_by_source: dict[UUID, str] = {}
+        if source_ids:
+            source_rows = (
+                await self.session.execute(
+                    select(
+                        knowledge_sources.c.id,
+                        knowledge_sources.c.validation_status,
+                    ).where(knowledge_sources.c.id.in_(source_ids))
+                )
+            ).mappings().all()
+            validation_status_by_source = {
+                row["id"]: row["validation_status"] for row in source_rows
+            }
+        for chunk in chunks.values():
+            if chunk.source_id in validation_status_by_source:
+                chunk = chunk.model_copy(
+                    update={
+                        "metadata": {
+                            **chunk.metadata,
+                            "validation_status": validation_status_by_source[chunk.source_id],
+                        }
+                    }
+                )
+                chunks[chunk.id] = chunk
+        enrichment_doc_ids: set[UUID] = set()
+        enrichment_chunk_ids: list[UUID] = []
+        for chunk_id, chunk in chunks.items():
+            if chunk.metadata.get("canonical_species_key"):
+                doc_id = chunk.document_id
+                if doc_id is not None:
+                    enrichment_doc_ids.add(doc_id)
+                    enrichment_chunk_ids.append(chunk_id)
+
+        if not enrichment_doc_ids:
+            return chunks
+
+        doc_rows = (
+            await self.session.execute(
+                select(
+                    knowledge_documents.c.id,
+                    knowledge_documents.c.canonical_species_key,
+                    knowledge_documents.c.accepted_gbif_key,
+                    knowledge_documents.c.normalized_binomial,
+                    knowledge_documents.c.source_retrieved_at,
+                    knowledge_documents.c.source_published_at,
+                    knowledge_documents.c.taxonomy_provenance_id,
+                ).where(knowledge_documents.c.id.in_(enrichment_doc_ids))
+            )
+        ).mappings().all()
+        docs_by_id = {row["id"]: row for row in doc_rows}
+
+        aspect_rows = (
+            await self.session.execute(
+                select(
+                    knowledge_document_aspect_supports.c.document_id,
+                    knowledge_document_aspect_supports.c.aspect,
+                ).where(
+                    knowledge_document_aspect_supports.c.document_id.in_(
+                        enrichment_doc_ids
+                    )
+                )
+            )
+        ).mappings().all()
+        aspects_by_doc: dict[UUID, list[str]] = {}
+        for row in aspect_rows:
+            aspects_by_doc.setdefault(row["document_id"], []).append(row["aspect"])
+
+        validation_rows = (
+            await self.session.execute(
+                select(
+                    enrichment_validation_evidence.c.document_id,
+                    enrichment_validation_runs.c.id.label("validation_run_id"),
+                    enrichment_validation_runs.c.answerability_status,
+                    enrichment_validation_runs.c.covered_aspects,
+                    enrichment_validation_runs.c.created_at.label("validated_at"),
+                )
+                .select_from(enrichment_validation_evidence)
+                .join(
+                    enrichment_validation_runs,
+                    enrichment_validation_runs.c.id
+                    == enrichment_validation_evidence.c.validation_run_id,
+                )
+                .where(
+                    enrichment_validation_evidence.c.document_id.in_(
+                        enrichment_doc_ids
+                    ),
+                    enrichment_validation_runs.c.answerability_status.in_(
+                        ["full", "partial"]
+                    ),
+                )
+            )
+        ).mappings().all()
+        validations_by_doc: dict[UUID, list[dict[str, object]]] = {}
+        for row in validation_rows:
+            validations_by_doc.setdefault(row["document_id"], []).append(
+                {
+                    "validation_run_id": str(row["validation_run_id"]),
+                    "status": row["answerability_status"],
+                    "validated_at": row["validated_at"].isoformat(),
+                    "covered_aspects": list(row["covered_aspects"])
+                    if isinstance(row["covered_aspects"], list)
+                    else [],
+                }
+            )
+
+        for chunk_id in enrichment_chunk_ids:
+            chunk = chunks[chunk_id]
+            doc_id = chunk.document_id
+            if doc_id is None:
+                continue
+            doc = docs_by_id.get(doc_id)
+            if doc is None:
+                continue
+            validations = validations_by_doc.get(doc_id)
+            if not validations:
+                del chunks[chunk_id]
+                continue
+            supported_aspects = aspects_by_doc.get(doc_id, [])
+            metadata = dict(chunk.metadata)
+            metadata.update(
+                {
+                    "canonical_species_key": doc["canonical_species_key"],
+                    "accepted_gbif_key": doc["accepted_gbif_key"],
+                    "normalized_binomial": doc["normalized_binomial"],
+                    "source_retrieved_at": (
+                        doc["source_retrieved_at"].isoformat()
+                        if doc["source_retrieved_at"]
+                        else None
+                    ),
+                    "source_published_at": (
+                        doc["source_published_at"].isoformat()
+                        if doc["source_published_at"]
+                        else None
+                    ),
+                    "taxonomy_provenance_id": (
+                        str(doc["taxonomy_provenance_id"])
+                        if doc["taxonomy_provenance_id"]
+                        else None
+                    ),
+                    "covered_aspects": supported_aspects,
+                    "validation_provenance": validations,
+                }
+            )
+            chunks[chunk_id] = chunk.model_copy(update={"metadata": metadata})
+
+        return chunks
 
 
 def _build_filter_conditions(filters: KnowledgeRetrievalFilters) -> list:
@@ -199,6 +687,26 @@ def _build_filter_conditions(filters: KnowledgeRetrievalFilters) -> list:
         conditions.append(knowledge_chunks.c.metadata["covered_aspects"].contains(filters.covered_aspect))
     if filters.evidence_type:
         conditions.append(knowledge_chunks.c.metadata["evidence_type"].as_string() == filters.evidence_type)
+    if filters.source_provenance:
+        conditions.append(
+            knowledge_chunks.c.metadata["source_provenance"].as_string()
+            == filters.source_provenance
+        )
+    if filters.answerability_status:
+        conditions.append(
+            knowledge_chunks.c.metadata["answerability_status"].as_string()
+            == filters.answerability_status
+        )
+    if filters.canonical_species_key:
+        conditions.append(
+            knowledge_chunks.c.metadata["canonical_species_key"].as_string()
+            == filters.canonical_species_key
+        )
+    if filters.accepted_gbif_key is not None:
+        conditions.append(
+            knowledge_chunks.c.metadata["accepted_gbif_key"].as_string()
+            == str(filters.accepted_gbif_key)
+        )
     if filters.retrieved_after:
         conditions.append(knowledge_chunks.c.retrieved_at >= filters.retrieved_after)
     if filters.retrieved_before:

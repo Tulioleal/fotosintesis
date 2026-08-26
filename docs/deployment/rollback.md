@@ -5,6 +5,23 @@ Database migrations are forward-only for this round; incompatible
 migration failures require a database restore or a reviewed
 forward-fix migration.
 
+## Hardened runtime baseline is retained on rollback
+
+Rollback always redeploys a prior reviewed immutable image and its compatible
+rendered manifests. Because the non-root runtime identity is enforced in both
+the Dockerfile and the Kubernetes security contexts, and because every
+container declares explicit CPU and memory bounds, a rollback to a prior
+reviewed image retains the same non-root execution and resource-governance
+baseline. A rollback never reverts to an unbounded or root-running workload.
+
+If a rolled-back image cannot satisfy a newly incompatible read-only-path
+setting (a library that began writing to a previously read-only root), apply a
+documented emergency exception for that specific workload and path rather than
+removing the baseline entirely. See `hardened-runtime.md` for the writable-path
+inventory and the exception process. The image identity check and the
+rendered-manifest policy checks run against every release, so a rollback image
+is held to the same baseline as any other image.
+
 The image-listing command below uses `PROD_ARTIFACT_REGISTRY_URL` and
 `PROD_GCP_PROJECT_ID`. Bootstrap publishes the project ID, and a
 successful prod `iac.yml` apply publishes the registry URL. Run that
@@ -13,8 +30,8 @@ variables when investigating a dev rollback.
 
 ## Image tag rollback
 
-To roll back the backend or frontend to a previously deployed 40-character
-Git commit SHA without changing any other infrastructure:
+To roll back the backend/worker image pair or frontend to a previously deployed
+40-character Git commit SHA without changing any other infrastructure:
 
 1. Identify the previous tag from the deploy workflow summary of the
    release you want to revert, or by listing image tags in the prod
@@ -30,8 +47,9 @@ Git commit SHA without changing any other infrastructure:
    - `frontend_image_tag: <previous SHA>`
 
 The image is already in the registry (it was the previous production
-release), so no rebuild or promotion is needed. The deploy workflow
-verifies the SHA format, renders manifests, and applies them.
+release), so no rebuild or promotion is needed. The deploy workflow verifies
+the SHA format, renders manifests, runs migrations, and deploys the API and
+worker from the same backend SHA.
 
 ## `kubectl rollout undo`
 
@@ -40,25 +58,43 @@ without changing the image tag input:
 
 ```bash
 kubectl -n <namespace> rollout undo deployment/fotosintesis-backend
+kubectl -n <namespace> rollout undo deployment/fotosintesis-worker
 kubectl -n <namespace> rollout undo deployment/fotosintesis-frontend
 ```
 
-This reverts the Deployment to its previous ReplicaSet's
+This reverts each Deployment to its previous ReplicaSet's
 `spec.template.spec.containers[0].image`. The image must still exist in
 the Artifact Registry; if a previous release cleaned up old tags, this
 command fails with `ImagePullBackOff`.
 
-The default `revisionHistoryLimit` on both Deployments is `5`, so up to
+## Network policy rollback
+
+If the enforced NetworkPolicies disrupt required traffic, the fastest rollback
+is to delete the policy resources (no node churn), which restores default
+allow-all Kubernetes behavior:
+
+```bash
+kubectl delete -f ".generated/k8s/$ENVIRONMENT/rendered/05-network-policies.yaml" \
+  --ignore-not-found
+```
+
+The full disable path (set `dataplane_v2 = false`, apply, and revert) recreates
+the node pools. Both paths, plus the apply ordering and troubleshooting, are
+documented in `network-policies.md` and exercised in development before
+promotion.
+
+The default `revisionHistoryLimit` on the Deployments is `5`, so up to
 five prior revisions are available. Older revisions are garbage-collected
 by Kubernetes and require a fresh image tag.
 
 ## Migration limitations
 
-Migrations are forward-only. The deploy workflow runs migrations
-**before** the backend rollout and waits for the migration Job to
-complete. The backend rollout only proceeds once the migration Job has
-reported `Complete`. This guarantees the new backend never runs against
-an out-of-date schema.
+Migrations are forward-only. The deploy workflow runs a one-shot migration Job
+**before** the backend rollout and waits for its native Kubernetes `Complete`
+condition. The restartable Cloud SQL proxy init sidecar exits with the Pod, so
+Alembic success completes the Job without workflow-managed deletion. The backend
+rollout only proceeds after that completion. This guarantees the new backend
+never runs against an out-of-date schema.
 
 Incompatible migration failures (a migration that adds a column the new
 backend does not expect, or removes data the new backend relies on) are
@@ -76,9 +112,75 @@ not recoverable by image rollback. Two options:
    migration. This is the only path that does not require a database
    restore but it requires a code change.
 
+## Migration 0012: durable enrichment telemetry
+
+Migration `0012_durable_enrichment_telemetry` performs no historical
+backfill. Routine application rollback must not downgrade migration 0012;
+roll back with a telemetry-compatible prior application image or a forward-fix
+migration instead.
+
+The Alembic downgrade for 0012 exists for controlled development/test
+teardown only. Downgrading deletes durable telemetry history and any durable
+metrics created after deployment, so any such downgrade requires explicit
+operator approval. The 0012 downgrade never removes knowledge documents,
+chunks, aspect supports, embeddings, or vector nodes.
+
+After migration 0012 is installed, PostgreSQL enforces observation validity,
+uniqueness, immutability, and existence for every new terminal enrichment
+transition: a terminal enrichment job cannot commit without exactly one
+matching observation, and historical jobs are neither backfilled nor rejected.
+
+## Migration 0013: durable enrichment job progress
+
+Migration `0013_enrichment_job_progress` adds the durable per-job progress
+checkpoint that the worker uses to decide partial versus failed outcomes and
+to derive terminal efficacy observations. Routine application rollback must not
+downgrade migration 0013.
+
+The Alembic downgrade for 0013 exists for controlled development/test teardown
+only. Downgrading loses all durable progress checkpoints, which can change how
+already-exhausted or crashed enrichment jobs are later reconciled (a job with
+accepted evidence that survived as `partial` could be reported as `failed`
+after the checkpoint is gone). The 0013 downgrade never deletes accepted
+knowledge evidence or existing profile snapshots.
+
+## Migration 0014: canonical profile species identity
+
+Migration `0014_profile_canonical_identity` adds the nullable canonical
+identity columns on `plant_profiles` and the partial unique index over
+non-null `canonical_species_key`. Routine application rollback must not
+downgrade migration 0014.
+
+The Alembic downgrade for 0014 exists for controlled development/test teardown
+only. Downgrading loses canonical profile identity metadata and its uniqueness
+constraint, so profiles fall back to display-name lookup and concurrent
+canonical creation may no longer converge on one row. The 0014 downgrade never
+deletes accepted evidence or existing profile snapshots.
+
+Neither the 0013 nor the 0014 downgrade is a routine production rollback path.
+Use image rollback, backup restore, or a forward-fix migration instead, and keep
+`JOBS_PRODUCER_ENABLED=false` when rolling back across these migrations.
+
+## Migration 0020: profile refresh enrichment association
+
+Migration `0020_refresh_enrichment_assoc` adds the durable
+`profile_refresh_enrichment_jobs` causality table that links a profile-refresh
+job to the owner-scoped enrichment job that caused it. Routine application
+rollback must not downgrade migration 0020; roll back with a compatibility
+image or a forward-fix migration instead. Never drop the table while workers may
+write associations — see
+[`background-enrichment-tracker.md#rollback`](../background-enrichment-tracker.md#rollback).
+
 The deploy workflow does not attempt to undo a migration. It always
 runs `alembic upgrade head`. Operators must pick restore or forward-fix
 based on the data loss tolerance for the affected environment.
+
+The API and worker must use the same backend SHA and support every persisted
+payload version still pending or processing. Before an image rollback, verify
+that the previous image is compatible with the current additive schema and
+retains the required handlers. If it is not, keep producers disabled and ship a
+forward-fix image/migration rather than deploying mismatched API and worker
+versions.
 
 ## Operator procedure
 
@@ -86,14 +188,19 @@ For a production incident:
 
 1. Stop further deploys by cancelling any in-flight
    `release.yml` / `deploy.yml` runs.
-2. Identify the last known-good backend and frontend SHAs from the
+2. Disable new enqueueing with `JOBS_PRODUCER_ENABLED=false`. If consumption
+   must also stop, set `JOBS_WORKER_ENABLED=false`; these controls are
+   independent and the disabled worker remains ready after its database check.
+3. Identify the last known-good backend and frontend SHAs from the
    release summary of the last successful run, or from
    `kubectl -n <namespace> get deploy -o jsonpath='{..image}'`.
-3. If the database is in a compatible state, dispatch `deploy.yml`
+4. If the database and persisted payloads are compatible, dispatch `deploy.yml`
    with the previous SHAs. Wait for the rollout and smoke checks to
    pass.
-4. If the database is not in a compatible state, restore from backup
+5. If the database or payload contracts are not compatible, restore from backup
    or write a forward-fix migration per the migration limitations
    above.
-5. Record the rollback in the runbook/incident report and capture the
+6. Confirm the backend, worker, and frontend rollouts. A failed worker rollout
+   fails the workflow and does not update `fotosintesis-release-state`.
+7. Record the rollback in the runbook/incident report and capture the
    relevant workflow run URLs.

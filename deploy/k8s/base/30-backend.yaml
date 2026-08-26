@@ -20,14 +20,31 @@ spec:
         iam.gke.io/workload-identity: fotosintesis-backend
     spec:
       serviceAccountName: fotosintesis-backend
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: __IMAGE_REGISTRY__/backend:__BACKEND_IMAGE_TAG__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8000
           env:
+            - name: HOME
+              value: /tmp
+            - name: PYTHONPYCACHEPREFIX
+              value: /tmp/pycache
             - name: APP_ENV
               valueFrom:
                 configMapKeyRef:
@@ -153,6 +170,16 @@ spec:
                 configMapKeyRef:
                   name: fotosintesis-runtime-config
                   key: EMBEDDING_DIMENSION
+            - name: ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: ENRICHMENT_ACTIVITY_TERMINAL_RETENTION_HOURS
+            - name: ENRICHMENT_ACTIVITY_MAX_ITEMS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: ENRICHMENT_ACTIVITY_MAX_ITEMS
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -165,6 +192,60 @@ spec:
                   name: __RUNTIME_SECRET_NAME__
                   key: gemini-api-key
                   optional: true
+            - name: AUTH_LIMITER_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_ENABLED
+            - name: AUTH_LIMITER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: __AUTH_LIMITER_HMAC_SECRET_KEY__
+            - name: AUTH_LIMITER_ASSERTION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRET_NAME__
+                  key: __AUTH_LIMITER_ASSERTION_SECRET_KEY__
+            - name: AUTH_LIMITER_HMAC_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_HMAC_KEY_VERSION
+            - name: AUTH_LIMITER_MAX_RETRY_AFTER_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_MAX_RETRY_AFTER_SECONDS
+            - name: AUTH_LIMITER_RETENTION_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_RETENTION_SECONDS
+            - name: AUTH_LIMITER_CLEANUP_BATCH_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_CLEANUP_BATCH_SIZE
+            - name: AUTH_LIMITER_PROFILES
+              valueFrom:
+                configMapKeyRef:
+                  name: fotosintesis-runtime-config
+                  key: AUTH_LIMITER_PROFILES
+            - name: JOBS_PRODUCER_ENABLED
+              value: "__JOBS_PRODUCER_ENABLED__"
+            - name: JOBS_MAX_ATTEMPTS_DEFAULT
+              value: "__JOBS_MAX_ATTEMPTS_DEFAULT__"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: __BACKEND_CPU_REQUEST__
+              memory: __BACKEND_MEM_REQUEST__
+            limits:
+              cpu: __BACKEND_CPU_LIMIT__
+              memory: __BACKEND_MEM_LIMIT__
           readinessProbe:
             httpGet:
               path: /health
@@ -182,16 +263,20 @@ spec:
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: __PROXY_CPU_REQUEST__
+              memory: __PROXY_MEM_REQUEST__
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: __PROXY_CPU_LIMIT__
+              memory: __PROXY_MEM_LIMIT__
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -208,3 +293,20 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: fotosintesis-backend
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: fotosintesis-backend
+    app.kubernetes.io/part-of: fotosintesis-ai
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fotosintesis-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

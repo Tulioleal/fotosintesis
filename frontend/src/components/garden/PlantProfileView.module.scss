@@ -56,6 +56,43 @@
   line-height: $line-height-relaxed;
 }
 
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: $space-xs;
+  margin-bottom: $space-xs;
+
+  .sectionTitle {
+    margin-bottom: 0;
+  }
+}
+
+.sectionStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: $color-primary-fixed-dim;
+  color: $color-on-surface;
+  font-family: $font-body-stack;
+  font-size: 0.7rem;
+  font-weight: $font-weight-medium;
+  white-space: nowrap;
+}
+
+.evidenceSummary {
+  display: grid;
+  gap: $space-xs;
+  margin-top: $space-xs;
+}
+
+.snapshotNote {
+  margin: $space-xs 0 0;
+  color: $color-on-surface-variant;
+  font-family: $font-body-stack;
+  font-size: 0.85rem;
+}
+
 .form {
   display: grid;
   gap: $space-sm;

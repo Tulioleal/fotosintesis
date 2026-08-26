@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.observability.logging import get_logger
 
@@ -42,12 +43,15 @@ class FallbackResponseDraft:
 
 class AssistantState(TypedDict, total=False):
     user_id: UUID
+    user_timezone: str | None
     message: str
     plant_hint: str | None
     plant_binomial_name: str | None
     plant_scientific_name: str | None
     operational_plant_name: str | None
     display_plant_name: str | None
+    canonical_species_key: str | None
+    accepted_gbif_key: int | None
     care_classification: Any
     required_aspects: list[str]
     covered_aspects: list[str]
@@ -63,6 +67,7 @@ class AssistantState(TypedDict, total=False):
     out_of_domain: bool
     unsafe: bool
     retrieval: Any
+    retrieved_evidence_ids: list[str]
     web_search_candidates: list[Any]
     web_results: list[Any]
     web_source_validations: list[dict[str, object]]
@@ -83,7 +88,10 @@ class AssistantState(TypedDict, total=False):
     reminder_recurrence: str | None
     reminder_due_at: datetime | None
     reminder_suggestion_requested: bool
+    light_context_relevant: bool
+    light_context: dict | None
     tool_failures: list[str]
+    tool_calls: list[dict[str, object]]
     provider_fallbacks: list[dict]
     total_generation_failure: bool
     generation_failure: Any
@@ -114,12 +122,21 @@ class AnswerabilityResult:
         }
 
 
-def _extract_due_at(message: str) -> datetime | None:
+def _extract_due_at(message: str, user_timezone: str | None = None) -> datetime | None:
     match = re.search(r"(20\d{2}-\d{2}-\d{2})[ T](\d{2}:\d{2})", message)
     if not match:
         return None
     value = f"{match.group(1)}T{match.group(2)}"
-    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+    naive = datetime.fromisoformat(value)
+    if user_timezone:
+        try:
+            return naive.replace(tzinfo=ZoneInfo(user_timezone))
+        except Exception:
+            logger.warning(
+                "assistant_due_at_invalid_timezone",
+                extra={"ctx_user_timezone": user_timezone},
+            )
+    return naive.replace(tzinfo=timezone.utc)
 
 
 def _shorten(text: str, limit: int) -> str:
@@ -135,4 +152,27 @@ def _strip_source_attribution_from_answer(answer: str) -> str:
     answer = re.sub(r"\bSource\s*\d*:\s*https?://\S*", "", answer, flags=re.IGNORECASE)
     answer = re.sub(r"According to\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
     answer = re.sub(r"Seg(ú|u)n\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*,?\s*", "", answer, flags=re.IGNORECASE)
-    return answer
+    return _strip_legacy_section_headers(answer)
+
+
+# Non-semantic format boundary: these literal scaffolding headers belonged to a
+# retired prompt template and must never reach users, whatever the model emits.
+_LEGACY_HEADER_PREFIXES = re.compile(
+    r"(?:^\s*|\s+)(?:what the sources validated|what the sources did not validate|"
+    r"general unvalidated guidance|details that would help)\s*[:\-\u2013]+\s*",
+    re.IGNORECASE,
+)
+
+_LEGACY_INLINE_LABELS = re.compile(
+    r"^\s*(?:gu[ií]a general no validada por las fuentes)\s*:\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_legacy_section_headers(answer: str) -> str:
+    cleaned_lines: list[str] = []
+    for line in answer.splitlines():
+        line = _LEGACY_HEADER_PREFIXES.sub("", line)
+        line = _LEGACY_INLINE_LABELS.sub("", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()

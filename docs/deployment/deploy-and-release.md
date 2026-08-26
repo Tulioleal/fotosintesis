@@ -29,10 +29,13 @@ lower-case hex SHA, including `latest`, branch names, empty values, and
 tag prefixes.
 
 The CI build step tags each image with the GitHub Actions `$GITHUB_SHA`
-exposed at the start of the run. Path filters in the workflow triggers
-limit the registry to immutable artifacts: there is one tag per source
-revision, and the only way to deploy a different image is to push a new
-revision.
+exposed at the start of the run. Tag format alone does not make an image
+immutable. The shared Artifact Registry repository sets
+`docker_config.immutable_tags = true`, so a tag always resolves to the same
+digest and a push of different bytes under an existing SHA fails. If a build
+succeeds but deployment fails, retry `deploy.yml` with the existing tag rather
+than rebuilding that SHA. SHA-tagged images are retained permanently; that
+storage cost is accepted for this university project.
 
 ## Auto dev deploy
 
@@ -108,19 +111,112 @@ Both `deploy.yml` and `release.yml` enforce the following gates:
 4. **Provider API key projection** - the `Verify required provider API
    key secrets` step fails the deploy when a configured provider is
    missing its key.
-5. **Migration completion** - `kubectl wait --for=condition=complete`
-   on `job/fotosintesis-migrations` with a 600-second timeout.
-6. **Backend and frontend rollout** - `kubectl rollout status` with a
-   600-second timeout.
-7. **Backend in-cluster smoke** - a one-off curl pod hits
+5. **Migration completion** - the workflow applies the one-shot migration Job
+     and waits for its native Kubernetes `Complete` condition. The restartable
+     Cloud SQL proxy init sidecar exits with the Pod, so Alembic success can
+     complete the Job without workflow-managed deletion. Native sidecars
+     require Kubernetes 1.29 or newer; the workflow checks the GKE server
+     version before applying the Job. The API, worker, and frontend are not
+     applied until that wait passes.
+6. **Backend, worker, and frontend rollout** - the shared rollout script waits
+   up to 600 seconds for each Deployment. On failure it prints Deployment,
+   ReplicaSet, Pod, current/previous container, Cloud SQL proxy, and event
+    diagnostics before failing the workflow.
+7. **Enrichment worker compatibility** - after migrations, the worker is applied
+   and must become ready with
+   `JOBS_REQUIRED_CONTRACTS=enrich_confirmed_plant:1,refresh_profile:1` before the backend is
+   applied. Worker startup verifies that the exact closed job type and payload
+   version are registered, so confirmation scheduling cannot lead the consumer.
+8. **Backend in-cluster smoke** - a one-off curl pod hits
    `http://fotosintesis-backend.<namespace>.svc.cluster.local:8000/health`.
-8. **Frontend public smoke** - 60 retries against the configured
+9. **Network policy verification** (dev only) - one allowed probe succeeds and
+   one denied probe fails under the namespace default-deny baseline, proving
+   Dataplane V2 enforcement is live. See `network-policies.md`.
+10. **Frontend public smoke** - 60 retries against the configured
    public URL.
+
+## Hardening verification
+
+The hardening baseline is verified both before and during deployment:
+
+- **Image identity check** (`backend/scripts/check-image-runtime.sh`) runs in
+  `backend-ci.yml` after the image is built. It rejects any image that defaults
+  to UID 0 and asserts the documented `10001:10001` non-root identity.
+- **Bounded production-command smoke tests**
+  (`backend/scripts/smoke-image-commands.sh`) run the API, worker, and migration
+  commands under the image's default user with a strict timeout.
+- **Rendered-manifest policy** (`tests/deployment/test_render_hardening.py`) and
+  the Checkov manifest-policy job enumerate every regular container, init
+  container, and native sidecar in both dev and prod and fail on any missing
+  security-context, writable-volume, or CPU/memory declaration. The only
+  policy exception is the `cloud-sql-proxy` supporting container, documented in
+  `hardened-runtime.md`.
+- The deploy workflow's server-side dry-run applies every workload manifest to
+  the Kubernetes API before rollout, so the hardened security contexts and
+  resource fields are validated against the live cluster schema.
+
+The writable-path inventory, resource profiles, tuning process, and the
+rollback guarantee that the non-root and resource baseline is retained are
+documented in `hardened-runtime.md` and `rollback.md`.
 
 The `release.yml` summary step also includes the per-gate results from
 `deploy.yml` (`migration_result`, `rollout_result`,
 `required_keys_result`, `backend_smoke_result`, `frontend_smoke_result`)
 so a single workflow view captures the entire release.
+
+The last-healthy image pair is written to the
+`fotosintesis-release-state` ConfigMap only after migration, all three
+rollouts, and both smoke checks pass. A worker rollout failure therefore fails
+the deployment and cannot replace the last-known-good release record.
+
+## Durable job rollout controls
+
+`JOBS_PRODUCER_ENABLED` and `JOBS_WORKER_ENABLED` are independent repository
+variables. Normal deployment defaults enable both roles:
+
+- `JOBS_PRODUCER_ENABLED=true` allows the API to create durable ingestion jobs.
+- `JOBS_WORKER_ENABLED=true` allows the worker to consume eligible persisted
+  jobs.
+- `JOBS_WORKER_ENABLED=false` keeps the worker process deployed and its
+  readiness listener reporting read-only pause health after PostgreSQL
+  connectivity, required handler contracts, queue metrics, and durable
+  efficacy telemetry queries succeed. Disabled readiness is read-only pause
+  health, not active-consumer readiness: a disabled worker never claims,
+  reconciles, or finalizes jobs.
+
+Use `JOBS_PRODUCER_ENABLED=false` with the worker enabled to drain existing
+backlog without creating more work, or set both switches to `false` for a full
+pause. A `true` producer with a disabled worker is always rejected by the
+deploy workflow because it schedules jobs nobody consumes. Both switches
+disabled is allowed only as an explicitly approved paused deployment
+(`paused_deployment=true`); without that approval the deploy fails. An active
+deployment requires the worker enabled and ready, and the worker readiness
+gate verifies the deployed `JOBS_WORKER_ENABLED=true` plus the required
+`enrich_confirmed_plant:1` contract. Local application defaults remain disabled
+until developers opt in. API and worker Deployments always use the same
+immutable backend SHA so their payload contracts and registered handlers remain
+compatible.
+
+Confirmed-plant enrichment adds a stricter rollout invariant. Its canonical
+identity is accepted GBIF key plus taxonomy-validated normalized binomial, with
+the validated binomial alone only when no key exists. Policy version `1` carries
+separate required, locally covered, acquisition-only and final covered aspect
+sets. It maps full coverage to `complete`, useful subset coverage to `partial`,
+no accepted support to `failed/insufficient_evidence`, transient faults through
+the shared retry telemetry, and permanent contract faults directly to `failed`.
+
+Deploy in this order: additive migration, compatible worker and readiness check,
+then the backend that makes enrichment scheduling mandatory for successful
+confirmation. `JOBS_PRODUCER_ENABLED=false` is a rollout pause, not permission
+to confirm without scheduling. If scheduling is unavailable, confirmation must
+remain temporarily unavailable and its transaction must roll back.
+
+Rollback should retain a backend and worker compatible with
+`enrich_confirmed_plant:1` so already durable jobs can drain. If compatible
+enqueueing cannot remain deployed, disable producers and confirmation rather
+than weakening mandatory scheduling. Preserve additive jobs, associations,
+evidence and provenance, then recover forward with a compatible image or
+forward-fix migration; do not reverse migrations or discard queued work.
 
 ## How to find the deployed image tag
 

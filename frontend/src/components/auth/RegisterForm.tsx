@@ -3,16 +3,17 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Button, Field, Notice } from "@/components/ui";
-import { apiClient } from "@/lib/api/client";
+import { ApiClientError, apiClient } from "@/lib/api/client";
 import { authStyles } from "./AuthShell";
-import { registerSchema, type RegisterFormValues } from "./auth-schemas";
+import { nowMs, registerSchema, type RegisterFormValues } from "./auth-schemas";
 
 export function RegisterForm() {
   const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
+  const [rateLimitedUntil, setRateLimitedUntil] = useState<number | null>(null);
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     reValidateMode: "onBlur",
@@ -23,17 +24,38 @@ export function RegisterForm() {
     formState: { errors, isSubmitting },
   } = form;
 
+  useEffect(() => {
+    if (rateLimitedUntil === null) return;
+    const timer = setInterval(() => {
+      if (nowMs() >= rateLimitedUntil) {
+        setRateLimitedUntil(null);
+        setFormError(null);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [rateLimitedUntil]);
+
   async function onSubmit(values: RegisterFormValues) {
     setFormError(null);
     try {
       await apiClient.register(values);
       router.push("/login?registered=1");
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status === 429) {
+        const retryAfterSeconds = error.retryAfterSeconds ?? 60;
+        setRateLimitedUntil(nowMs() + retryAfterSeconds * 1000);
+        setFormError(
+          "Intentá de nuevo en unos minutos. Demasiados intentos desde esta conexión.",
+        );
+        return;
+      }
       setFormError(
         "No pudimos crear la cuenta. Revisá los datos o intentá con otro correo.",
       );
     }
   }
+
+  const blocked = rateLimitedUntil !== null;
 
   return (
     <form
@@ -44,7 +66,7 @@ export function RegisterForm() {
       <Field
         label="Nombre"
         autoComplete="name"
-        disabled={isSubmitting}
+        disabled={isSubmitting || blocked}
         error={errors.name?.message}
         required
         {...register("name")}
@@ -53,7 +75,7 @@ export function RegisterForm() {
         label="Correo"
         autoComplete="email"
         type="email"
-        disabled={isSubmitting}
+        disabled={isSubmitting || blocked}
         error={errors.email?.message}
         required
         {...register("email")}
@@ -62,7 +84,7 @@ export function RegisterForm() {
         label="Contraseña"
         autoComplete="new-password"
         type="password"
-        disabled={isSubmitting}
+        disabled={isSubmitting || blocked}
         error={errors.password?.message}
         required
         {...register("password")}
@@ -78,7 +100,7 @@ export function RegisterForm() {
           variant="primary"
           size="md"
           fullWidth
-          disabled={isSubmitting}
+          disabled={isSubmitting || blocked}
         >
           {isSubmitting ? "Creando cuenta..." : "Crear cuenta"}
         </Button>

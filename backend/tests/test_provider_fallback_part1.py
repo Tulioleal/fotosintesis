@@ -554,6 +554,7 @@ class TestGeminiSearchNormalization:
         assert _is_internal_redirect_url("https://www.google.com/search?q=test")
         assert _is_internal_redirect_url("https://webcache.googleusercontent.com/search?q=cache")
         assert not _is_internal_redirect_url("https://www.rhs.org.uk/plants")
+        assert not _is_internal_redirect_url("https://example.org/search")
 
     def test_mixed_usable_unusable_citations(self) -> None:
         import types
@@ -661,6 +662,86 @@ class TestGeminiSearchNormalization:
 
         results = _search_results_from_response(response)
         assert len(results) == 0
+
+    def test_google_redirect_query_resolves_only_to_approved_domain(self) -> None:
+        from app.providers.gemini.search import _resolve_grounding_redirect
+
+        redirect = (
+            "https://www.google.com/url?"
+            "q=https%3A%2F%2Fwww.rhs.org.uk%2Fplants%2Ftest"
+        )
+
+        assert _resolve_grounding_redirect(redirect, {"rhs.org.uk"}) == (
+            "https://www.rhs.org.uk/plants/test"
+        )
+        assert _resolve_grounding_redirect(redirect, {"kew.org"}) is None
+
+    def test_google_grounding_api_redirect_resolves_to_approved_domain(self) -> None:
+        from app.providers.gemini.search import _resolve_grounding_redirect
+
+        class FakeResponse:
+            def getheader(self, name: str) -> str | None:
+                return (
+                    "https://powo.science.kew.org/taxon/example"
+                    if name.lower() == "location"
+                    else None
+                )
+
+        class FakeConnection:
+            def request(self, method: str, path: str, headers: dict) -> None:
+                assert method == "GET"
+                assert path == "/grounding-api-redirect/example"
+
+            def getresponse(self) -> FakeResponse:
+                return FakeResponse()
+
+            def close(self) -> None:
+                pass
+
+        resolved = _resolve_grounding_redirect(
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example",
+            {"powo.science.kew.org"},
+            connection_factory=lambda hostname, port: FakeConnection(),
+        )
+
+        assert resolved == "https://powo.science.kew.org/taxon/example"
+
+    def test_normalization_accepts_resolved_grounding_redirect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import types
+        from app.providers.gemini import _search_results_from_response
+
+        redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example"
+        monkeypatch.setattr(
+            "app.providers.gemini.search._resolve_grounding_redirect",
+            lambda url, domains: "https://www.rhs.org.uk/plants/test",
+        )
+        response = types.SimpleNamespace(
+            text="Grounded result",
+            candidates=[
+                types.SimpleNamespace(
+                    grounding_metadata=types.SimpleNamespace(
+                        grounding_chunks=[
+                            types.SimpleNamespace(
+                                web=types.SimpleNamespace(uri=redirect, title="RHS")
+                            )
+                        ],
+                        grounding_supports=[],
+                    )
+                )
+            ],
+        )
+
+        results = _search_results_from_response(
+            response,
+            allowed_domains=["rhs.org.uk"],
+            resolve_redirects=True,
+        )
+
+        assert [result.url for result in results] == [
+            "https://www.rhs.org.uk/plants/test"
+        ]
 
 
 # ---------------------------------------------------------------------------

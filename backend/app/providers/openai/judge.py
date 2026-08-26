@@ -20,8 +20,8 @@ def _judge_prompt(payload: dict[str, Any], rubric: dict[str, Any]) -> str:
     return (
         "Evaluate the assistant output against the rubric. "
         "Return only valid JSON matching the rubric's expected_output.\n"
-        f"Payload:\n{json.dumps(payload, ensure_ascii=True, sort_keys=True)}\n"
-        f"Rubric:\n{json.dumps(rubric, ensure_ascii=True, sort_keys=True)}"
+        f"Payload:\n{json.dumps(payload, default=str, ensure_ascii=True, sort_keys=True)}\n"
+        f"Rubric:\n{json.dumps(rubric, default=str, ensure_ascii=True, sort_keys=True)}"
     )
 
 

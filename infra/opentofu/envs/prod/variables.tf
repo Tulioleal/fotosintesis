@@ -45,7 +45,13 @@ variable "gke_location" {
 
 variable "deletion_protection" {
   type    = bool
-  default = true
+  default = false
+}
+
+variable "dataplane_v2" {
+  type        = bool
+  default     = true
+  description = "Enable GKE Dataplane V2 (ADVANCED_DATAPATH) for built-in Kubernetes NetworkPolicy enforcement. Enabling it on an existing cluster recreates the node pools. The prod env defaults to enforcement enabled."
 }
 
 variable "database_instance_name" {
@@ -111,6 +117,8 @@ variable "secret_ids" {
   default = [
     "fotosintesis-database-url",
     "fotosintesis-auth-secret",
+    "fotosintesis-auth-limiter-hmac-secret",
+    "fotosintesis-auth-limiter-assertion-secret",
     "fotosintesis-openai-api-key",
     "fotosintesis-gemini-api-key",
   ]

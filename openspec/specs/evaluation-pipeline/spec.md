@@ -1,17 +1,22 @@
 ## Purpose
 
 Define the offline evaluation pipeline for measuring MVP AI flows across retrieval, generation, judge quality, tool behavior, visual identification and reporting.
-
 ## Requirements
-
 ### Requirement: Evaluation dataset and runner
 
-The system SHALL include an evaluation dataset format, an initial 50-case seed and a runner for target MVP flows.
+The system SHALL include an evaluation dataset format, an initial 50-case seed and a runner for target MVP flows. Run approval SHALL define its aggregate pass-rate denominator as the supported cases only. Each evaluation profile SHALL configure a minimum supported-case ratio, and a run whose supported share falls below that ratio SHALL fail as a coverage failure independent of scores.
 
-#### Scenario: Evaluation run started
+#### Scenario: Pass rate uses supported cases as denominator
 
-- **WHEN** the evaluation runner executes against the dataset
-- **THEN** the system evaluates assistant RAG, profile generation, revive plant, incremental knowledge, reminders agent, light context and plant identification cases
+- **WHEN** a run completes with passing cases, failing cases, and unsupported cases
+- **THEN** the aggregate pass rate divides passing supported cases by total supported cases
+- **AND** unsupported cases appear only as reconciled exclusions with reasons
+
+#### Scenario: Dataset shrinkage fails the run
+
+- **WHEN** the supported-case ratio falls below the profile's configured minimum
+- **THEN** the run fails with an explicit coverage failure naming the ratio and the unsupported reasons
+- **AND** no approval verdict based on scores is emitted
 
 ### Requirement: Retrieval and generation metrics
 
@@ -42,12 +47,13 @@ The system SHALL calculate tool_success_rate, unnecessary_web_search_rate, faile
 
 ### Requirement: Evaluation report
 
-The system SHALL persist runs, scores, failures and per-flow summaries and generate a final evaluation report.
+The system SHALL persist runs, scores, failures and per-flow summaries and generate a final evaluation report. Each executed run SHALL retain its report and machine-readable results as versioned artifacts under a runs directory.
 
-#### Scenario: Report generated
+#### Scenario: Run artifacts are retained
 
-- **WHEN** an evaluation run completes
-- **THEN** the system produces a report with protocol, metrics, prompts, results, failures, limitations and conclusions
+- **WHEN** a run completes in any mode
+- **THEN** the runner writes `report.md` and a machine-readable result file for that run id under the runs directory
+- **AND** retention of historical run directories is bounded by configured policy
 
 ### Requirement: Gemini-backed judge evaluation
 
@@ -62,3 +68,4 @@ The evaluation pipeline SHALL support using the configured Gemini judge provider
 
 - **WHEN** the judge provider is configured as Gemini and the model provider is configured as mock, OpenAI or another provider
 - **THEN** evaluation judging uses Gemini without changing the provider used for runtime assistant generation
+

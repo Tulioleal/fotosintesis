@@ -1,15 +1,18 @@
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.assistant import router as assistant_router
+from app.api.jobs import router as jobs_router
 from app.api.auth import router as auth_router
 from app.api.home import router as home_router
 from app.api.identifications import router as identifications_router
 from app.api.light_measurements import router as light_measurements_router
 from app.api.profile_garden import router as profile_garden_router
 from app.api.reminders import router as reminders_router
+from app.api.search import router as search_router
 from app.core.settings import get_settings
 from app.observability.logging import configure_logging
 from app.observability.metrics import metrics_registry
@@ -38,16 +41,34 @@ class CorsApplication:
 def create_app() -> CorsApplication:
     settings = get_settings()
     configure_logging(settings.log_level)
+    # Validate the complete limiter policy at startup so an invalid production
+    # profile prevents boot rather than failing on the first auth request.
+    settings.limiter_policy()
     app = FastAPI(title=settings.app_name)
 
     app.middleware("http")(request_observability_middleware)
+
+    @app.middleware("http")
+    async def private_activity_cache_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Any]]
+    ) -> Any:
+        # Owner-scoped activity data must never be stored by any cache layer,
+        # including on error statuses produced before the route body runs.
+        response = await call_next(request)
+        if request.url.path.endswith("/jobs/enrichment-activity"):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
     app.include_router(auth_router)
     app.include_router(home_router)
     app.include_router(identifications_router)
     app.include_router(profile_garden_router)
     app.include_router(assistant_router)
+    app.include_router(jobs_router)
     app.include_router(reminders_router)
     app.include_router(light_measurements_router)
+    app.include_router(search_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, object]:

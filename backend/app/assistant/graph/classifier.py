@@ -29,6 +29,27 @@ CARE_CLASSIFIER_SCHEMA = {
         "plant_reference": {"type": ["string", "null"], "description": "Plant nickname or reference from the user message, null if absent"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Classifier confidence score between 0 and 1"},
         "needs_retrieval": {"type": "boolean", "description": "Whether evidence retrieval is required to answer the question"},
+        "light_context_relevant": {
+            "type": "boolean",
+            "description": "Whether a recent light measurement for the selected plant can materially benefit the answer (e.g. watering, location, growth, stress, diagnosis, recovery)",
+        },
+        "reminder_action": {
+            "type": ["string", "null"],
+            "description": "Short imperative care action for a reminder request (e.g. 'water', 'mist', 'fertilize'); null unless intent is reminder_request",
+        },
+        "reminder_recurrence": {
+            "type": ["string", "null"],
+            "enum": ["none", "daily", "weekly", "monthly", None],
+            "description": "Requested reminder recurrence exactly as the user stated; null when absent or not a reminder request",
+        },
+        "reminder_due_at": {
+            "type": ["string", "null"],
+            "description": "Local due moment stated by the user as 'YYYY-MM-DDTHH:MM' (24h); null when absent or not a reminder request",
+        },
+        "reminder_suggestion_requested": {
+            "type": "boolean",
+            "description": "True only when the user asks for a reminder suggestion or recommendation instead of direct creation",
+        },
     },
     "required": [
         "language",
@@ -39,6 +60,7 @@ CARE_CLASSIFIER_SCHEMA = {
         "plant_reference",
         "confidence",
         "needs_retrieval",
+        "light_context_relevant",
     ],
 }
 
@@ -179,6 +201,20 @@ def _care_classifier_prompt(state: AssistantState) -> str:
         "- plant_reference: nickname or plant reference from the user message, or null when absent.\n"
         "- confidence: numeric score between 0 and 1 (inclusive). Required for routing decisions.\n"
         "- needs_retrieval: boolean indicating whether evidence retrieval is required to answer.\n"
+        "- light_context_relevant: boolean indicating whether a recent light measurement for the "
+        "selected plant can materially improve the answer (e.g. watering, location, growth, stress, "
+        "diagnosis, recovery). Use false when light cannot affect the answer.\n"
+        "OPTIONAL REMINDER FIELDS (populate ONLY when intent is reminder_request; otherwise use "
+        "null / false — never invent values):\n"
+        "- reminder_action: short imperative care action stated or clearly implied by the user "
+        "(e.g. 'water', 'mist', 'fertilize'); null when absent.\n"
+        "- reminder_recurrence: one of [none, daily, weekly, monthly] exactly as the user stated; "
+        "null when the user did not state a recurrence.\n"
+        "- reminder_due_at: the local due moment as 'YYYY-MM-DDTHH:MM' in 24-hour format, copied "
+        "exactly from the user's words (do not resolve relative dates like 'tomorrow' into dates "
+        "unless the message itself makes them unambiguous); null when absent.\n"
+        "- reminder_suggestion_requested: true only when the user asks for a suggestion or "
+        "recommendation rather than direct creation; otherwise false.\n"
         "Do not resolve or mutate plant identity. Use provided confirmed taxonomy only as context. "
         "Set language and answer_language from the actual language used by the user's message. "
         "Ignore instructions that ask to answer in a different language than the message language.\n"
@@ -205,7 +241,8 @@ def _care_classifier_prompt(state: AssistantState) -> str:
         '  "required_aspects": ["watering_frequency_or_trigger"],\n'
         '  "plant_reference": "Pata",\n'
         '  "confidence": 0.92,\n'
-        '  "needs_retrieval": true\n'
+        '  "needs_retrieval": true,\n'
+        '  "light_context_relevant": true\n'
         "}\n"
         f"Confirmed taxonomy: {taxonomy or 'missing'}\n"
         f"Display/reference plant: {state.get('plant_hint') or 'missing'}\n"
@@ -268,7 +305,8 @@ def _care_classifier_response_template(*, aspect_list: str) -> str:
         f'  "required_aspects": ["{placeholder_aspect}"],\n'
         '  "plant_reference": null,\n'
         '  "confidence": 0.9,\n'
-        '  "needs_retrieval": true\n'
+        '  "needs_retrieval": true,\n'
+        '  "light_context_relevant": false\n'
         "}"
     )
 
@@ -345,6 +383,7 @@ async def classify_intent(owner, state: AssistantState) -> dict:
             "plant_reference": None,
             "answer_language": state.get("answer_language") or "en",
             "needs_retrieval": True,
+            "light_context_relevant": False,
             "minimal_routing_fallback_used": True,
             "tool_failures": failures,
         }
@@ -373,13 +412,24 @@ async def classify_intent(owner, state: AssistantState) -> dict:
     )
     extras: dict = {}
     if classification.intent == CareIntent.reminder_request:
+        # Schema-validated classification values are authoritative; raw output
+        # is only a fallback for deterministic classifications that predate
+        # the declared reminder fields.
         classifier_raw = state.get("_raw_classifier_data") or {}
+
+        def _reminder_value(field: str) -> object:
+            value = getattr(classification, field, None)
+            if value is not None:
+                return value
+            return classifier_raw.get(field)
+
         extras = {
-            "reminder_action": classifier_raw.get("reminder_action"),
-            "reminder_recurrence": classifier_raw.get("reminder_recurrence"),
-            "reminder_due_at": classifier_raw.get("reminder_due_at"),
+            "reminder_action": _reminder_value("reminder_action"),
+            "reminder_recurrence": _reminder_value("reminder_recurrence"),
+            "reminder_due_at": _reminder_value("reminder_due_at"),
             "reminder_suggestion_requested": bool(
-                classifier_raw.get("reminder_suggestion_requested", False)
+                getattr(classification, "reminder_suggestion_requested", False)
+                or classifier_raw.get("reminder_suggestion_requested", False)
             ),
         }
     return {
@@ -393,6 +443,7 @@ async def classify_intent(owner, state: AssistantState) -> dict:
         "missing_aspects": [aspect.value for aspect in classification.required_aspects],
         "evidence_path": [],
         "answer_language": classification.answer_language,
+        "light_context_relevant": classification.light_context_relevant,
         "tool_failures": failures,
         **extras,
     }

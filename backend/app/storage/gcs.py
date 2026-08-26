@@ -4,8 +4,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from app.storage.base import ObjectStorage
-from app.storage.models import ObjectUpload, StoredObject
+from app.storage.base import ObjectNotFoundError, ObjectStorage
+from app.storage.models import ObjectContent, ObjectUpload, StoredObject
 
 
 class GCSObjectStorage(ObjectStorage):
@@ -62,6 +62,21 @@ class GCSObjectStorage(ObjectStorage):
             created_at=datetime.now(timezone.utc),
             expires_at=upload.expires_at,
         )
+
+    async def get_object(self, path: str) -> ObjectContent:
+        def _download() -> ObjectContent:
+            from google.cloud.exceptions import NotFound
+
+            bucket = self._ensure_bucket()
+            blob = bucket.blob(path)
+            try:
+                content = blob.download_as_bytes()
+            except NotFound as exc:
+                raise ObjectNotFoundError(path) from exc
+            mime_type = blob.content_type or "application/octet-stream"
+            return ObjectContent(content=content, mime_type=mime_type, size_bytes=len(content))
+
+        return await asyncio.to_thread(_download)
 
     async def delete_object(self, path: str) -> None:
         def _delete() -> None:

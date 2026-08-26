@@ -39,11 +39,17 @@ files.
 | Frontend image build (`frontend:<sha>`) | pass | <run-url> | frontend-ci.yml build job (skip if path filter excluded it). |
 | Backend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
 | Frontend image tag = `<sha>` | pass | <sha> | From `Resolve and validate image tags` summary. |
+| Dev Artifact Registry immutable tags | pending | <repository describe output> | Expect `dockerConfig.immutableTags=True`. |
+| Kubernetes server-side admission | pending | <run-url or command output> | All backend, frontend, migration, and worker manifests. |
+| Worker rollout | pending | <run-url> | `fotosintesis-worker` rollout completed. |
+| Worker `/ready` probe | pending | <run-url> | Worker container reported ready after queue validation. |
+| Producer mode | pending | `JOBS_PRODUCER_ENABLED=<value>` | Normal operation requires `true`. |
 | Migration Job completion | pass | <run-url> | deploy.yml migration step. |
 | Backend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Required provider API keys projected | pass | <run-url> | deploy.yml required-keys step. |
 | Backend in-cluster smoke (`/health`) | pass | <run-url> | deploy.yml backend-smoke step. |
+| Network policy verification (dev) | pass | <run-url> | deploy.yml network-policy step: allowed probe succeeds, denied probe fails. |
 | Frontend public smoke (200) | pass | <run-url> | deploy.yml frontend-smoke step. hostname-https requires DNS; ip-http requires the static IP to be reachable. |
 
 ## Prod release
@@ -58,9 +64,14 @@ files.
 | DNS points at the prod static IP | pass | <hostname + lookup> | Required for `hostname-https`. |
 | Prod IaC `iac.yml` plan/apply | pass | <run-url> | Uses `PROD_IAC_SERVICE_ACCOUNT_EMAIL`; successful apply runs output sync. |
 | Prod output variables synchronized | pass | <iac apply run-url> | Publishes `PROD_ARTIFACT_REGISTRY_URL`, storage, static IP, and other non-sensitive outputs. |
+| Prod Artifact Registry immutable tags | pending | <repository describe output> | Expect `dockerConfig.immutableTags=True`. |
 | Verify source images (dev tags) | pass | <run-url> | release.yml verify-source-images. |
 | Promote images to prod registry | pass | <run-url> | release.yml promote-images. |
 | Deploy prod (manifests) | pass | <run-url> | release.yml deploy-prod. |
+| Kubernetes server-side admission | pending | <run-url> | All workload manifests admitted. |
+| Worker rollout | pending | <run-url> | `fotosintesis-worker` rollout completed. |
+| Worker `/ready` probe | pending | <run-url> | Worker container reported ready after queue validation. |
+| Producer mode | pending | `JOBS_PRODUCER_ENABLED=<value>` | Normal operation requires `true`. |
 | Migration Job completion | pass | <run-url> | deploy.yml migration step. |
 | Backend rollout | pass | <run-url> | deploy.yml rollout step. |
 | Frontend rollout | pass | <run-url> | deploy.yml rollout step. |

@@ -23,7 +23,7 @@ from app.assistant.graph import (
 )
 from app.assistant import service as assistant_service
 from app.assistant.schemas import AssistantChatRequest, AssistantMessage
-from app.assistant.service import AssistantService, _ingest_validated_claims_background
+from app.assistant.service import AssistantService
 from app.assistant.tools import AssistantTools, ToolResult
 from app.auth.tables import conversation_messages
 from app.knowledge.acquisition import TrustedSourceValidator
@@ -226,7 +226,7 @@ async def test_multilingual_pest_question_routes_by_schema_state_not_keywords() 
 
     disclaimed_prompts = [
         p for p in tools.model_prompts
-        if "What the sources validated" in p and "General unvalidated guidance" in p
+        if "general_guidance_with_disclaimer mode" in p and "Beat 3 (general guidance)" in p
     ]
     assert len(disclaimed_prompts) >= 1
     assert "answer_language (it)" in disclaimed_prompts[0]
@@ -306,9 +306,12 @@ async def test_combined_rag_web_insufficient_routes_to_disclaimed_guidance() -> 
     assert result.get("ingestion_claims", []) == []
     assert result.get("source_support", []) == []
 
-    assert "What the sources validated" in result["answer"]
-    assert "General unvalidated guidance" in result["answer"]
-    assert "Details that would help" in result["answer"]
+    # Post-generation guard strips retired section headers; content survives.
+    assert "What the sources validated" not in result["answer"]
+    assert "General unvalidated guidance" not in result["answer"]
+    assert "Details that would help" not in result["answer"]
+    assert "isolate the plant and manually remove with water" in result["answer"]
+    assert "close-up photo of the insect" in result["answer"]
 
     assert "No direct evidence" not in result["answer"]
     assert "conservative_safety_fallback" not in result["fallback_reasons"]
@@ -331,7 +334,7 @@ async def test_combined_rag_web_insufficient_routes_to_disclaimed_guidance() -> 
 
     disclaimed_prompts = [
         p for p in tools.model_prompts
-        if "What the sources validated" in p and "General unvalidated guidance" in p
+        if "general_guidance_with_disclaimer mode" in p and "Beat 3 (general guidance)" in p
     ]
     assert len(disclaimed_prompts) >= 1
     assert "do not cite any source" in disclaimed_prompts[0]
@@ -427,7 +430,7 @@ async def test_pesticide_instruction_request_does_not_return_chemical_advice() -
 
     disclaimed_prompts = [
         p for p in tools.model_prompts
-        if "What the sources validated" in p and "General unvalidated guidance" in p
+        if "general_guidance_with_disclaimer mode" in p and "Beat 3 (general guidance)" in p
     ]
     assert disclaimed_prompts == []
 
@@ -886,7 +889,7 @@ def test_grounded_answer_prompt_uses_display_name_in_prose() -> None:
     assert "binomial" in prompt
 
 def test_general_guidance_prompt_uses_display_name_in_prose() -> None:
-    """Prompt builder must instruct the model to use the display name (nickname) in all four sections."""
+    """Prompt builder must instruct the model to use the display name (nickname) in all beats."""
     from app.assistant.graph import _general_guidance_with_disclaimer_prompt
 
     prompt = _general_guidance_with_disclaimer_prompt(
@@ -907,7 +910,7 @@ def test_general_guidance_prompt_uses_display_name_in_prose() -> None:
     assert "Never replace that name with the common name" in prompt
     assert "scientific name" in prompt
     assert "binomial" in prompt
-    assert "all four sections" in prompt.lower()
+    assert "This rule applies to all beats." in prompt
 
 def test_conservative_safety_fallback_includes_display_name_instruction() -> None:
     """Conservative safety fallback must include the display-name instruction in all three variants."""

@@ -1,11 +1,13 @@
 from uuid import UUID
-import asyncio
+
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assistant.graph import AssistantGraph, _diagnostics, display_plant_name, operational_plant_name
 from app.assistant.repository import AssistantRepository
+from app.auth.tables import users
 from app.assistant.schemas import (
     DEFAULT_ASSISTANT_MESSAGE_CONTENT_FORMAT,
     AssistantChatRequest,
@@ -17,8 +19,15 @@ from app.assistant.schemas import (
     ProviderFailureDetail,
 )
 from app.assistant.tools import AssistantTools
-from app.db.session import AsyncSessionLocal
+from app.jobs.repository import JobRepository, canonical_idempotency_key, compute_claims_hash
+from app.jobs.schemas import (
+    CURRENT_INGESTION_POLICY_VERSION,
+    IngestValidatedClaimsPayload,
+    JobPayloadVersion,
+    JobType,
+)
 from app.knowledge.repository import KnowledgeRepository
+from app.observability.metrics import metrics_registry
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +35,37 @@ logger = logging.getLogger(__name__)
 class AssistantService:
     def __init__(self, session: AsyncSession) -> None:
         self.repository = AssistantRepository(session)
+        self.job_repo = JobRepository(session)
         self.tools = AssistantTools(self.repository, KnowledgeRepository(session))
         self.graph = AssistantGraph(self.tools)
+        self._session = session
+
+    async def _user_timezone(self, user_id: UUID) -> str | None:
+        return await self._session.scalar(select(users.c.timezone).where(users.c.id == user_id))
 
     async def chat(
-        self, *, user_id: UUID, payload: AssistantChatRequest
+        self,
+        *,
+        user_id: UUID,
+        payload: AssistantChatRequest,
+        stage_listener=None,
     ) -> AssistantChatResponse | AssistantRetryableError:
+        resolved_context = None
+        if payload.confirmed_candidate_id is not None:
+            resolved_context = await self.repository.resolve_candidate_context(
+                user_id=user_id,
+                candidate_id=payload.confirmed_candidate_id,
+            )
+        if resolved_context is not None:
+            # The server-resolved canonical identity overrides any conflicting
+            # client-supplied taxonomy fields and is never derived from a
+            # client-supplied canonical key.
+            payload = payload.model_copy(
+                update={
+                    "plant_binomial_name": resolved_context["normalized_binomial"],
+                    "plant_scientific_name": resolved_context["accepted_scientific_name"],
+                }
+            )
         operation_name = operational_plant_name(
             plant=payload.plant,
             plant_binomial_name=payload.plant_binomial_name,
@@ -53,6 +87,9 @@ class AssistantService:
             }.items()
             if value
         }
+        if resolved_context is not None:
+            plant_metadata["canonical_species_key"] = resolved_context["canonical_species_key"]
+            plant_metadata["confirmed_candidate_id"] = str(payload.confirmed_candidate_id)
         conversation_id = await self.repository.get_or_create_conversation(
             user_id=user_id,
             conversation_id=payload.conversation_id,
@@ -68,8 +105,20 @@ class AssistantService:
             user_id=user_id,
             message=payload.message,
             plant_hint=payload.plant,
+            user_timezone=await self._user_timezone(user_id),
             plant_binomial_name=payload.plant_binomial_name,
             plant_scientific_name=payload.plant_scientific_name,
+            canonical_species_key=(
+                resolved_context["canonical_species_key"]
+                if resolved_context is not None
+                else None
+            ),
+            accepted_gbif_key=(
+                resolved_context["accepted_gbif_key"]
+                if resolved_context is not None
+                else None
+            ),
+            stage_listener=stage_listener,
         )
         if state.get("total_generation_failure") and not state.get("answer"):
             tool_failures = state.get("tool_failures", [])
@@ -122,11 +171,57 @@ class AssistantService:
                 "diagnostics": diagnostics,
             },
         )
-        _schedule_validated_claim_ingestion(
-            claims=list(state.get("ingestion_claims", []) or []),
-            conversation_id=conversation_id,
-            answerability_status=str(state.get("answerability_status") or ""),
-        )
+
+        claims = list(state.get("ingestion_claims", []) or [])
+        enqueue_result = None
+        if claims and self._should_enqueue_ingestion_jobs():
+            job_payload = IngestValidatedClaimsPayload.model_validate(
+                {
+                    "payload_version":
+                        JobPayloadVersion.INGEST_VALIDATED_CLAIMS_V1,
+                    "ingestion_policy_version":
+                        CURRENT_INGESTION_POLICY_VERSION,
+                    "claims": claims,
+                    "conversation_id": str(conversation_id),
+                    "answerability_status": state.get("answerability_status"),
+                }
+            )
+            serialized_payload = job_payload.model_dump(mode="json")
+            claims_hash = compute_claims_hash(serialized_payload["claims"])
+            idempotency_key = canonical_idempotency_key(
+                job_type=JobType.ingest_validated_claims.value,
+                conversation_id=conversation_id,
+                claims_hash=claims_hash,
+                payload_version=job_payload.payload_version,
+                ingestion_policy_version=job_payload.ingestion_policy_version,
+            )
+            enqueue_result = await self.job_repo.enqueue_result(
+                job_type=JobType.ingest_validated_claims.value,
+                payload_version=job_payload.payload_version,
+                payload=serialized_payload,
+                idempotency_key=idempotency_key,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
+
+        await self.repository.commit()
+        if enqueue_result is not None:
+            schedule_outcome = "created" if enqueue_result.created else "reused"
+            metrics_registry.record_job_schedule(
+                job_type=JobType.ingest_validated_claims.value,
+                outcome=schedule_outcome,
+            )
+            logger.info(
+                "job_scheduled",
+                extra={
+                    "ctx_job_id": str(enqueue_result.job_id),
+                    "ctx_job_type": JobType.ingest_validated_claims.value,
+                    "ctx_payload_version": job_payload.payload_version,
+                    "ctx_ownership_category": "user_owned",
+                    "ctx_schedule_outcome": schedule_outcome,
+                    "ctx_conversation_id": str(conversation_id),
+                },
+            )
         return AssistantChatResponse(
             conversation_id=conversation_id,
             message=AssistantMessage(
@@ -141,73 +236,63 @@ class AssistantService:
             diagnostics=AssistantCareDiagnostics.model_validate(diagnostics) if diagnostics else None,
         )
 
+    @staticmethod
+    def _should_enqueue_ingestion_jobs() -> bool:
+        from app.core.settings import get_settings
+        return get_settings().jobs_producer_enabled
 
-def _schedule_validated_claim_ingestion(
-    *, claims: list[dict], conversation_id: UUID, answerability_status: str
-) -> None:
-    if not claims:
-        return
-    # Best-effort in-process background work; a process exit can drop this ingestion.
-    asyncio.create_task(
-        _ingest_validated_claims_background(
-            claims=claims,
-            conversation_id=conversation_id,
-            answerability_status=answerability_status,
+    async def chat_stream(self, *, user_id: UUID, payload: AssistantChatRequest):
+        """Yield server-sent-event frames: ordered stage events, optional
+        heartbeats, then exactly one terminal `result` or `error` frame."""
+        import asyncio
+
+        from app.assistant.streaming import (
+            HEARTBEAT_FRAME,
+            build_error_event,
+            build_result_event,
+            sse_frame,
         )
-    )
+        from app.core.settings import get_settings
 
+        settings = get_settings()
+        heartbeat_seconds = settings.assistant_stream_heartbeat_seconds
+        queue: asyncio.Queue = asyncio.Queue()
+        sequence_index = 0
 
-async def _ingest_validated_claims_background(
-    *, claims: list[dict], conversation_id: UUID, answerability_status: str
-) -> None:
-    claim_context = _validated_claim_log_context(claims)
-    async with AsyncSessionLocal() as session:
-        tools = AssistantTools(AssistantRepository(session), KnowledgeRepository(session))
-        try:
-            result = await tools.ingest_validated_claims(claims)
-            if not result.ok:
-                await session.rollback()
-                logger.warning(
-                    "assistant_validated_claim_ingestion_failed",
-                    extra={
-                        "conversation_id": str(conversation_id),
-                        "answerability_status": answerability_status,
-                        **claim_context,
-                        "error": result.error,
-                    },
-                )
-                return
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            logger.exception(
-                "assistant_validated_claim_ingestion_exception",
-                extra={
-                    "conversation_id": str(conversation_id),
-                    "answerability_status": answerability_status,
-                    **claim_context,
-                },
+        async def emit(event: dict) -> None:
+            nonlocal sequence_index
+            event["index"] = sequence_index
+            sequence_index += 1
+            await queue.put(event)
+
+        task = asyncio.create_task(
+            self.chat(user_id=user_id, payload=payload, stage_listener=emit)
+        )
+
+        async def next_event():
+            getter = asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait(
+                {getter, task},
+                timeout=heartbeat_seconds,
             )
+            if getter in done:
+                return getter.result()
+            getter.cancel()
+            return None
 
+        while not task.done():
+            event = await next_event()
+            if event is None:
+                yield HEARTBEAT_FRAME
+            else:
+                yield sse_frame(event)
 
-def _validated_claim_log_context(claims: list[dict]) -> dict[str, object]:
-    return {
-        "claim_count": len(claims),
-        "scientific_names": _unique_claim_values(claims, "scientific_name"),
-        "source_urls": _unique_claim_values(claims, "source_url"),
-        "source_domains": _unique_claim_values(claims, "source_domain"),
-    }
+        # Drain any stages emitted between the last poll and task completion.
+        while not queue.empty():
+            yield sse_frame(queue.get_nowait())
 
-
-def _unique_claim_values(claims: list[dict], key: str, *, limit: int = 3) -> list[str]:
-    values: list[str] = []
-    seen: set[str] = set()
-    for claim in claims:
-        value = str(claim.get(key) or "").strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        values.append(value)
-        if len(values) >= limit:
-            break
-    return values
+        result = task.result()
+        if isinstance(result, AssistantRetryableError):
+            yield sse_frame(build_error_event(result.model_dump(mode="json")))
+        else:
+            yield sse_frame(build_result_event(result.model_dump(mode="json")))

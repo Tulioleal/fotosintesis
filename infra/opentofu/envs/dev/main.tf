@@ -41,6 +41,7 @@ module "gke" {
   node_count          = var.node_count
   machine_type        = var.machine_type
   deletion_protection = var.deletion_protection
+  dataplane_v2        = var.dataplane_v2
   labels              = local.labels
 }
 

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from html.parser import HTMLParser
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.knowledge.acquisition import TrustedSourceValidator
+from app.knowledge.safe_http import SafeHttpClient
+from app.knowledge.source_urls import canonical_source_domain, canonical_source_url
 from app.observability.logging import get_logger
 from app.observability.tracing import get_trace_id
 from app.providers.types import SearchResult
@@ -40,6 +39,12 @@ class TrustedPageEvidence:
     fetch_error_category: str | None = None
     fetched_content_length: int = 0
     snippet_length: int = 0
+    canonical_url: str | None = None
+    retrieved_at: datetime | None = None
+    published_at: datetime | None = None
+    source_version: str | None = None
+    response_content_type: str | None = None
+    response_charset: str | None = None
 
     @property
     def evidence_text(self) -> str:
@@ -63,16 +68,43 @@ class TrustedPageEvidenceFetcher:
         max_response_bytes: int = MAX_RESPONSE_BYTES,
         max_evidence_chars: int = MAX_EVIDENCE_CHARS,
         max_redirects: int = MAX_REDIRECTS,
+        http_client: SafeHttpClient | None = None,
     ) -> None:
         self.trusted_sources = trusted_sources
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
         self.max_evidence_chars = max_evidence_chars
         self.max_redirects = max_redirects
+        self.http_client = http_client or SafeHttpClient(
+            timeout=timeout_seconds,
+            max_redirects=max_redirects,
+            max_response_bytes=max_response_bytes,
+            hostname_allowed=self._hostname_allowed,
+        )
+
+    def _hostname_allowed(self, hostname: str) -> bool:
+        for approved in self.trusted_sources.approved_domains:
+            if hostname == approved or hostname.endswith(f".{approved}"):
+                return True
+        return False
 
     async def fetch_all(self, results: list[SearchResult], *, limit: int = 3) -> list[TrustedPageEvidence]:
-        trusted = [result for result in results if self.trusted_sources.is_trusted(result)]
-        tasks = [self.fetch(result) for result in trusted[:limit]]
+        canonicalized: list[SearchResult] = []
+        for result in results:
+            try:
+                canonical_url = canonical_source_url(result.url)
+            except ValueError:
+                continue
+            if canonical_url != result.url:
+                result = result.model_copy(
+                    update={
+                        "url": canonical_url,
+                        "source_domain": canonical_source_domain(canonical_url),
+                    }
+                )
+            if self.trusted_sources.is_trusted(result):
+                canonicalized.append(result)
+        tasks = [self.fetch(result) for result in canonicalized[:limit]]
         return list(await asyncio.gather(*tasks)) if tasks else []
 
     async def fetch(self, result: SearchResult) -> TrustedPageEvidence:
@@ -89,7 +121,7 @@ class TrustedPageEvidenceFetcher:
             _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
             return evidence
         try:
-            content = await asyncio.to_thread(self._fetch_sync, result)
+            fetch = await asyncio.to_thread(self._fetch_sync, result)
         except Exception as exc:
             evidence = TrustedPageEvidence(
                 result=result,
@@ -104,7 +136,7 @@ class TrustedPageEvidenceFetcher:
                 error_type=type(exc).__name__,
             )
             return evidence
-        if not content:
+        if not fetch.content:
             evidence = TrustedPageEvidence(
                 result=result,
                 error="empty extracted content",
@@ -115,71 +147,97 @@ class TrustedPageEvidenceFetcher:
             _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
             return evidence
         evidence = TrustedPageEvidence(
-            result=result,
-            content=content,
+            result=fetch.result,
+            content=fetch.content,
             fetch_status="fetched",
-            fetched_content_length=len(content),
+            fetched_content_length=len(fetch.content),
             snippet_length=snippet_length,
+            canonical_url=fetch.canonical_url,
+            retrieved_at=fetch.retrieved_at,
+            published_at=fetch.published_at,
+            source_version=fetch.source_version,
+            response_content_type=fetch.response_content_type,
+            response_charset=fetch.response_charset,
         )
         _log_page_fetch(evidence, elapsed_seconds=time.monotonic() - start)
         return evidence
 
-    def _fetch_sync(self, result: SearchResult) -> str:
-        parsed = urlparse(result.url)
-        if parsed.scheme != "https":
-            raise ValueError("only HTTPS URLs are allowed")
+    def _fetch_sync(self, result: SearchResult) -> _FetchOutcome:
+        canonical = canonical_source_url(result.url)
+        http_result = self.http_client.get(canonical)
 
-        request = Request(
-            result.url,
-            headers={
-                "User-Agent": "FotosintesisBot/1.0 (+trusted botanical evidence fetch)",
-                "Accept": "text/html,text/plain,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            },
-        )
-        opener = build_opener(_BoundedRedirectHandler(self.max_redirects))
-        try:
-            with opener.open(request, timeout=self.timeout_seconds) as response:
-                final_url = response.geturl()
-                final_domain = urlparse(final_url).netloc
-                final_result = SearchResult(
-                    title=result.title,
-                    url=final_url,
-                    snippet=result.snippet,
-                    source_domain=final_domain,
-                )
-                if not self.trusted_sources.is_trusted(final_result):
-                    raise ValueError("redirected outside trusted HTTPS source")
+        headers = _normalized_response_headers(http_result.headers)
+        content_type = headers.get("content-type") or ""
+        parsed_type = content_type.split(";", 1)[0].strip().lower()
+        if parsed_type not in SUPPORTED_CONTENT_TYPES:
+            raise ValueError(f"unsupported content type: {parsed_type}")
+        if len(http_result.body) > self.max_response_bytes:
+            raise ValueError("response exceeded maximum size")
+        charset = "utf-8"
+        for part in content_type.split(";")[1:]:
+            key, separator, value = part.partition("=")
+            if separator and key.strip().lower() == "charset":
+                charset = value.strip().strip('"') or "utf-8"
+                break
 
-                content_type = response.headers.get_content_type()
-                if content_type not in SUPPORTED_CONTENT_TYPES:
-                    raise ValueError(f"unsupported content type: {content_type}")
-
-                body = response.read(self.max_response_bytes + 1)
-                if len(body) > self.max_response_bytes:
-                    raise ValueError("response exceeded maximum size")
-                charset = response.headers.get_content_charset() or "utf-8"
-        except (HTTPError, URLError, TimeoutError) as exc:
-            raise ValueError(f"page fetch failed: {exc}") from exc
-
-        text = body.decode(charset, errors="replace")
-        if content_type in {"text/html", "application/xhtml+xml"}:
+        text = http_result.body.decode(charset, errors="replace")
+        if parsed_type in {"text/html", "application/xhtml+xml"}:
             text = extract_readable_text(text)
-        return normalize_evidence_text(text, limit=self.max_evidence_chars)
+        content = normalize_evidence_text(text, limit=self.max_evidence_chars)
+
+        final_result = result.model_copy(
+            update={
+                "url": http_result.final_url,
+                "source_domain": canonical_source_domain(http_result.final_url),
+            }
+        )
+        return _FetchOutcome(
+            result=final_result,
+            content=content,
+            canonical_url=http_result.final_url,
+            retrieved_at=datetime.now(UTC),
+            published_at=None,
+            source_version=_source_version_from_headers(headers, content),
+            response_content_type=parsed_type,
+            response_charset=charset,
+        )
 
 
-class _BoundedRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, max_redirects: int) -> None:
-        self.max_redirects = max_redirects
-        super().__init__()
+@dataclass(frozen=True)
+class _FetchOutcome:
+    result: SearchResult
+    content: str
+    canonical_url: str
+    retrieved_at: datetime
+    published_at: datetime | None
+    source_version: str | None
+    response_content_type: str | None
+    response_charset: str | None
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        redirect_count = int(req.headers.get("X-Fotosintesis-Redirect-Count", "0")) + 1
-        if redirect_count > self.max_redirects:
-            raise HTTPError(newurl, code, "too many redirects", headers, fp)
-        new_request = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new_request is not None:
-            new_request.add_header("X-Fotosintesis-Redirect-Count", str(redirect_count))
-        return new_request
+
+def _normalized_response_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {str(key).casefold(): value for key, value in headers.items()}
+
+
+def _source_version_from_headers(headers: dict[str, str], content: str) -> str:
+    """Derive a deterministic source version from fetch metadata.
+
+    Precedence: strong normalized ETag, valid normalized Last-Modified,
+    then a SHA-256 of the normalized fetched content. The version is never
+    derived from a search snippet.
+    """
+    normalized = _normalized_response_headers(headers)
+    etag = (normalized.get("etag") or "").strip().strip('"')
+    if etag:
+        return f"etag:{etag}"
+    last_modified = (normalized.get("last-modified") or "").strip()
+    if last_modified:
+        return f"last-modified:{last_modified}"
+    import hashlib
+    import re as _re
+
+    normalized = _re.sub(r"\s+", " ", content).strip()
+    return f"sha256:{hashlib.sha256(normalized.encode()).hexdigest()}"
 
 
 class _ReadableTextParser(HTMLParser):
@@ -230,6 +288,8 @@ def _fetch_error_category(exc: Exception) -> str:
         return "unsupported_content_type"
     if "redirect" in message:
         return "redirect"
+    if "unsafe destination" in message or "untrusted" in message:
+        return "unsafe_destination"
     if "maximum size" in message:
         return "too_large"
     if "http error 403" in message or "forbidden" in message:
@@ -245,13 +305,10 @@ def _log_page_fetch(
     elapsed_seconds: float,
     error_type: str | None = None,
 ) -> None:
-    result = evidence.result
     logger.info(
         "trusted page evidence fetch completed",
         extra={
             "ctx_trace_id": get_trace_id(),
-            "ctx_source_domain": result.source_domain,
-            "ctx_url_hash": hashlib.sha256(result.url.encode("utf-8")).hexdigest()[:16],
             "ctx_fetch_status": evidence.fetch_status,
             "ctx_fetch_error_category": evidence.fetch_error_category,
             "ctx_error_type": error_type,
