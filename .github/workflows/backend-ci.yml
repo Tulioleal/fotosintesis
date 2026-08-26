@@ -131,7 +131,7 @@ jobs:
           POSTGRES_USER: fotosintesis
           POSTGRES_PASSWORD: fotosintesis
         options: >-
-          --health-cmd pg_isready -U fotosintesis -d fotosintesis
+          --health-cmd "pg_isready -U fotosintesis -d fotosintesis"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
