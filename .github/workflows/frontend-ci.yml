@@ -161,6 +161,8 @@ jobs:
           tags: ${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Pull image for runtime checks
+        run: docker pull "${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}"
       - name: Verify non-root frontend image runtime
         run: |
           sh frontend/scripts/check-image-runtime.sh "${{ env.ARTIFACT_REGISTRY_URL }}/frontend:${{ steps.meta.outputs.image_tag }}"
