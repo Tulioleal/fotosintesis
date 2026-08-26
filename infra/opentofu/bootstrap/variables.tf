@@ -57,12 +57,12 @@ variable "environment_branches" {
 
 variable "dev_state_bucket_name" {
   type    = string
-  default = "fotosintesis-dev-tfstate"
+  default = "fotosintesis-dev-tfstate-0"
 }
 
 variable "prod_state_bucket_name" {
   type    = string
-  default = "fotosintesis-prod-tfstate"
+  default = "fotosintesis-prod-tfstate-0"
 }
 
 variable "state_bucket_location" {
