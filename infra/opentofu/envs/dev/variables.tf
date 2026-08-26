@@ -98,7 +98,7 @@ variable "database_user" {
 
 variable "object_storage_bucket" {
   type        = string
-  default     = "fotosintesis-dev-storage"
+  default     = "fotosintesis-dev-storage-747240525033"
   description = "Application GCS bucket name. Defaulted for the env root. The iac.yml PR plan and manual apply paths may pass TF_VAR_object_storage_bucket from the DEV_OBJECT_STORAGE_BUCKET_INPUT repository variable on the first apply; subsequent applies leave it empty so the root keeps its default."
 }
 

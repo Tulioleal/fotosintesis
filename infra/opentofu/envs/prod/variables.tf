@@ -98,7 +98,7 @@ variable "database_user" {
 
 variable "object_storage_bucket" {
   type        = string
-  default     = "fotosintesis-prod-storage"
+  default     = "fotosintesis-prod-storage-578257282010"
   description = "Application GCS bucket name for the prod environment. Operators must override this through TF_VAR_object_storage_bucket (from the PROD_OBJECT_STORAGE_BUCKET_INPUT repository variable) on the first apply because the bucket name must be globally unique and the env root cannot pre-populate it safely."
 }
 
