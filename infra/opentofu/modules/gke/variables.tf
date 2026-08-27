@@ -17,7 +17,18 @@ variable "cluster_name" {
 }
 
 variable "node_count" {
-  type = number
+  type    = number
+  default = null
+}
+
+variable "autoscaling_min_node_count" {
+  type    = number
+  default = null
+}
+
+variable "autoscaling_max_node_count" {
+  type    = number
+  default = null
 }
 
 variable "machine_type" {

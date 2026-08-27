@@ -1,8 +1,6 @@
 terraform {
   required_version = ">= 1.8.0"
 
-  backend "gcs" {}
-
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -33,16 +31,18 @@ module "artifact_registry" {
 }
 
 module "gke" {
-  source              = "../../modules/gke"
-  project_id          = var.project_id
-  region              = var.region
-  location            = var.gke_location
-  cluster_name        = var.cluster_name
-  node_count          = var.node_count
-  machine_type        = var.machine_type
-  deletion_protection = var.deletion_protection
-  dataplane_v2        = var.dataplane_v2
-  labels              = local.labels
+  source                     = "../../modules/gke"
+  project_id                 = var.project_id
+  region                     = var.region
+  location                   = var.gke_location
+  cluster_name               = var.cluster_name
+  node_count                 = null
+  autoscaling_min_node_count = var.autoscaling_min_node_count
+  autoscaling_max_node_count = var.autoscaling_max_node_count
+  machine_type               = var.machine_type
+  deletion_protection        = var.deletion_protection
+  dataplane_v2               = var.dataplane_v2
+  labels                     = local.labels
 }
 
 module "cloud_sql" {

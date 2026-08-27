@@ -27,7 +27,12 @@ variable "cluster_name" {
   default = "fotosintesis-dev"
 }
 
-variable "node_count" {
+variable "autoscaling_min_node_count" {
+  type    = number
+  default = 2
+}
+
+variable "autoscaling_max_node_count" {
   type    = number
   default = 5
 }

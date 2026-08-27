@@ -54,7 +54,15 @@ resource "google_container_node_pool" "primary" {
   name       = "${var.cluster_name}-pool"
   location   = local.location
   cluster    = google_container_cluster.primary.name
-  node_count = var.node_count
+  node_count = var.autoscaling_min_node_count == null ? var.node_count : null
+
+  dynamic "autoscaling" {
+    for_each = var.autoscaling_min_node_count == null ? [] : [true]
+    content {
+      min_node_count = var.autoscaling_min_node_count
+      max_node_count = var.autoscaling_max_node_count
+    }
+  }
 
   node_config {
     machine_type    = var.machine_type
