@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import insert
+from sqlalchemy import insert, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.repository import DatabaseAuthRepository
@@ -100,6 +100,37 @@ async def test_owner_saves_and_fetches_identification_image_with_private_headers
     assert fetched.content == IMAGE_BYTES
     assert fetched.headers["content-type"].startswith("image/jpeg")
     assert fetched.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.asyncio
+async def test_owner_can_save_image_candidate_without_candidate_user_id(
+    session_factory: async_sessionmaker[AsyncSession],
+    storage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token, candidate_id = await _create_owner(
+        session_factory, email="legacy-owner@example.com", storage_path=IMAGE_PATH
+    )
+    async with session_factory() as session:
+        await session.execute(
+            update(identification_candidates)
+            .where(identification_candidates.c.id == candidate_id)
+            .values(user_id=None)
+        )
+        await session.commit()
+
+    await storage.put_object(_upload(IMAGE_PATH))
+    monkeypatch.setattr("app.api.profile_garden.get_object_storage", lambda: storage)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        saved = await client.post(
+            "/garden",
+            json={"confirmed_candidate_id": candidate_id, "image_path": IMAGE_PATH},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["image_path"] == IMAGE_PATH
 
 
 @pytest.mark.asyncio

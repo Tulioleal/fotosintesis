@@ -201,7 +201,8 @@ class PlantProfileGardenRepository(RepositoryBase):
                 )
                 .where(
                     identification_candidates.c.id == candidate_id,
-                    identification_candidates.c.user_id == user_id,
+                    # Image candidates may predate candidate-level ownership;
+                    # the linked identification image is the authority here.
                     identification_images.c.user_id == user_id,
                     identification_images.c.storage_path == storage_path,
                 )
