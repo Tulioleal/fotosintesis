@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,6 +9,80 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.repository import DatabaseAuthRepository
 from app.auth.tables import identification_candidates, identification_images, plant_profiles
 from app.main import app
+from app.storage.models import ObjectContent
+
+
+@pytest.mark.asyncio
+async def test_owner_can_fetch_identification_media_by_storage_path(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token, candidate_id = await _create_user_candidate(
+        session_factory,
+        email="media-owner@example.com",
+        accepted_scientific_name="Nephrolepis exaltata",
+        confirmed=True,
+    )
+    async with session_factory() as session:
+        storage_path = await session.scalar(
+            select(identification_images.c.storage_path)
+            .join(
+                identification_candidates,
+                identification_candidates.c.identification_id == identification_images.c.id,
+            )
+            .where(identification_candidates.c.id == UUID(candidate_id))
+        )
+
+    class _Storage:
+        async def get_object(self, path: str) -> ObjectContent:
+            assert path == storage_path
+            return ObjectContent(content=b"image-bytes", mime_type="image/jpeg", size_bytes=11)
+
+    monkeypatch.setattr("app.api.profile_garden.get_object_storage", lambda: _Storage())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/media/{storage_path}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"image-bytes"
+    assert response.headers["content-type"] == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_media_path_cannot_be_used_by_another_user(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    owner_token, candidate_id = await _create_user_candidate(
+        session_factory,
+        email="media-owner-two@example.com",
+        accepted_scientific_name="Nephrolepis exaltata",
+        confirmed=True,
+    )
+    other_token, _ = await _create_user_candidate(
+        session_factory,
+        email="media-other@example.com",
+        accepted_scientific_name="Nephrolepis exaltata",
+        confirmed=True,
+    )
+    async with session_factory() as session:
+        storage_path = await session.scalar(
+            select(identification_images.c.storage_path)
+            .join(
+                identification_candidates,
+                identification_candidates.c.identification_id == identification_images.c.id,
+            )
+            .where(identification_candidates.c.id == UUID(candidate_id))
+        )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/media/{storage_path}",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

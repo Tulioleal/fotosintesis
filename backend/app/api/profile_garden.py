@@ -29,6 +29,38 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["plant-profile-garden"])
 
 
+@router.get("/media/{storage_path:path}", response_class=Response)
+async def get_owned_media(
+    storage_path: str,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> Response:
+    if not storage_path.startswith(("identifications/", "garden-plants/")):
+        raise HTTPException(status_code=404, detail="Image not found.")
+
+    repository = PlantProfileGardenRepository(session)
+    owned_path = await repository.owned_storage_path(
+        user_id=user.id,
+        storage_path=storage_path,
+    )
+    if owned_path is None:
+        raise HTTPException(status_code=404, detail="Image not found.")
+
+    try:
+        content = await get_object_storage().get_object(owned_path)
+    except ObjectNotFoundError:
+        logger.warning(
+            "owned_media_missing",
+            extra={"ctx_user_id": str(user.id), "ctx_object_path": owned_path},
+        )
+        raise HTTPException(status_code=404, detail="Image not found.") from None
+    return Response(
+        content=content.content,
+        media_type=content.mime_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/plant-profiles/{scientific_name}", response_model=PlantProfileResponse)
 async def get_plant_profile(
     scientific_name: str,

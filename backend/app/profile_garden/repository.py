@@ -237,6 +237,19 @@ class PlantProfileGardenRepository(RepositoryBase):
         ).first()
         return row[0] if row else None
 
+    async def owned_storage_path(self, *, user_id: UUID, storage_path: str) -> str | None:
+        """Return a storage path only when it belongs to the requesting user."""
+        identification_path = select(identification_images.c.storage_path).where(
+            identification_images.c.user_id == user_id,
+            identification_images.c.storage_path == storage_path,
+        )
+        garden_path = select(garden_plants.c.image_path).where(
+            garden_plants.c.user_id == user_id,
+            garden_plants.c.image_path == storage_path,
+        )
+        row = await self.session.scalar(identification_path.union(garden_path))
+        return row
+
     async def list_garden_plants(
         self, *, user_id: UUID, query: str | None = None
     ) -> list[GardenPlantResponse]:

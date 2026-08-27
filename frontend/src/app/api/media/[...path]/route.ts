@@ -18,7 +18,7 @@ export async function GET(
     return NextResponse.json({ detail: "Not found" }, { status: 404 });
   }
 
-  const response = await fetch(`${API_BASE_URL}/${relativePath}`, {
+  const response = await fetch(`${API_BASE_URL}/media/${relativePath}`, {
     headers: authHeaders,
     cache: "no-store",
   });

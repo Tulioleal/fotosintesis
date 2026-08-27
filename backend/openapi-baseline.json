@@ -5201,6 +5201,73 @@
         ]
       }
     },
+    "/media/{storage_path}": {
+      "get": {
+        "operationId": "get_owned_media_media__storage_path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "storage_path",
+            "required": true,
+            "schema": {
+              "title": "Storage Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "fotosintesis_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fotosintesis Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Owned Media",
+        "tags": [
+          "plant-profile-garden"
+        ]
+      }
+    },
     "/metrics": {
       "get": {
         "operationId": "metrics_metrics_get",
