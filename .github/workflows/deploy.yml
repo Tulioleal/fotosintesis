@@ -886,7 +886,6 @@ jobs:
             05-network-policies.yaml \
             30-backend.yaml \
             40-frontend.yaml \
-            50-migrations.yaml \
             55-worker.yaml \
             56-limiter-cleanup.yaml; do
             kubectl apply \
