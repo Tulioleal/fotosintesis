@@ -282,4 +282,14 @@ for source_file in "$base_dir"/*.yaml; do
     "$source_file" > "$target_file"
 done
 
+if [ "$FRONTEND_EXPOSURE_MODE" = "ip-http" ]; then
+  # IP/HTTP mode has no hostname and must not reference a certificate that is
+  # intentionally not created by the deployment workflow.
+  sed -i \
+    -e '/networking.gke.io\/managed-certificates:/d' \
+    -e '/^    - host:/,+10d' \
+    "$output_dir/70-ingress.yaml"
+  rm -f "$output_dir/60-managed-certificate.yaml"
+fi
+
 printf 'Rendered manifests to %s\n' "$output_dir"

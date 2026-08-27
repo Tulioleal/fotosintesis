@@ -468,6 +468,7 @@ jobs:
           TF_OUT_GKE_CLUSTER_NAME: ${{ steps.tofu-outputs.outputs.gke_cluster_name }}
           TF_OUT_GKE_CLUSTER_LOCATION: ${{ steps.tofu-outputs.outputs.gke_cluster_location }}
           TF_OUT_PROJECT_ID: ${{ steps.tofu-outputs.outputs.project_id }}
+          TF_OUT_RUNTIME_SECRET_NAME: ${{ steps.tofu-outputs.outputs.runtime_secret_name }}
           BACKEND_IMAGE_TAG: ${{ steps.resolve.outputs.backend_image_tag }}
           FRONTEND_IMAGE_TAG: ${{ steps.resolve.outputs.frontend_image_tag }}
         run: |
@@ -554,7 +555,7 @@ jobs:
             echo "AUTH_LIMITER_CLEANUP_BATCH_SIZE=${AUTH_LIMITER_CLEANUP_BATCH_SIZE}"
             write_env_value AUTH_LIMITER_PROFILES "$AUTH_LIMITER_PROFILES"
             echo "AUTH_LIMITER_TRUSTED_FORWARDED_HOPS=${AUTH_LIMITER_TRUSTED_FORWARDED_HOPS}"
-            echo "RUNTIME_SECRET_NAME=fotosintesis-runtime"
+            echo "RUNTIME_SECRET_NAME=${TF_OUT_RUNTIME_SECRET_NAME}"
             echo "EXTERNAL_SECRETS_STORE_NAME=fotosintesis-secret-store"
             echo "EXTERNAL_SECRETS_REFRESH_INTERVAL=5m"
             echo "GCP_PROJECT_ID=${TF_OUT_PROJECT_ID}"

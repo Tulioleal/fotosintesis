@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -29,6 +30,23 @@ BASE_DATABASE_URL = os.environ.get(
 
 def pg_available() -> bool:
     return os.environ.get("SKIP_PG_TESTS", "").lower() not in ("1", "true", "yes")
+
+
+@pytest.fixture(scope="session", autouse=True)
+async def require_postgres() -> AsyncIterator[None]:
+    """Skip the integration collection cleanly when PostgreSQL is offline."""
+    if not pg_available():
+        pytest.skip("PostgreSQL integration tests disabled (SKIP_PG_TESTS is set)")
+
+    engine = create_async_engine(BASE_DATABASE_URL, pool_pre_ping=False)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except (OSError, OperationalError) as exc:
+        pytest.skip(f"PostgreSQL integration database is unavailable: {exc}")
+    finally:
+        await engine.dispose()
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -106,9 +124,12 @@ async def pg_schema() -> AsyncIterator[str]:
     schema = f"integration_{uuid4().hex}"
     bootstrap_engine = create_async_engine(BASE_DATABASE_URL, pool_pre_ping=False)
     try:
-        async with bootstrap_engine.begin() as conn:
-            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        try:
+            async with bootstrap_engine.begin() as conn:
+                await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except (OSError, OperationalError) as exc:
+            pytest.skip(f"PostgreSQL integration database is unavailable: {exc}")
     finally:
         await bootstrap_engine.dispose()
 

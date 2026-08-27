@@ -55,13 +55,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
       - name: Lint
-        run: ruff check .
+        run: uv run ruff check .
       - name: Run tests
         env:
           MODEL_PROVIDER: mock
@@ -71,7 +71,7 @@ jobs:
           EMBEDDING_PROVIDER: mock
           OBJECT_STORAGE_PROVIDER: local
           OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
-        run: pytest --ignore=tests/integration
+        run: uv run pytest --ignore=tests/integration
 
   evaluation:
     name: Assistant quality gate (recorded)
@@ -79,21 +79,21 @@ jobs:
     defaults:
       run:
         working-directory: backend
-    # Advisory rollout: flip continue-on-error to false once the gate's
-    # thresholds are calibrated against a stable baseline.
+    # Advisory until the recorded corpus and thresholds are calibrated against
+    # a stable baseline. The step still reports failures in the CI summary.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
       - name: Run recorded evaluation gate
-        run: python scripts/run_evaluation.py --mode recorded --providers mock --recording app/evaluation/data/recordings/ci-recording.json --output app/evaluation/data/runs
+        run: uv run python scripts/run_evaluation.py --mode recorded --providers mock --recording app/evaluation/data/recordings/ci-recording.json --output app/evaluation/data/runs
 
   policy:
     name: Manifest security policy (Checkov)
@@ -145,11 +145,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip setuptools
-          pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
       - name: Run PostgreSQL integration tests
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://fotosintesis:fotosintesis@localhost:5432/fotosintesis
@@ -160,7 +160,7 @@ jobs:
           EMBEDDING_PROVIDER: mock
           OBJECT_STORAGE_PROVIDER: local
           OBJECT_STORAGE_BUCKET: fotosintesis-test-bucket
-        run: pytest tests/integration -v
+        run: uv run pytest tests/integration -v
 
   build:
     name: Build and push backend image

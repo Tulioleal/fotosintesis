@@ -100,6 +100,21 @@ def test_valid_hardened_application_passes(tmp_path: Path, values_file: Path) ->
 
 
 @pytest.mark.skipif(not RENDER_SCRIPT.exists(), reason="render.sh missing")
+def test_ip_http_render_has_no_hostname_or_managed_certificate(tmp_path: Path) -> None:
+    values = tmp_path / "values.env"
+    values.write_text(
+        DEV_VALUES.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    rendered = _render(tmp_path, values)
+
+    ingress = (rendered / "70-ingress.yaml").read_text(encoding="utf-8")
+    assert "managed-certificates" not in ingress
+    assert "- host:" not in ingress
+    assert not (rendered / "60-managed-certificate.yaml").exists()
+
+
+@pytest.mark.skipif(not RENDER_SCRIPT.exists(), reason="render.sh missing")
 @pytest.mark.skipif(not VALIDATOR_PATH.exists(), reason="validator missing")
 @pytest.mark.parametrize("field", RESOURCE_FIELDS)
 def test_missing_each_resource_field_is_rejected(

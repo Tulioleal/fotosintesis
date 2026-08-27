@@ -75,8 +75,7 @@ async def test_committed_ci_recording_replays_reproducibly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The committed CI recording set replays deterministically across runs."""
-    if not CI_RECORDING.exists():
-        pytest.skip("CI recording set not present")
+    assert CI_RECORDING.exists(), f"CI recording set missing: {CI_RECORDING}"
     patch_bertscore(monkeypatch)
     cases = executable_cases()
 

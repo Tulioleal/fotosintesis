@@ -910,16 +910,30 @@ async def _run_worker_to_status(
     task = asyncio.create_task(worker.start())
     try:
         async with asyncio.timeout(30):
+            job_type = None
             while True:
                 async with pg_session_factory() as session:
-                    current = await session.scalar(
-                        select(application_jobs.c.status).where(
-                            application_jobs.c.id == job_id
+                    current, job_type = (
+                        await session.execute(
+                            select(
+                                application_jobs.c.status,
+                                application_jobs.c.job_type,
+                            ).where(
+                                application_jobs.c.id == job_id
+                            )
                         )
-                    )
+                    ).one()
                 if current == status.value:
                     break
                 await asyncio.sleep(0.05)
+
+            # The terminal status and durable observation commit together, but
+            # the in-memory metrics refresh runs immediately afterward. Wait
+            # for that refresh before stopping the worker to avoid racing its
+            # post-commit work.
+            if job_type == JobType.enrich_confirmed_plant.value:
+                while not metrics.enrichment_efficacy_counts:
+                    await asyncio.sleep(0.05)
     finally:
         worker.stop()
         await task
