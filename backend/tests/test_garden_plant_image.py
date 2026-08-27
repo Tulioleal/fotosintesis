@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -114,7 +114,7 @@ async def test_owner_can_save_image_candidate_without_candidate_user_id(
     async with session_factory() as session:
         await session.execute(
             update(identification_candidates)
-            .where(identification_candidates.c.id == candidate_id)
+            .where(identification_candidates.c.id == UUID(candidate_id))
             .values(user_id=None)
         )
         await session.commit()
