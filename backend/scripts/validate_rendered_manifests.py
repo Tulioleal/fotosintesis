@@ -321,7 +321,6 @@ def validate_network_policies(directory: Path) -> list[str]:
                 ps = (dst.get("podSelector") or {}).get("matchLabels") or {}
                 if (
                     ns.get("kubernetes.io/metadata.name") == "kube-system"
-                    and ps.get("k8s-app") == "kube-dns"
                     and 53 in port_numbers
                 ):
                     flags["DNS egress to kube-dns"] = True

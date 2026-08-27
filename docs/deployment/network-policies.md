@@ -46,7 +46,7 @@ narrow path.
 | Policy | Direction | Selector | Allows |
 | --- | --- | --- | --- |
 | `fotosintesis-default-deny` | Ingress + Egress | all Pods | nothing (catch-all deny) |
-| `fotosintesis-allow-dns` | Egress | all Pods | `kube-system` CoreDNS (`k8s-app: kube-dns`) TCP/UDP 53 |
+| `fotosintesis-allow-dns` | Egress | all Pods | `kube-system` DNS service TCP/UDP 53 |
 | `fotosintesis-allow-workload-identity` | Egress | `iam.gke.io/workload-identity: fotosintesis-backend` | GKE metadata server `169.254.169.254:80,8080` and `169.254.169.252:988,987` |
 | `fotosintesis-allow-frontend-ingress` | Ingress | frontend | GFE/health-check probe ranges on 3000 |
 | `fotosintesis-allow-backend-ingress` | Ingress | backend | frontend Pods, smoke probe Pods, and Managed Prometheus (`gmp-system`) on 8000 |
@@ -177,8 +177,8 @@ Start with the deploy summary: "Network policy verification (dev)" must report
   version applies policies to them, add an ingress allow rule from the node
   CIDR to the affected ports before default-deny.
 - **DNS does not resolve for newly created transient Pods**: the DNS allow rule
-  selects `k8s-app: kube-dns` in `kube-system`; verify the label is unchanged
-  on the running CoreDNS DaemonSet/Deployment.
+  permits TCP/UDP 53 to the `kube-system` namespace. Verify the policy is
+  applied and inspect `anetd` logs for denied DNS traffic.
 
 ## Rollback
 

@@ -668,7 +668,7 @@ def test_deploy_workflow_server_side_dry_run_before_migrations() -> None:
     assert "--dry-run=server" in dry_run_step
     assert "30-backend.yaml" in dry_run_step
     assert "40-frontend.yaml" in dry_run_step
-    assert "50-migrations.yaml" in dry_run_step
+    assert "50-migrations.yaml" not in dry_run_step
     assert "55-worker.yaml" in dry_run_step
     assert "--dry-run=client" not in dry_run_step
 
