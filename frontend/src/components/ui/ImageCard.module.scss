@@ -31,6 +31,7 @@
 }
 
 .image {
+  position: relative;
   display: grid;
   overflow: hidden;
   border-radius: $radius-md;
