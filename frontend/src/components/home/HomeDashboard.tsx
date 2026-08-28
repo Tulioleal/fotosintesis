@@ -201,6 +201,7 @@ export function HomeDashboard() {
                           src={imageSrc}
                           alt={displayName(plant)}
                           layout="fill"
+                          unoptimized
                         />
                       ) : undefined
                     }

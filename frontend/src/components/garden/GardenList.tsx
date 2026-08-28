@@ -112,7 +112,7 @@ export function GardenList() {
                 variant="result"
                 image={
                   imageSrc ? (
-                    <Image src={imageSrc} alt={name} layout="fill" />
+                    <Image src={imageSrc} alt={name} layout="fill" unoptimized />
                   ) : undefined
                 }
                 imageAlt={name}

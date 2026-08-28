@@ -215,7 +215,7 @@ export function GardenDetail({ gardenId }: Readonly<{ gardenId: string }>) {
       <div className={styles.mainGrid}>
         <div className={styles.imageFrame}>
           {imageSrc ? (
-            <Image src={imageSrc} alt={displayName} layout="fill" />
+            <Image src={imageSrc} alt={displayName} layout="fill" unoptimized />
           ) : (
             <div className={styles.imageFallback} aria-hidden="true">
               <PlantIcon size="3rem" weight="regular" />

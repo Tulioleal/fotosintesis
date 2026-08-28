@@ -23,11 +23,12 @@ vi.mock("next/image", () => {
     sizes?: string;
     priority?: boolean;
     quality?: number | string;
+    unoptimized?: boolean;
     style?: React.CSSProperties;
     onLoad?: () => void;
     onError?: () => void;
   }) => {
-    const { src, alt, width, height, fill, style, ...rest } = props;
+    const { src, alt, width, height, fill, style, unoptimized: _unoptimized, ...rest } = props;
     const finalWidth = fill ? undefined : Number(width) || undefined;
     const finalHeight = fill ? undefined : Number(height) || undefined;
     return (

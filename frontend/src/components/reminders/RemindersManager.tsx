@@ -871,6 +871,7 @@ function ReminderRow({
               src={plantImage}
               alt=""
               layout="fill"
+              unoptimized
             />
           ) : (
             <PlantIcon
