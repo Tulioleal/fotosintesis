@@ -27,9 +27,14 @@ variable "cluster_name" {
   default = "fotosintesis-prod"
 }
 
-variable "node_count" {
+variable "autoscaling_min_node_count" {
   type    = number
   default = 2
+}
+
+variable "autoscaling_max_node_count" {
+  type    = number
+  default = 5
 }
 
 variable "machine_type" {
@@ -39,8 +44,8 @@ variable "machine_type" {
 
 variable "gke_location" {
   type        = string
-  default     = null
-  description = "Optional GKE location override. Prod may intentionally leave this unset to keep a regional cluster; set to a zone only if you want a zonal prod cluster."
+  default     = "us-central1-a"
+  description = "Zonal GKE location matching the dev topology."
 }
 
 variable "deletion_protection" {
